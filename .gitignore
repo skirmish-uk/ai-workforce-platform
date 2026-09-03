@@ -1,0 +1,46 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# build
+dist/
+build/
+.next/
+out/
+
+# turbo
+.turbo/
+
+# environment
+.env
+.env.local
+.env.*.local
+
+# testing
+coverage/
+
+# misc
+*.tsbuildinfo
+*.log
+.DS_Store
+*.pem
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# vercel
+.vercel
+
+# generated
+ai-workforce-platform-demo.tar.gz

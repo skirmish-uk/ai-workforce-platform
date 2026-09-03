@@ -1,0 +1,49 @@
+# Duplicate this template per customer.
+tenant:
+  id: ""
+  name: ""
+  industry: ""
+  geography: ""
+
+business:
+  description: ""
+  objectives: []
+  terminology: []
+  policies: []
+  tone: ""
+
+agent:
+  name: ""
+  role: ""
+  mission: ""
+  model:
+    provider: ""
+    model: ""
+  skills: []
+  knowledge_sources: []
+  workflows: []
+
+permissions:
+  default: "read_only"
+  actions:
+    email_send: "approval_required"
+    calendar_create: "automatic"
+    crm_write: "automatic"
+    file_delete: "prohibited"
+    external_publish: "approval_required"
+
+escalation:
+  contacts: []
+  triggers: []
+
+integrations:
+  - provider: ""
+    scopes: []
+
+evaluation:
+  suite: ""
+  minimum_score: 0.0
+
+billing:
+  plan: ""
+  status: "trial"

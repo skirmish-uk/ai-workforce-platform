@@ -1,0 +1,613 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  PLATFORM_ADMIN
+  PLATFORM_OPERATOR
+  CUSTOMER_ADMIN
+  CUSTOMER_STAFF
+}
+
+enum AgentStatus {
+  DRAFT
+  EVALUATING
+  PRODUCTION
+  PAUSED
+  ARCHIVED
+}
+
+enum WorkflowStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  APPROVAL_REQUIRED
+  CANCELLED
+}
+
+enum ApprovalLevel {
+  AUTOMATIC
+  NOTIFY
+  CUSTOMER_APPROVAL
+  OPERATOR_APPROVAL
+  PROHIBITED
+}
+
+enum SubscriptionStatus {
+  TRIAL
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  PAUSED
+}
+
+enum BillingInterval {
+  MONTHLY
+  YEARLY
+}
+
+enum PlanTier {
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum ChangeRequestStatus {
+  BACKLOG
+  APPROVED
+  IN_PROGRESS
+  TESTING
+  DEPLOYED
+  CLOSED
+  REJECTED
+}
+
+enum ChangeRequestType {
+  NEW_SKILL
+  NEW_INTEGRATION
+  WORKFLOW_CHANGE
+  KNOWLEDGE_UPDATE
+  PERMISSION_REQUEST
+  BUG_REPORT
+}
+
+model Tenant {
+  id            String   @id @default(cuid())
+  name          String
+  slug          String   @unique
+  industry      String?
+  geography     String?
+  settings      Json     @default("{}")
+  stripeCustomerId String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  users             User[]
+  agents            Agent[]
+  skills            Skill[]
+  knowledgeDocs     KnowledgeDocument[]
+  workflows         Workflow[]
+  workflowRuns      WorkflowRun[]
+  integrations      Integration[]
+  subscriptions     Subscription[]
+  invoices          Invoice[]
+  changeRequests    ChangeRequest[]
+  auditLogs         AuditLog[]
+  approvals         Approval[]
+  apiKeys           ApiKey[]
+  incidents         Incident[]
+
+  @@index([slug])
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  passwordHash  String?
+  role          UserRole  @default(CUSTOMER_STAFF)
+  image         String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  tenantId      String
+  tenant        Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  accounts      Account[]
+  sessions      Session[]
+  changeRequests ChangeRequest[] @relation("ChangeRequestAssignee")
+  approvals     Approval[] @relation("ApprovalUser")
+  auditLogs     AuditLog[]
+  incidents     Incident[] @relation("IncidentAssignee")
+
+  @@index([tenantId])
+  @@index([email])
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model ApiKey {
+  id        String   @id @default(cuid())
+  name      String
+  keyHash   String   @unique
+  prefix    String
+  expiresAt DateTime?
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime?
+  revokedAt DateTime?
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model Agent {
+  id              String      @id @default(cuid())
+  name            String
+  role            String
+  mission         String      @db.Text
+  systemPrompt    String      @db.Text
+  modelProvider   String
+  modelName       String
+  modelConfig     Json        @default("{}")
+  status          AgentStatus @default(DRAFT)
+  version         Int         @default(1)
+  config          Json        @default("{}")
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  deployedAt      DateTime?
+
+  tenantId        String
+  tenant          Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  skills          AgentSkill[]
+  knowledgeSources AgentKnowledgeSource[]
+  workflows       Workflow[]
+  permissions     AgentPermission[]
+  approvalPolicies ApprovalPolicy[]
+  escalationRules EscalationRule[]
+  schedules       Schedule[]
+  evaluations     Evaluation[]
+  deployments     Deployment[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+model Skill {
+  id              String   @id @default(cuid())
+  name            String
+  version         String
+  description     String   @db.Text
+  purpose         String   @db.Text
+  instructions    String   @db.Text
+  requiredTools   String[]
+  inputs          Json     @default("{}")
+  outputs         Json     @default("{}")
+  constraints     String[] @default([])
+  failureHandling Json     @default("{}")
+  evaluationCases Json     @default("[]")
+  metadata        Json     @default("{}")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenantId        String?
+  tenant          Tenant?  @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
+  agents          AgentSkill[]
+
+  @@unique([name, version, tenantId])
+  @@index([tenantId])
+  @@index([isActive])
+}
+
+model AgentSkill {
+  agentId   String
+  skillId   String
+  enabled   Boolean @default(true)
+  config    Json    @default("{}")
+  createdAt DateTime @default(now())
+
+  agent     Agent   @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  skill     Skill   @relation(fields: [skillId], references: [id], onDelete: Cascade)
+
+  @@id([agentId, skillId])
+}
+
+model KnowledgeDocument {
+  id          String   @id @default(cuid())
+  title       String
+  content     String   @db.Text
+  contentType String
+  metadata    Json     @default("{}")
+  chunkCount  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  sources     AgentKnowledgeSource[]
+
+  @@index([tenantId])
+}
+
+model AgentKnowledgeSource {
+  agentId     String
+  documentId  String
+  priority    Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  agent       Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  document    KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@id([agentId, documentId])
+}
+
+model Workflow {
+  id          String         @id @default(cuid())
+  name        String
+  description String         @db.Text
+  trigger     Json           @default("{}")
+  steps       Json           @default("[]")
+  config      Json           @default("{}")
+  retryPolicy Json           @default("{}")
+  timeout     Int            @default(300)
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  agentId     String?
+  agent       Agent?         @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  runs        WorkflowRun[]
+
+  @@index([tenantId])
+  @@index([agentId])
+  @@index([isActive])
+}
+
+model WorkflowRun {
+  id          String         @id @default(cuid())
+  status      WorkflowStatus @default(PENDING)
+  input       Json           @default("{}")
+  output      Json?
+  error       String?        @db.Text
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workflowId  String
+  workflow    Workflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  approvals   Approval[]
+  auditLogs   AuditLog[]
+
+  @@index([workflowId])
+  @@index([tenantId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model Integration {
+  id          String   @id @default(cuid())
+  name        String
+  provider    String
+  config      Json     @default("{}")
+  credentials Json     @default("{}")
+  scopes      String[]
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([provider])
+}
+
+model AgentPermission {
+  id          String        @id @default(cuid())
+  action      String
+  level       ApprovalLevel @default(AUTOMATIC)
+  conditions  Json          @default("{}")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  agentId     String
+  agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+model ApprovalPolicy {
+  id          String        @id @default(cuid())
+  name        String
+  action      String
+  level       ApprovalLevel @default(CUSTOMER_APPROVAL)
+  conditions  Json          @default("{}")
+  notifyEmails String[]
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  agentId     String
+  agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+model Approval {
+  id            String        @id @default(cuid())
+  action        String
+  level         ApprovalLevel
+  input         Json          @default("{}")
+  output        Json?
+  decision      ApprovalLevel?
+  decidedById   String?
+  decidedAt     DateTime?
+  reason        String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  workflowRunId String
+  workflowRun   WorkflowRun   @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  tenantId      String
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId        String?
+  user          User?         @relation("ApprovalUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([workflowRunId])
+  @@index([tenantId])
+  @@index([decision])
+}
+
+model EscalationRule {
+  id          String   @id @default(cuid())
+  name        String
+  trigger     String
+  condition   Json     @default("{}")
+  contacts    String[]
+  priority    Int      @default(1)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+model Schedule {
+  id          String   @id @default(cuid())
+  name        String
+  cron        String
+  timezone    String   @default("UTC")
+  payload     Json     @default("{}")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([isActive])
+}
+
+model Evaluation {
+  id          String   @id @default(cuid())
+  name        String
+  suite       Json     @default("[]")
+  results     Json?
+  score       Float?
+  passed      Boolean?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+}
+
+model Deployment {
+  id          String   @id @default(cuid())
+  version     Int
+  config      Json     @default("{}")
+  status      String   @default("pending")
+  logs        String?  @db.Text
+  deployedAt  DateTime?
+  rolledBackAt DateTime?
+  uptime      Float?   @default(0)
+  costPerMonth Float?  @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@index([agentId])
+  @@index([status])
+}
+
+model Incident {
+  id          String        @id @default(cuid())
+  title       String
+  description String        @db.Text
+  severity    IncidentSeverity @default(MEDIUM)
+  status      IncidentStatus  @default(OPEN)
+  source      String
+  metadata    Json          @default("{}")
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tenantId    String
+  tenant      Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assigneeId  String?
+  assignee    User?         @relation("IncidentAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([severity])
+}
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  INVESTIGATING
+  IDENTIFIED
+  RESOLVED
+  CLOSED
+}
+
+model Subscription {
+  id            String             @id @default(cuid())
+  plan          String
+  status        SubscriptionStatus @default(TRIAL)
+  currentPeriodStart DateTime
+  currentPeriodEnd   DateTime
+  cancelAtPeriodEnd  Boolean       @default(false)
+  interval      BillingInterval
+  metadata      Json              @default("{}")
+  stripeSubscriptionId String?    @unique
+  stripeCustomerId String?
+  stripePriceId   String?
+  planTier      PlanTier
+  trialStart    DateTime?
+  trialEnd      DateTime?
+  canceledAt    DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  tenantId      String
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  invoices      Invoice[]
+
+  @@index([tenantId])
+  @@index([status])
+}
+
+model Invoice {
+  id          String   @id @default(cuid())
+  amount      Int
+  currency    String   @default("AUD")
+  status      String
+  pdfUrl      String?
+  hostedUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  tenantId     String
+  tenant       Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([tenantId])
+  @@index([status])
+}
+
+model ChangeRequest {
+  id          String               @id @default(cuid())
+  type        ChangeRequestType
+  title       String
+  description String               @db.Text
+  estimate    Int?
+  priority    Int                  @default(1)
+  status      ChangeRequestStatus  @default(BACKLOG)
+  metadata    Json                 @default("{}")
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  completedAt DateTime?
+
+  tenantId    String
+  tenant      Tenant               @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assigneeId  String?
+  assignee    User?                @relation("ChangeRequestAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([status])
+  @@index([type])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String
+  entityType  String
+  entityId    String
+  oldData     Json?
+  newData     Json?
+  metadata    Json     @default("{}")
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  workflowRunId String?
+  workflowRun WorkflowRun? @relation(fields: [workflowRunId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+  @@index([userId])
+}

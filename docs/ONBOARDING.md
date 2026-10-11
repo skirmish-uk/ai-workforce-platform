@@ -111,7 +111,7 @@ Other queues: `workflow-run` (multi-step workflows), `embed-document` (RAG index
 | Contract | The agent's enforced definition: rationale, Definition of Done, scope, tool allowlist, soul (tone/values), autonomy stage, owner, escalation, limits, model fallbacks/privacy. Strict Zod schema. | `Agent.config.contract`, `executor/src/contract.ts` |
 | Business context | Tenant-wide facts every agent sees, including explicit "unknowns — ask, don't guess". | `Tenant.settings.businessContext` |
 | Autonomy stage | `observe → recommend → draft → approval_gated (default) → limited → expanded`. A *ceiling* over per-tool permissions. `limited`/`expanded` only apply with a passing evaluation for the current version. | `tools/src/policy.ts` |
-| Permission | Per-agent, per-tool level: AUTOMATIC / NOTIFY / CUSTOMER_APPROVAL / OPERATOR_APPROVAL / PROHIBITED. | `AgentPermission` |
+| Permission | Per-agent, per-tool level: AUTOMATIC / NOTIFY / CUSTOMER_APPROVAL / OPERATOR_APPROVAL / PROHIBITED. With no row, read-only tools run automatically and everything else needs approval. | `AgentPermission` |
 | Risk class | Fixed per tool: read / draft / write_reversible / external_communication / destructive / write_irreversible. Unknown tools are treated as irreversible. | `tools/src/risk.ts` |
 | Approval | A pending human decision on one exact action. PENDING → APPROVED/REJECTED/EXPIRED → EXECUTED/EXECUTION_FAILED. | `Approval`, `executor/src/approvals.ts` |
 | Evaluation | A dry-run test suite (real model, simulated tools), pinned to an agent version. Evidence for promotion. | `Evaluation`, `executor/src/evaluation.ts` |
@@ -148,7 +148,7 @@ The one rule: **authority is enforced in code, never by asking the model nicely.
 | Gmail / Calendar / HubSpot / Drive adapters | Code paths unit-tested with stubbed Google SDKs. **No live credentials configured; never run against real accounts.** No OAuth callback route exists in the app yet (`scripts/gmail-live-test.ts` does its own loopback OAuth for testing). |
 | Billing | UI + Stripe code; no keys configured. |
 | Dashboards | Mostly real data from the DB; system metrics (CPU, latency percentiles) intentionally report 0 rather than fake numbers. |
-| Approvals UI / notifications | None: API only. |
+| Approvals | Dashboard inbox at `/dashboard/approvals`; no email notifications yet. |
 | Integration credentials | Stored **unencrypted** in `Integration.credentials`. This must be fixed before any real customer connects anything. |
 
 ---
@@ -218,7 +218,7 @@ All of the above is currently **uncommitted** on `main`, alongside earlier uncom
    - Google Workspace via OAuth (the adapter exists; it needs Google app verification at scale);
    - a transactional email provider for platform notifications (SPF/DKIM/DMARC on our domain).
    **Prerequisite: encrypt integration credentials.**
-2. **Approvals UI and notifications.** Today nobody is told when an agent is waiting. The fix is to make `NOTIFY` actually notify.
+2. **Approval notifications.** The inbox exists, but nobody is told when an agent is waiting. The fix is to make `NOTIFY` actually notify.
 3. **Run the manager against a real model** on the demo tenant and review its first proposals by hand.
 4. **Next.js 15.5 upgrade** (React 19) to clear the remaining critical advisories.
 5. **Scale hardening:**

@@ -55,10 +55,23 @@ export async function GET(request: NextRequest) {
       },
     })
 
+    const agentIds = Array.from(new Set(approvals.map((a) => a.agentId).filter((id): id is string => Boolean(id))))
+    const agents = agentIds.length
+      ? await prisma.agent.findMany({ where: { id: { in: agentIds }, tenantId }, select: { id: true, name: true } })
+      : []
+    const agentName = new Map(agents.map((a) => [a.id, a.name]))
+
     // Only the redacted summary is returned; the exact arguments stay server-side for execution.
     const data = approvals.map(({ input, ...rest }) => {
-      const payload = (input ?? {}) as { kind?: string; summary?: unknown; workflowStepId?: string }
-      return { ...rest, kind: payload.kind ?? 'unknown', workflowStepId: payload.workflowStepId, summary: payload.summary ?? null }
+      const payload = (input ?? {}) as { kind?: string; summary?: unknown; workflowStepId?: string; revisionId?: string }
+      return {
+        ...rest,
+        agentName: rest.agentId ? agentName.get(rest.agentId) ?? null : null,
+        kind: payload.kind ?? 'unknown',
+        workflowStepId: payload.workflowStepId,
+        revisionId: payload.revisionId,
+        summary: payload.summary ?? null,
+      }
     })
     return NextResponse.json({ data })
   } catch (error) {

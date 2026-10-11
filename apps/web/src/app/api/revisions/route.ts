@@ -58,7 +58,16 @@ export async function GET(request: NextRequest) {
         createdAt: true,
       },
     })
-    return NextResponse.json({ data: revisions })
+    const ids = Array.from(new Set(revisions.flatMap((r) => [r.agentId, r.proposedByAgentId]).filter((v): v is string => Boolean(v))))
+    const agents = ids.length ? await prisma.agent.findMany({ where: { id: { in: ids }, tenantId }, select: { id: true, name: true } }) : []
+    const name = new Map(agents.map((a) => [a.id, a.name]))
+    return NextResponse.json({
+      data: revisions.map((r) => ({
+        ...r,
+        agentName: r.agentId ? name.get(r.agentId) ?? null : null,
+        proposedByName: r.proposedByAgentId ? name.get(r.proposedByAgentId) ?? null : null,
+      })),
+    })
   } catch (error) {
     console.error('Error listing revisions:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

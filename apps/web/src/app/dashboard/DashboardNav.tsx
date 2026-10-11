@@ -4,7 +4,7 @@ import { ReactNode, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
-import { Menu, X, LogOut, User, Settings, Bot, Brain, BookOpen, Zap, Shield, BarChart2, LayoutDashboard, Building2, Users, Building } from 'lucide-react'
+import { Menu, X, LogOut, User, Settings, Bot, Brain, BookOpen, Zap, Shield, BarChart2, LayoutDashboard, Building2, Users, Building, CheckCircle2, Sparkles } from 'lucide-react'
 import clsx from 'clsx'
 
 interface NavItem {
@@ -35,6 +35,8 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   LogOut,
   User,
   Settings,
+  CheckCircle2,
+  Sparkles,
 }
 
 export function DashboardNav({ 

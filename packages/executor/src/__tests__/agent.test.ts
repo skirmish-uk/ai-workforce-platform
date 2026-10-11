@@ -465,3 +465,23 @@ describe('dry run (evaluation mode)', () => {
     assert.equal(await prisma.approval.count({ where: { tenantId: f.tenantId } }), 0)
   })
 })
+
+describe('default permission level (no AgentPermission row)', () => {
+  test('read-only tools run without approval; writes still need approval; an explicit row always wins', async () => {
+    // Found in the dashboard check: an agent asked a human before every CRM search.
+    const f = await fixture({ requiredTools: [CRM_SEARCH, CRM_UPDATE] })
+    const tools = fakeTools(() => ({ results: [{ id: 'c1' }] }))
+    const llm = scriptedLLM([
+      toolUse([{ name: CRM_SEARCH, input: { query: 'Ann' } }]),
+      toolUse([{ name: CRM_UPDATE, input: { id: 'c1', properties: { lifecyclestage: 'lead' } } }]),
+    ])
+    const run = await runAgent(f.agentId, 'Find Ann and mark her as a lead', { deps: deps(llm, tools) })
+    assert.deepEqual(run.toolCalls.map((c) => `${c.toolName}:${c.status}`), [`${CRM_SEARCH}:completed`, `${CRM_UPDATE}:approval_required`])
+    assert.equal(run.status, 'approval_required')
+
+    const locked = await fixture({ requiredTools: [CRM_SEARCH], permissions: { [CRM_SEARCH]: 'PROHIBITED' } })
+    const llm2 = scriptedLLM([text('Cannot search.')])
+    await runAgent(locked.agentId, 'Find Ann', { deps: deps(llm2, fakeTools()) })
+    assert.ok(!llm2.calls[0].params.tools!.some((t) => t.name === CRM_SEARCH), 'an explicitly prohibited read is not offered')
+  })
+})

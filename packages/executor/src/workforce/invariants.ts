@@ -1,5 +1,5 @@
 import type { ApprovalLevel } from '@prisma/client'
-import { getToolRiskProfile, isHighRisk, stageRank, toolRegistry } from '@ai-workforce/tools'
+import { defaultPermissionLevel, getToolRiskProfile, isHighRisk, stageRank, toolRegistry } from '@ai-workforce/tools'
 import { agentContractSchema, type AgentContract } from '../contract'
 import { canonicalJson } from '../safety'
 import type { SelfManagementPolicy } from './policy'
@@ -59,8 +59,8 @@ export function effectiveTools(skills: SkillInfo[], contract: Pick<AgentContract
 }
 
 function permissionLevel(spec: AgentSpec, tool: string): ApprovalLevel {
-  // No AgentPermission row means CUSTOMER_APPROVAL at runtime (packages/tools/permissions.ts).
-  return spec.permissions.find((p) => p.action === tool)?.level ?? 'CUSTOMER_APPROVAL'
+  // Same default as runtime when no AgentPermission row exists (packages/tools/permissions.ts).
+  return spec.permissions.find((p) => p.action === tool)?.level ?? defaultPermissionLevel(tool)
 }
 
 export function checkRevisionInvariants(input: InvariantInput): InvariantResult {

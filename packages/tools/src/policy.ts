@@ -24,7 +24,7 @@ export interface ToolDecisionInput {
   toolName: string
   stage: AutonomyStage
   risk: ToolRiskClass
-  /** The agent's AgentPermission level for this tool (CUSTOMER_APPROVAL when no row exists). */
+  /** The agent's AgentPermission level for this tool (defaultPermissionLevel() when no row exists). */
   permissionLevel: ApprovalLevel
   /** Whether the tool is inside the agent contract's allowlist (true when the contract has no allowlist). */
   allowlisted: boolean

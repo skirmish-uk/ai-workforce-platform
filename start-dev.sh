@@ -3,7 +3,7 @@
 
 set -e
 
-PROJECT_ROOT="/home/elliot/Documents/ai-agent-business/ai_workforce_opencode_blueprint"
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WEB_DIR="$PROJECT_ROOT/apps/web"
 LOG_FILE="/tmp/next-dev.log"
 PID_FILE="/tmp/next-dev.pid"
@@ -58,9 +58,9 @@ case "$1" in
         ;;
     
     restart)
-        $0 stop
+        "$BASH_SOURCE" stop
         sleep 2
-        $0 start
+        "$BASH_SOURCE" start
         ;;
     
     logs)

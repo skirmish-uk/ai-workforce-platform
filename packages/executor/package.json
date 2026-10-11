@@ -1,0 +1,23 @@
+{
+  "name": "@ai-workforce/executor",
+  "version": "0.0.1",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "lint": "eslint src --ext .ts",
+    "test": "DATABASE_URL=${TEST_DATABASE_URL:-postgresql://postgres:postgres@localhost:5433/ai_workforce_test?schema=public} tsx --test --test-concurrency=1 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@ai-workforce/db": "^0.0.1",
+    "@ai-workforce/domain": "^0.0.1",
+    "@ai-workforce/knowledge": "^0.0.1",
+    "@ai-workforce/llm": "^0.0.1",
+    "@ai-workforce/monitoring": "^0.0.1",
+    "@ai-workforce/tools": "^0.0.1",
+    "zod": "^3.22.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "eslint": "^8.57.0"
+  }
+}

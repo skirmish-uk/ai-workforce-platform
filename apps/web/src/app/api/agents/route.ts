@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { hasPermission, canAccessTenant } from '@ai-workforce/domain'
+import { resolveAgentContract } from '@ai-workforce/executor'
 import { UserRole } from '@prisma/client'
 import { createAgentSchema, paginationSchema } from '@ai-workforce/domain'
 
@@ -26,7 +27,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const where: Record<string, unknown> = { tenantId }
+    const where: Record<string, unknown> = { tenantId, isCandidate: false }
     if (search) {
       where.OR = [
         { name: { contains: search, mode: 'insensitive' } },
@@ -81,6 +82,14 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json()
     const validated = createAgentSchema.parse(body)
+
+    const contractCheck = resolveAgentContract({ config: validated.config as any, mission: validated.mission })
+    if (contractCheck.errors.length) {
+      return NextResponse.json({ error: 'Invalid agent contract', details: contractCheck.errors }, { status: 400 })
+    }
+    if (validated.status === 'PRODUCTION' || validated.status === 'EVALUATING') {
+      return NextResponse.json({ error: 'New agents start as DRAFT; deploy them via POST /api/agents/[id]/deploy' }, { status: 400 })
+    }
 
     if (!canAccessTenant(userRole, session.user.tenantId, validated.tenantId)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })

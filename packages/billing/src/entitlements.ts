@@ -80,7 +80,7 @@ async function getCurrentUsage(tenantId: string): Promise<any> {
     integrations,
     teamMembers,
   ] = await Promise.all([
-    prisma.agent.count({ where: { tenantId } }),
+    prisma.agent.count({ where: { tenantId, isCandidate: false } }),
     prisma.workflow.count({ where: { tenantId } }),
     prisma.skill.count({ where: { tenantId: { not: null } } }), // custom skills only
     prisma.knowledgeDocument.count({ where: { tenantId } }),

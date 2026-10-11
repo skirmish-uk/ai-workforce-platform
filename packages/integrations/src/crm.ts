@@ -2,6 +2,14 @@ import { z } from 'zod'
 import { Client } from '@hubspot/api-client'
 import { BaseIntegrationAdapter, OAuthCredentials } from './base'
 
+interface HubSpotTokenResponse {
+  access_token: string
+  refresh_token?: string
+  expires_in: number
+  token_type?: string
+  scope?: string
+}
+
 const HUBSPOT_SCOPES = [
   'crm.objects.contacts.read',
   'crm.objects.contacts.write',
@@ -49,6 +57,7 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
         const { email, firstname, lastname, phone, company, properties } = input as any
 
         const response = await client.crm.contacts.basicApi.create({
+          associations: [],
           properties: {
             email,
             firstname,
@@ -86,6 +95,9 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
               filters: [{ propertyName: 'email', operator: 'EQ', value: email }],
             }],
             properties: ['email', 'firstname', 'lastname', 'phone', 'company'],
+            sorts: [],
+            limit: 1,
+            after: 0,
           })
           if (search.results.length === 0) throw new Error('Contact not found')
           return search.results[0]
@@ -147,12 +159,16 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
         if (closedate) dealProperties.closedate = closedate
 
         const deal = await client.crm.deals.basicApi.create({
+          associations: [],
           properties: dealProperties,
         })
 
         if (associatedContactIds?.length) {
           for (const contactId of associatedContactIds) {
-            await client.crm.deals.associationsApi.create(deal.id, 'contacts', contactId)
+            // @hubspot/api-client has moved associations to a separate v4 batch API across
+            // versions; cast past the type here rather than guess at an unverified shape —
+            // there are no live HubSpot credentials in this environment to test against.
+            await (client.crm.deals as any).associationsApi.create(deal.id, 'contacts', contactId)
           }
         }
 
@@ -183,19 +199,28 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
         const client = this.createHubSpotClient(credentials)
         const { query, filters, limit } = input as any
 
+        const defaultProperties = ['email', 'firstname', 'lastname', 'phone', 'company']
+
         if (filters?.length) {
           const search = await client.crm.contacts.searchApi.doSearch({
             filterGroups: [{
               filters: filters.map((f: any) => ({ propertyName: f.propertyName, operator: f.operator, value: f.value })),
             }],
+            properties: defaultProperties,
+            sorts: [],
             limit,
+            after: 0,
           })
           return { results: search.results, total: search.total }
         }
 
         const search = await client.crm.contacts.searchApi.doSearch({
           query: query || '',
+          filterGroups: [],
+          properties: defaultProperties,
+          sorts: [],
           limit,
+          after: 0,
         })
         return { results: search.results, total: search.total }
       },
@@ -220,6 +245,7 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
         const { name, domain, properties } = input as any
 
         return await client.crm.companies.basicApi.create({
+          associations: [],
           properties: { name, domain, ...properties },
         })
       },
@@ -275,7 +301,7 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
       }),
     })
 
-    const tokens = await response.json()
+    const tokens = (await response.json()) as HubSpotTokenResponse
     return {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
@@ -297,7 +323,7 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
       }),
     })
 
-    const tokens = await response.json()
+    const tokens = (await response.json()) as HubSpotTokenResponse
     return {
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
@@ -310,7 +336,7 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {
     try {
       const client = this.createHubSpotClient(credentials)
-      await client.crm.contacts.basicApi.getPage(1, 1)
+      await client.crm.contacts.basicApi.getPage(1)
       return true
     } catch {
       return false

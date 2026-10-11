@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { google } from 'googleapis'
-import { BaseIntegrationAdapter, OAuthCredentials } from './base'
+import { BaseIntegrationAdapter, OAuthCredentials, fromGoogleTokens, toGoogleCredentials } from './base'
 
 const CALENDAR_SCOPES = [
   'https://www.googleapis.com/auth/calendar',
@@ -277,11 +277,7 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
       process.env.GOOGLE_REDIRECT_URI
     )
 
-    oauth2Client.setCredentials({
-      access_token: credentials.access_token,
-      refresh_token: credentials.refresh_token,
-      expiry_date: credentials.expires_at,
-    })
+    oauth2Client.setCredentials(toGoogleCredentials(credentials))
 
     return google.calendar({ version: 'v3', auth: oauth2Client })
   }
@@ -309,13 +305,7 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
     )
 
     const { tokens } = await oauth2Client.getToken(code)
-    return {
-      access_token: tokens.access_token!,
-      refresh_token: tokens.refresh_token,
-      expires_at: tokens.expiry_date,
-      token_type: tokens.token_type,
-      scope: tokens.scope,
-    }
+    return fromGoogleTokens(tokens)
   }
 
   async refreshToken(refreshToken: string): Promise<OAuthCredentials> {
@@ -328,13 +318,7 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
     oauth2Client.setCredentials({ refresh_token: refreshToken })
     const { credentials } = await oauth2Client.refreshAccessToken()
 
-    return {
-      access_token: credentials.access_token!,
-      refresh_token: credentials.refresh_token,
-      expires_at: credentials.expiry_date,
-      token_type: credentials.token_type,
-      scope: credentials.scope,
-    }
+    return fromGoogleTokens(credentials)
   }
 
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {

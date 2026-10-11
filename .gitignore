@@ -44,3 +44,6 @@ pnpm-debug.log*
 
 # generated
 ai-workforce-platform-demo.tar.gz
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/

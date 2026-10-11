@@ -1,0 +1,27 @@
+{
+  "name": "@ai-workforce/queue",
+  "version": "0.0.1",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "lint": "eslint src --ext .ts",
+    "test": "tsx --test 'src/**/*.test.ts'",
+    "start": "tsx src/start-workers.ts"
+  },
+  "dependencies": {
+    "@ai-workforce/db": "^0.0.1",
+    "@ai-workforce/executor": "^0.0.1",
+    "@ai-workforce/knowledge": "^0.0.1",
+    "@ai-workforce/llm": "^0.0.1",
+    "@ai-workforce/monitoring": "^0.0.1",
+    "bullmq": "^6.3.8",
+    "cron-parser": "^5.10.1",
+    "dotenv": "^18.0.2",
+    "ioredis": "^6.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0",
+    "eslint": "^8.57.0"
+  }
+}

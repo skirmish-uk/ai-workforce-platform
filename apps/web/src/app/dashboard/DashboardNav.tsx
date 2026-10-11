@@ -121,7 +121,7 @@ export function DashboardNav({
                   )}
                   aria-current={isActive ? 'page' : undefined}
                 >
-                  <Icon iconName={item.icon} />
+                  {Icon(item.icon)}
                   {item.name}
                 </Link>
               )
@@ -140,7 +140,7 @@ export function DashboardNav({
                   )}
                   aria-current={isActive ? 'page' : undefined}
                 >
-                  <Icon iconName={item.icon} />
+                  {Icon(item.icon)}
                   {item.name}
                 </Link>
               )

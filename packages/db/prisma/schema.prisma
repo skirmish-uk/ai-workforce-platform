@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 enum UserRole {
@@ -92,6 +94,7 @@ model Tenant {
   agents            Agent[]
   skills            Skill[]
   knowledgeDocs     KnowledgeDocument[]
+  knowledgeChunks   KnowledgeChunk[]
   workflows         Workflow[]
   workflowRuns      WorkflowRun[]
   integrations      Integration[]
@@ -102,6 +105,7 @@ model Tenant {
   approvals         Approval[]
   apiKeys           ApiKey[]
   incidents         Incident[]
+  agentRevisions    AgentRevision[]
 
   @@index([slug])
 }
@@ -194,6 +198,9 @@ model Agent {
   status          AgentStatus @default(DRAFT)
   version         Int         @default(1)
   config          Json        @default("{}")
+  /// Sandbox copy made by the revision pipeline to evaluate a proposed change
+  /// (packages/executor/src/workforce). Never listed, scheduled or deployed.
+  isCandidate     Boolean     @default(false)
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   deployedAt      DateTime?
@@ -210,6 +217,7 @@ model Agent {
   schedules       Schedule[]
   evaluations     Evaluation[]
   deployments     Deployment[]
+  revisions       AgentRevision[]
 
   @@index([tenantId])
   @@index([status])
@@ -270,7 +278,28 @@ model KnowledgeDocument {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   sources     AgentKnowledgeSource[]
+  chunks      KnowledgeChunk[]
 
+  @@index([tenantId])
+}
+
+model KnowledgeChunk {
+  id         String   @id @default(cuid())
+  chunkIndex Int
+  content    String   @db.Text
+  tokenCount Int      @default(0)
+  metadata   Json     @default("{}")
+  /// pgvector column (1536 dims, text-embedding-3-small). Not queryable through
+  /// the generated client — written/read via raw SQL in packages/knowledge.
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now())
+
+  documentId String
+  document   KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  tenantId   String
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
   @@index([tenantId])
 }
 
@@ -394,11 +423,18 @@ model Approval {
   decidedById   String?
   decidedAt     DateTime?
   reason        String?
+  /// PENDING -> APPROVED/REJECTED/EXPIRED; APPROVED -> EXECUTED/EXECUTION_FAILED once the
+  /// exact approved tool call has run (packages/executor/src/approvals.ts).
+  status        String        @default("PENDING")
+  expiresAt     DateTime?
+  /// Agent + run that requested it. Lets ad-hoc and scheduled runs (no WorkflowRun) persist approvals.
+  agentId       String?
+  runId         String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  workflowRunId String
-  workflowRun   WorkflowRun   @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  workflowRunId String?
+  workflowRun   WorkflowRun?  @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
   tenantId      String
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId        String?
@@ -407,6 +443,8 @@ model Approval {
   @@index([workflowRunId])
   @@index([tenantId])
   @@index([decision])
+  @@index([status])
+  @@index([agentId])
 }
 
 model EscalationRule {
@@ -433,6 +471,7 @@ model Schedule {
   timezone    String   @default("UTC")
   payload     Json     @default("{}")
   isActive    Boolean  @default(true)
+  lastRunAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -450,12 +489,58 @@ model Evaluation {
   results     Json?
   score       Float?
   passed      Boolean?
+  /// Agent.version the suite ran against — promotion gates only accept evidence for the current version.
+  agentVersion Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   agentId     String
   agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
+  @@index([agentId])
+}
+
+/// A proposed change to the workforce (create / update / retire an agent), made by the
+/// Workforce Manager agent or a human, and its path through the revision pipeline:
+/// PROPOSED -> EVALUATING -> (AWAITING_APPROVAL) -> PROMOTED -> (ROLLED_BACK)
+/// or FAILED / REJECTED / EXPIRED / SUPERSEDED / BLOCKED. See docs/WORKFORCE_MANAGER.md.
+model AgentRevision {
+  id                String    @id @default(cuid())
+  changeType        String
+  status            String    @default("PROPOSED")
+  rationale         String    @db.Text
+  /// What the proposer asked for (redacted copy).
+  changes           Json      @default("{}")
+  /// Full desired agent definition after the change.
+  spec              Json?
+  /// Definition before the change, used for rollback.
+  previousSpec      Json?
+  /// { violations: [], riskIncreases: [] } from the invariant check.
+  risk              Json      @default("{}")
+  /// Candidate evaluation, baseline comparison, replay and watch results.
+  results           Json      @default("{}")
+  baseVersion       Int?
+  promotedVersion   Int?
+  candidateAgentId  String?
+  createdSkillIds   String[]  @default([])
+  approvalId        String?
+  baselineMetrics   Json?
+  error             String?   @db.Text
+  proposedByAgentId String?
+  proposedByUserId  String?
+  proposedByRunId   String?
+  promotedAt        DateTime?
+  watchUntil        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  /// Target agent. Null for a "create" until it is promoted.
+  agentId           String?
+  agent             Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  tenantId          String
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
   @@index([agentId])
 }
 

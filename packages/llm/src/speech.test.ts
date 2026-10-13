@@ -16,7 +16,7 @@ function fakeOpenAI() {
   const calls: { transcribe: Array<Record<string, unknown>>; speech: Array<Record<string, unknown>> } = { transcribe: [], speech: [] }
   const openai = {
     audio: {
-      transcriptions: { create: async (params: Record<string, unknown>) => { calls.transcribe.push(params); return { text: '  What are your office hours?  ' } } },
+      transcriptions: { create: async (params: Record<string, unknown>) => { calls.transcribe.push(params); return { text: '  What are your office hours?  ', logprobs: [{ logprob: Math.log(0.9) }, { logprob: Math.log(0.7) }] } } },
       speech: { create: async (params: Record<string, unknown>) => { calls.speech.push(params); return { arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer } } },
     },
   }
@@ -29,6 +29,8 @@ test('transcription sends the recording as a named file with the configured mode
   assert.equal(result.text, 'What are your office hours?')
   assert.equal(result.model, 'gpt-4o-mini-transcribe')
   assert.equal(result.audioBytes, 9)
+  assert.ok(Math.abs((result.confidence ?? 0) - 0.8) < 1e-9, 'mean token probability')
+  assert.deepEqual(calls.transcribe[0].include, ['logprobs'])
   const file = calls.transcribe[0].file as File
   assert.equal(file.name, 'utterance.webm')
   assert.equal(calls.transcribe[0].language, 'en')

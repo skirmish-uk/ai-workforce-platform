@@ -284,6 +284,9 @@ export default function AgentPage() {
         )}
       </header>
 
+      {/* Voice agents: the conversation sits at the top, so replies never need scrolling to. */}
+      {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} />}
+
       {agent && (
         <div className="grid gap-4 md:grid-cols-2">
           <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
@@ -300,8 +303,6 @@ export default function AgentPage() {
           </div>
         </div>
       )}
-
-      {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} />}
 
       <form onSubmit={start} className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4 space-y-3">
         <label htmlFor="task" className="block text-sm font-medium text-neutral-900 dark:text-neutral-100">Give {agent?.name.split(' ')[0] ?? 'the agent'} a task</label>

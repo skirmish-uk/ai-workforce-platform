@@ -28,6 +28,13 @@ export const CARTESIA_API_VERSION = '2026-08-14'
 export const MAX_AUDIO_BYTES = 10 * 1024 * 1024
 /** Upper bound on text sent to text-to-speech in one reply (characters are what TTS bills). */
 export const MAX_TTS_CHARS = 1500
+/**
+ * Below this mean token probability a transcript is treated as "didn't catch that".
+ * Calibrated on real gpt-4o-mini-transcribe calls (2026-10-13): clear speech 0.97–0.99,
+ * heavily distorted but correct speech 0.82, unintelligible audio that came back as
+ * foreign-sounding gibberish 0.23. (Silence and noise come back empty.)
+ */
+export const MIN_TRANSCRIPT_CONFIDENCE = 0.5
 
 export interface SpeechDeps {
   openai?: Pick<OpenAI, 'audio'>
@@ -41,6 +48,12 @@ export interface TranscriptionResult {
   model: string
   /** Bytes of audio received, for usage records. */
   audioBytes: number
+  /**
+   * Mean per-token probability from the transcriber (0–1), or null when not reported.
+   * Near-silent or noisy audio produces confident-sounding gibberish in a random
+   * language with a low score; callers should treat a low score as "didn't catch that".
+   */
+  confidence: number | null
 }
 
 export interface SpeechResult {
@@ -82,13 +95,16 @@ export async function transcribeAudio(
   const provider = sttProvider(deps.env)
   const extension = options.mimeType.includes('ogg') ? 'ogg' : options.mimeType.includes('mp4') || options.mimeType.includes('m4a') ? 'm4a' : options.mimeType.includes('wav') ? 'wav' : options.mimeType.includes('mpeg') ? 'mp3' : 'webm'
   const file = await toFile(audio, `utterance.${extension}`, { type: options.mimeType })
-  const result = await openaiClient(deps).audio.transcriptions.create({
+  const result = (await openaiClient(deps).audio.transcriptions.create({
     file,
     model: OPENAI_STT_MODEL,
+    include: ['logprobs'],
     ...(options.language ? { language: options.language } : {}),
     ...(options.prompt ? { prompt: options.prompt } : {}),
-  })
-  return { text: (result as { text: string }).text.trim(), provider, model: OPENAI_STT_MODEL, audioBytes: audio.length }
+  })) as { text: string; logprobs?: Array<{ logprob?: number }> }
+  const probs = (result.logprobs ?? []).map((l) => (typeof l.logprob === 'number' ? Math.exp(l.logprob) : null)).filter((p): p is number => p !== null)
+  const confidence = probs.length ? probs.reduce((a, b) => a + b, 0) / probs.length : null
+  return { text: result.text.trim(), provider, model: OPENAI_STT_MODEL, audioBytes: audio.length, confidence }
 }
 
 /** Removes markdown and other things that read badly aloud, and caps the length. */

@@ -4,7 +4,7 @@ import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { canAccessTenant, hasPermission, safeErrorMessage } from '@ai-workforce/domain'
 import { defaultGreeting, readVoiceConfig, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
-import { LLMConfigError, MAX_AUDIO_BYTES, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
+import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
 import { enqueueAgentRun, waitForAgentRun } from '@ai-workforce/queue'
 import { UserRole } from '@prisma/client'
 
@@ -69,8 +69,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const audio = Buffer.from(await file.arrayBuffer())
 
     let transcript: string
+    let confidence: number | null = null
     try {
-      transcript = (await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en' })).text
+      // No transcription prompt: on silence or noise it makes the model invent sentences.
+      const heard = await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en' })
+      transcript = heard.text
+      confidence = heard.confidence
     } catch (error) {
       const status = error instanceof LLMConfigError ? 503 : 502
       return NextResponse.json({ error: `Could not transcribe the recording: ${safeErrorMessage(error)}` }, { status })
@@ -81,6 +85,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let status: string = 'no_speech'
     if (!transcript) {
       reply = 'Sorry, I didn’t catch that. Could you say it again?'
+    } else if (confidence !== null && confidence < MIN_TRANSCRIPT_CONFIDENCE) {
+      // Garbled audio comes back as confident-looking words in a random language; don't act on it.
+      status = 'unclear'
+      reply = 'Sorry, I didn’t catch that clearly. Could you say it again, a little closer to the microphone?'
     } else {
       const job = await enqueueAgentRun({ agentId: agent.id, input: transcript, userId: session.user.id, trigger: 'voice' })
       runId = job.id ?? null
@@ -106,11 +114,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         tenantId: agent.tenantId,
         userId: session.user.id,
         // Usage for per-minute pricing: audio received and characters spoken.
-        newData: { runId, status, audioBytes: audio.length, ttsCharacters: speech.characters, ttsModel: speech.ttsModel ?? null, ttsError: speech.ttsError ?? null, durationMs: Date.now() - started },
+        newData: { runId, status, confidence, audioBytes: audio.length, ttsCharacters: speech.characters, ttsModel: speech.ttsModel ?? null, ttsError: speech.ttsError ?? null, durationMs: Date.now() - started },
       },
     })
 
-    return NextResponse.json({ transcript, reply, status, runId, ...speech })
+    return NextResponse.json({ transcript, confidence, reply, status, runId, ...speech })
   } catch (error) {
     console.error('Voice turn failed:', error)
     return NextResponse.json({ error: 'Voice turn failed' }, { status: 500 })

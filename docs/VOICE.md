@@ -31,6 +31,16 @@ JSON { transcript, reply, status, runId, audio (base64 mp3) } → played in the 
 
 `GET /api/agents/{id}/voice` returns the greeting (text and audio) to start a conversation.
 
+**Garbled audio protection (2026-10-13).** Transcripts now carry a confidence score (mean token probability, `include: ['logprobs']`). Below `MIN_TRANSCRIPT_CONFIDENCE` (0.5) the turn is answered "Sorry, I didn't catch that clearly" and is **not** sent to the agent (status `unclear`). Calibration with real calls: clear speech 0.97–0.99, heavily distorted but correct 0.82, unintelligible audio that came back as foreign-sounding gibberish 0.23; silence and noise come back empty. A transcription *prompt* is deliberately not used: on silence it made the model invent whole sentences at high confidence.
+
+**Talk panel.** It sits at the top of the agent page:
+- a waveform that follows the agent's voice while it speaks and your microphone level while you talk;
+- the current exchange directly underneath, with earlier turns in a collapsible history;
+- a microphone picker (remembered per browser);
+- "Play my recording" on your turns, so you can hear exactly what was sent;
+- a silence check, so a recording that picked up almost nothing is never sent;
+- "Interrupt and talk" while the agent is speaking.
+
 ## 2. Turning voice on for an agent
 
 Voice settings live in `Agent.config.voice`, outside the contract: they change how an agent sounds, not what it may do. They're validated by `voiceConfigSchema` in `packages/executor/src/voice.ts`.

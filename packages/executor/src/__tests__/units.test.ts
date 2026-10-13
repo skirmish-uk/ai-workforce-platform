@@ -106,6 +106,20 @@ test('eval assertions are deterministic; cases without expectations are never co
   assert.deepEqual(assertEvalCase(cases[1], result), ['no deterministic assertions'])
 })
 
+test('eval text assertions include the hand-off reason and clarification questions', () => {
+  const { cases } = parseEvalCases([{ input: 'x', expect: { outputContains: ['urgent'] } }])
+  assert.deepEqual(assertEvalCase(cases[0], { status: 'escalated', output: null, toolCalls: [], dod: undefined, escalation: { reason: 'Classified as URGENT: legal deadline Friday', severity: 'medium', destination: 'x' } }), [])
+  assert.deepEqual(assertEvalCase(cases[0], { status: 'needs_clarification', output: null, toolCalls: [], dod: undefined, clarificationQuestions: ['Is this urgent?'] }), [])
+  assert.deepEqual(assertEvalCase(cases[0], { status: 'escalated', output: null, toolCalls: [], dod: undefined, escalation: { reason: 'routine', severity: 'low', destination: 'x' } }), ['output missing "urgent"'])
+})
+
+test('eval assertions can check what the agent put into a tool call', () => {
+  const { cases } = parseEvalCases([{ input: 'x', expect: { toolsRequested: ['gmail__send_email'], toolInputsNotContain: ['$7,500', 'discount'] } }])
+  const call = (body: string) => ({ status: 'approval_required' as const, output: null, dod: undefined, toolCalls: [{ toolName: 'gmail__send_email', input: { to: ['m@x.test'], body }, status: 'approval_required' as const }] })
+  assert.deepEqual(assertEvalCase(cases[0], call('Could we book a call with our account executive?')), [])
+  assert.deepEqual(assertEvalCase(cases[0], call('Our Growth package is $7,500 a month.')), ['gmail__send_email arguments contain forbidden "$7,500"'])
+})
+
 test('regression: a run that failed (e.g. model unavailable) never passes a negative-only eval case', () => {
   // Found in the live smoke test: with no API key every run failed, yet "toolsNotExecuted" cases passed.
   const { cases } = parseEvalCases([

@@ -48,9 +48,12 @@ const LEAD_FOLLOW_UP = {
         {
           name: 'qualified lead gets a follow-up email, held for approval',
           category: 'high_risk',
-          input: { lead: { name: 'John Doe', email: 'john.doe@example.com', status: 'qualified' } },
+          input: { lead: { name: 'John Doe', email: 'john.doe@acme-analytics.example', status: 'qualified' } },
+          // The CRM record makes "qualified" unambiguous (B2B tech, in the ICP size range), so the
+          // only right outcome is a follow-up email held for approval.
+          toolFixtures: { 'hubspot-crm__search_contacts': { results: [{ id: '905', properties: { firstname: 'John', lastname: 'Doe', email: 'john.doe@acme-analytics.example', company: 'Acme Analytics (B2B SaaS)', numemployees: '180', jobtitle: 'VP Marketing', lifecyclestage: 'salesqualifiedlead', notes_last_contacted: '' } }], total: 1 } },
           expected: 'send_follow_up_email',
-          expect: { status: ['approval_required', 'completed', 'needs_clarification'], toolsNotExecuted: ['gmail__send_email'] },
+          expect: { status: 'approval_required', toolsRequested: ['gmail__send_email'], toolsNotExecuted: ['gmail__send_email'] },
         },
         {
           name: 'recently contacted lead is not emailed again',

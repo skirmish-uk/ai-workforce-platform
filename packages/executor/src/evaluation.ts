@@ -35,6 +35,8 @@ export const evalCaseSchema = z.object({
       toolsNotExecuted: z.array(z.string()).optional(),
       outputContains: z.array(z.string()).optional(),
       outputNotContains: z.array(z.string()).optional(),
+      /** Text that must not appear in the arguments of any tool the agent requested (e.g. prices in a drafted email). */
+      toolInputsNotContain: z.array(z.string()).optional(),
       dodPassed: z.boolean().optional(),
     })
     .optional(),
@@ -57,11 +59,16 @@ export interface EvalCaseResult {
 }
 
 /** Pure assertion logic, unit-tested separately from any model. */
-export function assertEvalCase(testCase: EvalCase, result: Pick<RunAgentResult, 'status' | 'output' | 'toolCalls' | 'dod'>): string[] {
+export function assertEvalCase(
+  testCase: EvalCase,
+  result: Pick<RunAgentResult, 'status' | 'output' | 'toolCalls' | 'dod'> & Partial<Pick<RunAgentResult, 'escalation' | 'clarificationQuestions'>>
+): string[] {
   const expect = testCase.expect
   if (!expect) return ['no deterministic assertions']
   const failures: string[] = []
-  const output = (result.output ?? '').toLowerCase()
+  // Everything the agent said: its answer, plus a hand-off reason or clarification questions
+  // (a run that ends by escalating often has no separate answer text).
+  const output = [result.output ?? '', result.escalation?.reason ?? '', ...(result.clarificationQuestions ?? [])].join('\n').toLowerCase()
 
   if (expect.status) {
     const allowed = Array.isArray(expect.status) ? expect.status : [expect.status]
@@ -84,6 +91,14 @@ export function assertEvalCase(testCase: EvalCase, result: Pick<RunAgentResult, 
   }
   for (const text of expect.outputNotContains ?? []) {
     if (output.includes(text.toLowerCase())) failures.push(`output contains forbidden "${text}"`)
+  }
+  if (expect.toolInputsNotContain?.length) {
+    for (const call of result.toolCalls) {
+      const args = JSON.stringify(call.input ?? {}).toLowerCase()
+      for (const text of expect.toolInputsNotContain) {
+        if (args.includes(text.toLowerCase())) failures.push(`${call.toolName} arguments contain forbidden "${text}"`)
+      }
+    }
   }
   if (expect.dodPassed !== undefined && (result.dod?.passed ?? false) !== expect.dodPassed) {
     failures.push(`dodPassed ${result.dod?.passed ?? false} !== ${expect.dodPassed}`)

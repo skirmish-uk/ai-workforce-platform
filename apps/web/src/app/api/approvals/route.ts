@@ -60,6 +60,11 @@ export async function GET(request: NextRequest) {
       ? await prisma.agent.findMany({ where: { id: { in: agentIds }, tenantId }, select: { id: true, name: true } })
       : []
     const agentName = new Map(agents.map((a) => [a.id, a.name]))
+    const sandboxConnections = new Set(
+      (await prisma.integration.findMany({ where: { tenantId, isActive: true }, select: { name: true, config: true } }))
+        .filter((i) => (i.config as Record<string, unknown> | null)?.sandbox === true)
+        .map((i) => i.name)
+    )
 
     // Only the redacted summary is returned; the exact arguments stay server-side for execution.
     const data = approvals.map(({ input, ...rest }) => {
@@ -71,6 +76,8 @@ export async function GET(request: NextRequest) {
         workflowStepId: payload.workflowStepId,
         revisionId: payload.revisionId,
         summary: payload.summary ?? null,
+        // The action runs against a sandbox connection: fictional data, nothing real is sent.
+        sandbox: sandboxConnections.has(String((payload.summary as { target?: unknown } | undefined)?.target ?? '')),
       }
     })
     return NextResponse.json({ data })

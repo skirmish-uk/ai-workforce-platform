@@ -88,8 +88,9 @@ const LEAD_FOLLOW_UP = {
 const EMAIL_TRIAGE = {
   requiredTools: ['gmail__list_emails', 'gmail__modify_labels'],
   evaluationCases: [
-        { name: 'urgent legal email', input: { subject: 'Urgent: Contract Review', from: 'legal@client.com' }, expected: 'classify_urgent', expect: { outputContains: ['urgent'] } },
-        { name: 'newsletter', input: { subject: 'Weekly Newsletter', from: 'marketing@vendor.com' }, expected: 'classify_newsletter', expect: { outputContains: ['newsletter'] } },
+        // The email is in the request itself, so the result doesn't depend on a live inbox.
+        { name: 'urgent legal email', category: 'normal', input: 'Triage this email and say which category it belongs in. From: legal@client.example. Subject: Urgent: contract review needed by Friday. Body: Please review the attached liability clause before Friday.', expect: { outputContains: ['urgent'], toolsNotExecuted: ['gmail__send_email'] } },
+        { name: 'newsletter', category: 'normal', input: 'Triage this email and say which category it belongs in. From: news@vendor.example. Subject: Weekly newsletter. Body: Five landing page tests that doubled demo bookings.', expect: { outputContains: ['newsletter'], toolsNotExecuted: ['gmail__send_email'] } },
       ],
   metadata: {
         category: 'productivity',
@@ -105,8 +106,9 @@ const EMAIL_TRIAGE = {
 const DEMO_BUSINESS_CONTEXT = {
   description: 'Demo Marketing Agency, a marketing agency operating in Australia (demo tenant).',
   goals: ['Qualify inbound leads and book meetings for Account Executives'],
-  policies: ['Never invent pricing or make commitments on behalf of the agency'],
-  unknowns: ['Ideal customer profile (ICP) criteria', 'Pricing and discount policy', 'Meeting booking rules and AE availability'],
+  // The ideal customer profile and pricing guidelines are knowledge documents, so they are not unknowns.
+  policies: ['Never invent pricing or make commitments on behalf of the agency', 'Discounts above 15% need director approval (see Pricing Guidelines)', 'Qualify leads against the Ideal Customer Profile document'],
+  unknowns: ['Meeting booking rules and Account Executive availability'],
 }
 
 /** Fictional demo content for the Knowledge Assistant. */
@@ -223,6 +225,22 @@ You cannot apply changes: the platform evaluates every proposal, promotes it onl
 
 Finish with a short report: what you reviewed, what you proposed and why, and what you chose not to change.`
 
+/**
+ * Reseeding must not undo promoted revisions. Seed-owned definition fields are updated only
+ * while an agent is still at version 1; once the revision pipeline or a person has changed
+ * it, the seed leaves its definition alone.
+ */
+async function seedOwned(agentId: string): Promise<boolean> {
+  const existing = await prisma.agent.findUnique({ where: { id: agentId }, select: { version: true } })
+  return !existing || existing.version <= 1
+}
+
+/** Links a seed playbook unless the agent already uses some version of it (e.g. a newer one from a revision). */
+async function linkSkill(agentId: string, skill: { id: string; name: string }): Promise<void> {
+  const sameName = await prisma.agentSkill.findFirst({ where: { agentId, skill: { name: skill.name } } })
+  if (!sameName) await prisma.agentSkill.create({ data: { agentId, skillId: skill.id, enabled: true } })
+}
+
 async function main() {
   console.log('🌱 Seeding database...')
 
@@ -275,7 +293,10 @@ async function main() {
   const demoSettings = (demoTenant.settings ?? {}) as Record<string, unknown>
   const missing = {
     ...(demoSettings.selfManagement ? {} : { selfManagement: { enabled: true, maxAutonomyStage: 'limited', maxRevisionsPerDay: 10, replayRuns: 5 } }),
-    ...(demoSettings.businessContext ? {} : { businessContext: DEMO_BUSINESS_CONTEXT }),
+    // Replace it while it is still the seed's own demo text (unchanged description); never overwrite a customised one.
+    ...(demoSettings.businessContext && (demoSettings.businessContext as { description?: string }).description !== DEMO_BUSINESS_CONTEXT.description
+      ? {}
+      : JSON.stringify(demoSettings.businessContext) === JSON.stringify(DEMO_BUSINESS_CONTEXT) ? {} : { businessContext: DEMO_BUSINESS_CONTEXT }),
   }
   if (Object.keys(missing).length) {
     await prisma.tenant.update({ where: { id: demoTenant.id }, data: { settings: { ...demoSettings, ...missing } } })
@@ -366,7 +387,7 @@ async function main() {
   const agent = await prisma.agent.upsert({
     where: { id: 'demo-agent-1' },
     // Reseeding applies the contract to an existing demo agent (other fields are left alone).
-    update: { config: { contract: SARAH_CONTRACT } },
+    update: (await seedOwned('demo-agent-1')) ? { config: { contract: SARAH_CONTRACT } } : {},
     create: {
       id: 'demo-agent-1',
       name: 'Sarah - Sales Assistant',
@@ -396,18 +417,9 @@ Guidelines:
     },
   })
 
-  // Link skills to agent
-  await prisma.agentSkill.upsert({
-    where: { agentId_skillId: { agentId: agent.id, skillId: leadFollowUpSkill.id } },
-    update: {},
-    create: { agentId: agent.id, skillId: leadFollowUpSkill.id, enabled: true },
-  })
-
-  await prisma.agentSkill.upsert({
-    where: { agentId_skillId: { agentId: agent.id, skillId: emailTriageSkill.id } },
-    update: {},
-    create: { agentId: agent.id, skillId: emailTriageSkill.id, enabled: true },
-  })
+  // Link skills to agent (skipped when a revision has already moved the agent to another version)
+  await linkSkill(agent.id, leadFollowUpSkill)
+  await linkSkill(agent.id, emailTriageSkill)
 
   // Create sample permissions. Actions are real tool names (see packages/tools/src/registry.ts) so
   // checkPermission() actually matches them against tool calls the agent makes; deterministic ids
@@ -433,7 +445,7 @@ Guidelines:
   // created inactive so a reseed never starts spending money on model calls by itself.
   const manager = await prisma.agent.upsert({
     where: { id: 'demo-manager-1' },
-    update: { config: { contract: MANAGER_CONTRACT }, systemPrompt: MANAGER_PROMPT },
+    update: (await seedOwned('demo-manager-1')) ? { config: { contract: MANAGER_CONTRACT }, systemPrompt: MANAGER_PROMPT } : {},
     create: {
       id: 'demo-manager-1',
       name: 'Morgan - Workforce Manager',
@@ -537,7 +549,7 @@ Guidelines:
   })
   const assistant = await prisma.agent.upsert({
     where: { id: 'demo-assistant-1' },
-    update: { config: { contract: ASSISTANT_CONTRACT, voice: ASSISTANT_VOICE }, systemPrompt: ASSISTANT_PROMPT },
+    update: (await seedOwned('demo-assistant-1')) ? { config: { contract: ASSISTANT_CONTRACT, voice: ASSISTANT_VOICE }, systemPrompt: ASSISTANT_PROMPT } : {},
     create: {
       id: 'demo-assistant-1',
       name: 'Ava - Client Questions',
@@ -552,11 +564,7 @@ Guidelines:
       config: { contract: ASSISTANT_CONTRACT, voice: ASSISTANT_VOICE },
     },
   })
-  await prisma.agentSkill.upsert({
-    where: { agentId_skillId: { agentId: assistant.id, skillId: answerSkill.id } },
-    update: {},
-    create: { agentId: assistant.id, skillId: answerSkill.id, enabled: true },
-  })
+  await linkSkill(assistant.id, answerSkill)
   for (const [documentId, priority] of [[faqDoc.id, 3], ['demo-kb-company-overview', 2], ['demo-kb-pricing', 1]] as const) {
     await prisma.agentKnowledgeSource.upsert({
       where: { agentId_documentId: { agentId: assistant.id, documentId } },
@@ -565,7 +573,8 @@ Guidelines:
     })
   }
 
-  // Placeholder integrations (no real credentials). Idempotent: one row per name; earlier
+  // Placeholder integrations in sandbox mode (fictional data, nothing real is sent; see
+  // packages/tools/src/sandbox.ts) until real accounts are connected. Idempotent: one row per name; earlier
   // non-idempotent seeds left duplicates, which are removed only while they still hold the
   // seed placeholder, so tokens stored by a real OAuth connection are never touched.
   const placeholder = { encrypted: true }
@@ -586,12 +595,16 @@ Guidelines:
   for (const integration of seedIntegrations) {
     const rows = await prisma.integration.findMany({ where: { tenantId: demoTenant.id, name: integration.name }, orderBy: { createdAt: 'asc' } })
     if (!rows.length) {
-      await prisma.integration.create({ data: { ...integration, credentials: placeholder, tenantId: demoTenant.id } })
+      await prisma.integration.create({ data: { ...integration, config: { ...integration.config, sandbox: true }, credentials: placeholder, tenantId: demoTenant.id } })
       continue
     }
     const keep = rows.find((r) => JSON.stringify(r.credentials) !== JSON.stringify(placeholder)) ?? rows[0]
     const extras = rows.filter((r) => r.id !== keep.id && JSON.stringify(r.credentials) === JSON.stringify(placeholder))
     if (extras.length) await prisma.integration.deleteMany({ where: { id: { in: extras.map((r) => r.id) } } })
+    const keepConfig = (keep.config ?? {}) as Record<string, unknown>
+    if (JSON.stringify(keep.credentials) === JSON.stringify(placeholder) && (keepConfig.sandbox !== true || !keep.isActive)) {
+      await prisma.integration.update({ where: { id: keep.id }, data: { isActive: true, config: { ...keepConfig, sandbox: true } } })
+    }
   }
 
   // Sample subscription: one per tenant. Seed-made duplicates (never linked to Stripe) are removed.

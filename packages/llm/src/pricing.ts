@@ -20,6 +20,12 @@ const PRICING: Record<string, ModelPricing> = {
   'claude-opus-5': { inputPerMillion: 5, outputPerMillion: 25 },
   'claude-sonnet-5': { inputPerMillion: 2, outputPerMillion: 10 },
   'claude-haiku-4-5-20251001': { inputPerMillion: 1, outputPerMillion: 5 },
+  // Current generation, from Anthropic's model table (claude-api reference, cached 2026-10-06).
+  'claude-opus-5-5': { inputPerMillion: 4, outputPerMillion: 20 },
+  'claude-sonnet-5-5': { inputPerMillion: 2, outputPerMillion: 10 },
+  // Haiku 5.5 is $0.10 / $0.50 for prompts up to 100K tokens ($0.50 / $2.50 beyond); agent
+  // prompts here are far below 100K, so the lower tier is used.
+  'claude-haiku-5-5': { inputPerMillion: 0.1, outputPerMillion: 0.5 },
 
   // OpenAI chat models
   'gpt-4o': { inputPerMillion: 2.5, outputPerMillion: 10 },

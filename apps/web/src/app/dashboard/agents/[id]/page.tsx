@@ -63,7 +63,7 @@ const STATUS: Record<string, { label: string; variant: 'default' | 'success' | '
 
 const TOOL_STATUS: Record<string, string> = {
   completed: 'done',
-  simulated: 'simulated (test run)',
+  simulated: 'simulated (sandbox or test run: nothing real happened)',
   denied: 'not allowed',
   error: 'error',
   approval_required: 'sent for approval',

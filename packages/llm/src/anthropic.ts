@@ -13,8 +13,12 @@ import { LLMConfigError } from './types'
 
 const DEFAULT_MAX_TOKENS = 4096
 
-function toAnthropicMessages(messages: LLMMessage[]): Anthropic.MessageParam[] {
+export function toAnthropicMessages(messages: LLMMessage[], model: string): Anthropic.MessageParam[] {
   return messages.map((message) => {
+    // Replay this model's own assistant turn exactly as returned (thinking blocks included).
+    if (message.role === 'assistant' && message.providerContent?.provider === 'anthropic' && message.providerContent.model === model) {
+      return { role: 'assistant', content: message.providerContent.content as Anthropic.ContentBlockParam[] }
+    }
     const blocks: Anthropic.ContentBlockParam[] = []
 
     if (message.content) {
@@ -65,6 +69,18 @@ function mapStopReason(reason: Anthropic.Message['stop_reason']): LLMStopReason 
   }
 }
 
+/**
+ * Whether a model accepts sampling parameters (temperature/top_p/top_k). They are removed
+ * on Claude Opus 4.7+ / Sonnet 5+ / Fable and rejected with a 400 ("`temperature` is
+ * deprecated for this model"); Sonnet 5.5 / Haiku 5.5 reject non-default values. Only
+ * older models known to accept them get one, so a new model never fails on it.
+ */
+export function supportsSamplingParams(model: string): boolean {
+  // Family followed by end of id or a date snapshot (so "opus-4" never matches "opus-4-7").
+  return /^claude-(3|3-5|3-7|haiku-4-5|sonnet-4|sonnet-4-5|sonnet-4-6|opus-4|opus-4-1|opus-4-5|opus-4-6)(-\d{8}|$)/.test(model) ||
+    /^claude-3-(5-)?(haiku|sonnet|opus)/.test(model)
+}
+
 export class AnthropicLLMClient implements LLMClient {
   readonly provider = 'anthropic' as const
   readonly model: string
@@ -87,10 +103,10 @@ export class AnthropicLLMClient implements LLMClient {
     const response = await this.client.messages.create({
       model: this.model,
       system: params.system,
-      messages: toAnthropicMessages(params.messages),
+      messages: toAnthropicMessages(params.messages, this.model),
       tools: params.tools?.length ? toAnthropicTools(params.tools) : undefined,
       max_tokens: params.maxTokens ?? this.defaultMaxTokens,
-      temperature: params.temperature ?? this.defaultTemperature,
+      ...(supportsSamplingParams(this.model) ? { temperature: params.temperature ?? this.defaultTemperature } : {}),
     })
 
     let content: string | null = null
@@ -118,6 +134,7 @@ export class AnthropicLLMClient implements LLMClient {
       },
       model: response.model,
       raw: response,
+      providerContent: { provider: 'anthropic', model: this.model, content: response.content },
     }
   }
 }

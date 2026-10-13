@@ -1,8 +1,7 @@
 import { prisma } from '@ai-workforce/db'
 import { redact, safeErrorMessage } from '@ai-workforce/domain'
 import {
-  executeToolCall,
-  getCredentialsForAdapter,
+  executeOnTenantConnection,
   ToolTimeoutError,
   type RegisteredTool,
   type ToolRiskProfile,
@@ -59,8 +58,11 @@ export async function auditToolEvent(
 }
 
 async function defaultExecutor(registered: RegisteredTool, input: unknown, ctx: { tenantId: string; timeoutMs: number }): Promise<unknown> {
-  const credentials = await getCredentialsForAdapter(ctx.tenantId, registered.adapter.name)
-  return executeToolCall(registered, input, credentials, ctx.timeoutMs)
+  return executeOnTenantConnection(registered, input, ctx.tenantId, ctx.timeoutMs)
+}
+
+function isSandboxResult(output: unknown): boolean {
+  return Boolean(output && typeof output === 'object' && (output as Record<string, unknown>).sandbox === true)
 }
 
 async function withTimeout<T>(work: Promise<T>, timeoutMs: number, toolName: string): Promise<T> {
@@ -118,6 +120,11 @@ export async function runAuthorizedTool(
   const executor = ctx.executeTool ?? defaultExecutor
   try {
     const output = await withTimeout(executor(registered, input, { tenantId: ctx.tenantId, timeoutMs: ctx.timeoutMs }), ctx.timeoutMs, toolName)
+    if (isSandboxResult(output)) {
+      // A sandbox connection never touches a real system: record it as simulated, never as done.
+      await auditToolEvent(ctx, 'AGENT_TOOL_CALL_SIMULATED', { ...base, output, sandbox: true })
+      return { kind: 'simulated', output, idempotencyKey }
+    }
     await auditToolEvent(ctx, 'AGENT_TOOL_CALL', { ...base, output })
     return { kind: 'completed', output, idempotencyKey }
   } catch (error) {

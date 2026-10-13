@@ -31,6 +31,12 @@ export interface LLMMessage {
   content?: string
   toolCalls?: LLMToolCall[]
   toolResults?: LLMToolResult[]
+  /**
+   * The provider's own content for an assistant turn (e.g. Anthropic content blocks,
+   * including thinking blocks), replayed unchanged on the next request. Newer Claude
+   * models reject a conversation whose earlier assistant turns were rebuilt or edited.
+   */
+  providerContent?: { provider: LLMProvider; model: string; content: unknown }
 }
 
 /**
@@ -56,6 +62,8 @@ export interface LLMResponse {
   usage: LLMUsage
   model: string
   raw?: unknown
+  /** See LLMMessage.providerContent: pass it on the assistant message that records this response. */
+  providerContent?: LLMMessage['providerContent']
 }
 
 export interface LLMCompleteParams {

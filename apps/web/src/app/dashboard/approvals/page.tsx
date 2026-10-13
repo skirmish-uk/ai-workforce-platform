@@ -27,6 +27,7 @@ interface Approval {
   agentName: string | null
   runId: string | null
   revisionId?: string
+  sandbox?: boolean
   decidedAt: string | null
   reason: string | null
   createdAt: string
@@ -160,6 +161,7 @@ function ApprovalCard({ approval, onDecided }: { approval: Approval; onDecided: 
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {approval.sandbox && <Badge variant="info">Sandbox: nothing real is sent</Badge>}
           <Badge variant={risk.variant}>{risk.label}</Badge>
           {!pending && <Badge variant={STATUS_VARIANT[approval.status] ?? 'default'}>{approval.status.replace(/_/g, ' ').toLowerCase()}</Badge>}
         </div>

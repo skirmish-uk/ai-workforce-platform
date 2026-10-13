@@ -90,7 +90,9 @@ async function auth(): Promise<void> {
   })
 
   const credentials = await gmailAdapter.exchangeCode(code, REDIRECT_URI)
-  await prisma.integration.update({ where: { id: integration.id }, data: { credentials: credentials as never, isActive: true } })
+  // Real tokens: leave sandbox mode so tools hit the real mailbox.
+  const config = (integration.config ?? {}) as Record<string, unknown>
+  await prisma.integration.update({ where: { id: integration.id }, data: { credentials: credentials as never, isActive: true, config: { ...config, sandbox: false } as never } })
   if (duplicates.length) {
     // The seed has created duplicate Gmail rows; make sure the platform picks the one with tokens.
     await prisma.integration.updateMany({ where: { id: { in: duplicates.map((d) => d.id) } }, data: { isActive: false } })

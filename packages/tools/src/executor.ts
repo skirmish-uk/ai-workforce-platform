@@ -4,6 +4,7 @@ import type { RegisteredTool } from './registry'
 import { checkPermission } from './permissions'
 import { decideToolAction, type AutonomyStage, type ToolDecision } from './policy'
 import { getToolRiskProfile, type ToolRiskProfile } from './risk'
+import { sandboxExecute } from './sandbox'
 
 export class ToolPermissionDeniedError extends Error {
   constructor(
@@ -54,6 +55,32 @@ export class ToolTimeoutError extends Error {
 }
 
 export const DEFAULT_TOOL_TIMEOUT_MS = 30_000
+
+/**
+ * The tenant's active connection for an adapter. `sandbox` connections
+ * (Integration.config.sandbox = true) run against fictional data (./sandbox.ts).
+ */
+export async function getIntegrationForAdapter(
+  tenantId: string,
+  adapterName: string
+): Promise<{ credentials: Record<string, unknown>; sandbox: boolean }> {
+  const integration = await prisma.integration.findFirst({ where: { tenantId, name: adapterName, isActive: true } })
+  if (!integration) throw new Error(`No active "${adapterName}" integration is configured for this tenant.`)
+  const config = (integration.config ?? {}) as Record<string, unknown>
+  return { credentials: integration.credentials as Record<string, unknown>, sandbox: config.sandbox === true }
+}
+
+/** Runs a tool on a tenant's connection: the real service, or the sandbox dataset for sandbox connections. */
+export async function executeOnTenantConnection(
+  registered: RegisteredTool,
+  input: unknown,
+  tenantId: string,
+  timeoutMs = DEFAULT_TOOL_TIMEOUT_MS
+): Promise<unknown> {
+  const connection = await getIntegrationForAdapter(tenantId, registered.adapter.name)
+  if (connection.sandbox) return sandboxExecute(registered.toolName, validateToolInput(registered, input))
+  return executeToolCall(registered, input, connection.credentials, timeoutMs)
+}
 
 export async function getCredentialsForAdapter(
   tenantId: string,
@@ -177,8 +204,7 @@ export async function checkAndExecuteToolCall(
     case 'propose':
       throw new ToolProposalRecordedError(toolName, decision.reason)
     case 'execute': {
-      const credentials = await getCredentialsForAdapter(params.tenantId, params.registered.adapter.name)
-      return executeToolCall(params.registered, input, credentials, params.timeoutMs)
+      return executeOnTenantConnection(params.registered, input, params.tenantId, params.timeoutMs)
     }
   }
 }

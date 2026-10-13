@@ -543,7 +543,7 @@ class AgentRun {
         return this.finish('blocked', { error: `Cost budget exhausted ($${this.spentUsd().toFixed(4)} of $${this.budgetUsd.toFixed(4)})` })
       }
 
-      messages.push({ role: 'assistant', content: response.content ?? undefined, toolCalls: response.toolCalls })
+      messages.push({ role: 'assistant', content: response.content ?? undefined, toolCalls: response.toolCalls, providerContent: response.providerContent })
       const toolResults: NonNullable<LLMMessage['toolResults']> = []
 
       for (const call of response.toolCalls) {

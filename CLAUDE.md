@@ -296,13 +296,18 @@ npm run test      # Test all packages
 
 `npm run build` is clean (`next build` + all workspace packages). No known build issues.
 
-### ngrok (for sharing demo externally)
+### Sharing a demo externally (ngrok)
+Share the **production** build, not `next dev` (dev compiles each route on first visit: 2.5–3 s, and ships unminified JS; production shows every dashboard page's data in about 0.3–0.6 s). Always put a password on the tunnel: the demo logins are public in this repo and the app runs on real API keys.
 ```bash
-ngrok config add-authtoken YOUR_TOKEN   # One-time setup
-setsid ngrok http 3000 --log=stdout > /tmp/ngrok.log 2>&1 &   # Use setsid to survive shell exit
-# Get URL:
-curl -s http://127.0.0.1:4040/api/tunnels | python3 -c "import sys,json; print(json.load(sys.stdin)['tunnels'][0]['public_url'])"
+ngrok config add-authtoken YOUR_TOKEN                     # one-time setup
+setsid ngrok http 3000 --basic-auth "demo:<strong-password>" --log=stdout > /tmp/ngrok.log 2>&1 &
+URL=$(curl -s http://127.0.0.1:4040/api/tunnels | python3 -c "import sys,json; print(json.load(sys.stdin)['tunnels'][0]['public_url'])")
+./start-dev.sh stop                                        # free port 3000
+npm run build --workspace @ai-workforce/web
+(cd apps/web && NEXTAUTH_URL="$URL" setsid nohup npx next start -p 3000 > ../../logs/web-prod.log 2>&1 &)
+npx tsx packages/queue/src/start-workers.ts                # in another terminal: nothing runs without it
 ```
+`NEXTAUTH_URL` must be the tunnel URL or sign-in redirects break. The free ngrok URL changes on every restart (redo the last two steps), and visitors see ngrok's one-time "You are about to visit" page first. The production server does not reload on code changes: rebuild and restart it.
 
 ---
 

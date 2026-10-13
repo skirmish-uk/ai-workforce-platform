@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
-import { Plus, Search, Bot, Zap, Shield, MoreVertical, Edit, Trash2, Play, Pause } from 'lucide-react'
+import { Plus, Search, ChevronRight, Mic } from 'lucide-react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { Button, Badge } from '@ai-workforce/ui'
 import { formatDate } from '@ai-workforce/ui'
 
@@ -15,6 +16,7 @@ interface Agent {
   modelProvider: string
   modelName: string
   createdAt: string
+  config?: { voice?: { enabled?: boolean } }
   _count?: {
     workflows: number
     knowledgeSources: number
@@ -42,6 +44,7 @@ const statusColors: Record<string, 'default' | 'success' | 'warning' | 'danger' 
 
 export default function AgentsPage() {
   const { data: session } = useSession()
+  const router = useRouter()
   const [agents, setAgents] = useState<Agent[]>([])
   const [pagination, setPagination] = useState({ page: 1, pageSize: 20, total: 0, totalPages: 0 })
   const [search, setSearch] = useState('')
@@ -134,70 +137,73 @@ export default function AgentsPage() {
             <thead className="bg-neutral-50 dark:bg-neutral-800/50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Agent</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Role</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Model</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Skills</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Playbooks</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Created</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Actions</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
               {agents.length === 0 ? (
                 <tr>
-                  <td className="px-6 py-12 text-center text-neutral-500 dark:text-neutral-400" colSpan={7}>
+                  <td className="px-6 py-12 text-center text-neutral-500 dark:text-neutral-400" colSpan={6}>
                     No agents found
                   </td>
                 </tr>
               ) : (
-                agents.map((agent) => (
-                  <tr key={agent.id} className="hover:bg-neutral-50 dark:hover:bg-neutral-800/50">
-                    <td className="px-6 py-4">
-                      <Link href={`/dashboard/agents/${agent.id}`} className="font-medium text-neutral-900 dark:text-neutral-50 hover:text-primary-600 dark:hover:text-primary-400">
-                        {agent.name}
-                      </Link>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400">{agent.role}</td>
-                    <td className="px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400">
-                      {agent.modelProvider} / {agent.modelName}
-                    </td>
-                    <td className="px-6 py-4">
-                      <Badge variant={statusColors[agent.status] || 'default'}>{agent.status}</Badge>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex flex-wrap gap-1">
-                        {agent.skills?.map((s, i) => (
-                          <Badge key={i} variant="outline" className="text-xs">{s.skill.name} v{s.skill.version}</Badge>
-                        ))}
-                        {!agent.skills?.length && <span className="text-sm text-neutral-400">None</span>}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400">
-                      {formatDate(agent.createdAt)}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Link href={`/dashboard/agents/${agent.id}`} className="p-2 text-neutral-500 hover:text-primary-600 dark:hover:text-primary-400 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800" title="Configure">
-                          <Bot className="w-4 h-4" />
-                        </Link>
-                        {canManage && (
-                          <>
-                            {agent.status !== 'PRODUCTION' && (
-                              <button className="p-2 text-neutral-500 hover:text-green-600 dark:hover:text-green-400 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800" title="Deploy">
-                                <Play className="w-4 h-4" />
-                              </button>
-                            )}
-                            {agent.status === 'PRODUCTION' && (
-                              <button className="p-2 text-neutral-500 hover:text-yellow-600 dark:hover:text-yellow-400 rounded-lg hover:bg-neutral-100 dark:hover:bg-neutral-800" title="Pause">
-                                <Pause className="w-4 h-4" />
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                agents.map((agent) => {
+                  const open = () => router.push(`/dashboard/agents/${agent.id}`)
+                  const voice = agent.config?.voice?.enabled === true
+                  return (
+                    // The whole row opens the agent; the Open button is the keyboard-accessible way in.
+                    <tr key={agent.id} onClick={open} className="group cursor-pointer hover:bg-primary-50/60 dark:hover:bg-primary-900/10 transition-colors">
+                      <td className="px-6 py-4">
+                        <div className="flex items-center gap-3">
+                          <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-100 text-sm font-semibold text-primary-700 dark:bg-primary-900/40 dark:text-primary-300">
+                            {agent.name.charAt(0)}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="whitespace-nowrap font-medium text-neutral-900 dark:text-neutral-50 group-hover:text-primary-700 dark:group-hover:text-primary-300">{agent.name}</span>
+                              {voice && <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><Mic className="w-3 h-3" aria-hidden="true" />Voice</span>}
+                            </div>
+                            <p className="text-xs text-neutral-500 dark:text-neutral-400">{agent.role}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-xs text-neutral-500 dark:text-neutral-400 font-mono break-all">
+                        {agent.modelName}
+                      </td>
+                      <td className="px-6 py-4">
+                        <Badge variant={statusColors[agent.status] || 'default'}>{agent.status.toLowerCase()}</Badge>
+                      </td>
+                      <td className="px-6 py-4">
+                        <div className="flex flex-wrap gap-1">
+                          {agent.skills?.map((s, i) => (
+                            <Badge key={i} variant="outline" className="text-xs">{s.skill.name.replace(/_/g, ' ')}</Badge>
+                          ))}
+                          {!agent.skills?.length && <span className="text-sm text-neutral-400">None</span>}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400 whitespace-nowrap">
+                        {formatDate(agent.createdAt)}
+                      </td>
+                      <td className="px-6 py-4 text-right">
+                        <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                          {voice && (
+                            <Link href={`/dashboard/agents/${agent.id}`} className="inline-flex items-center gap-1.5 rounded-full border border-rose-200 dark:border-rose-800 px-3 py-1.5 text-xs font-medium text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-900/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400">
+                              <Mic className="w-3.5 h-3.5" aria-hidden="true" />Talk
+                            </Link>
+                          )}
+                          <Link href={`/dashboard/agents/${agent.id}`} aria-label={`Open ${agent.name}`} className="inline-flex items-center gap-1 rounded-full bg-primary-600 px-3.5 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-primary-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2">
+                            Open<ChevronRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" aria-hidden="true" />
+                          </Link>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })
               )}
             </tbody>
           </table>

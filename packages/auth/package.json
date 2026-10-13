@@ -5,7 +5,7 @@
   "types": "src/index.ts",
   "scripts": {
     "lint": "eslint src --ext .ts,.tsx",
-    "test": "node -e \"console.log('no tests in this package')\""
+    "test": "tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "next-auth": "^4.24.5",

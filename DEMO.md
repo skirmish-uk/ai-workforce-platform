@@ -146,12 +146,17 @@ curl -b demo_cookies.txt -X POST http://127.0.0.1:3000/api/agents \
 
 ## Reset Demo Data
 
+Before every demo, from the repo root:
+
 ```bash
-cd packages/db
-DATABASE_URL="postgresql://postgres:postgres@localhost:5433/ai_workforce?schema=public" \
-npx prisma migrate reset --force
-npx prisma db seed
+npm run demo:reset              # clear runs, approvals, audit trail and anything created during demos;
+                                # agents keep their tested upgrades (Sarah stays on her current version)
+npm run demo:reset -- --dry-run # show what would be removed first
+npm run demo:reset -- --full    # delete the demo tenant and reseed from scratch (agents back to v1,
+                                # knowledge re-embedded if OPENAI_API_KEY is set)
 ```
+
+It only touches the `demo-agency` tenant and refuses to run against a non-local database. Restart the worker afterwards if it was running. Clearing the audit trail also resets the demo tenant's spend toward its cost cap.
 
 ---
 

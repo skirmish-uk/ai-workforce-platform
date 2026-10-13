@@ -281,6 +281,9 @@ cd packages/db
 DATABASE_URL="postgresql://postgres:postgres@localhost:5433/ai_workforce?schema=public" \
   npx tsx prisma/seed.ts
 
+# Reset the demo tenant before a demo (see DEMO.md): keeps agent upgrades; --full reseeds from scratch
+npm run demo:reset
+
 # Full reset
 cd packages/db
 DATABASE_URL="postgresql://postgres:postgres@localhost:5433/ai_workforce?schema=public" \

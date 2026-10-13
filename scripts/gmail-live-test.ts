@@ -16,7 +16,12 @@
  */
 import { config } from 'dotenv'
 import path from 'node:path'
-config({ path: path.resolve(__dirname, '../.env') })
+const loaded = config({ path: path.resolve(__dirname, '../.env') })
+// dotenv never overrides a variable that is already set, even to an empty string, so an empty
+// OPENAI_API_KEY exported by the shell would hide the real one in .env. Treat empty as unset.
+for (const [key, value] of Object.entries(loaded.parsed ?? {})) {
+  if (process.env[key] === '' && value !== '') process.env[key] = value
+}
 
 import { createServer } from 'node:http'
 import { randomBytes } from 'node:crypto'

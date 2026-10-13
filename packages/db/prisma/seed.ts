@@ -101,6 +101,14 @@ const EMAIL_TRIAGE = {
       },
 }
 
+/** USER.md mapping (packages/executor/src/business-context.ts): facts implied by this seed, rest as explicit unknowns. */
+const DEMO_BUSINESS_CONTEXT = {
+  description: 'Demo Marketing Agency, a marketing agency operating in Australia (demo tenant).',
+  goals: ['Qualify inbound leads and book meetings for Account Executives'],
+  policies: ['Never invent pricing or make commitments on behalf of the agency'],
+  unknowns: ['Ideal customer profile (ICP) criteria', 'Pricing and discount policy', 'Meeting booking rules and AE availability'],
+}
+
 /** Fictional demo content for the Knowledge Assistant. */
 const DEMO_FAQ = `# Client FAQ
 
@@ -256,24 +264,21 @@ async function main() {
       // USER.md mapping (packages/executor/src/business-context.ts). Demo data: only facts already
       // implied by this seed are stated; everything else is an explicit unknown so agents ask.
       settings: {
-        businessContext: {
-          description: 'Demo Marketing Agency, a marketing agency operating in Australia (demo tenant).',
-          goals: ['Qualify inbound leads and book meetings for Account Executives'],
-          policies: ['Never invent pricing or make commitments on behalf of the agency'],
-          unknowns: ['Ideal customer profile (ICP) criteria', 'Pricing and discount policy', 'Meeting booking rules and AE availability'],
-        },
+        businessContext: DEMO_BUSINESS_CONTEXT,
       },
     },
   })
 
   // Self-management (docs/WORKFORCE_MANAGER.md) is opt-in per tenant; the demo tenant opts in.
   // Merged on every reseed without overwriting other settings or a policy someone already changed.
+  // Business context is also filled in on reseed when missing (tenants created before it existed).
   const demoSettings = (demoTenant.settings ?? {}) as Record<string, unknown>
-  if (!demoSettings.selfManagement) {
-    await prisma.tenant.update({
-      where: { id: demoTenant.id },
-      data: { settings: { ...demoSettings, selfManagement: { enabled: true, maxAutonomyStage: 'limited', maxRevisionsPerDay: 10, replayRuns: 5 } } },
-    })
+  const missing = {
+    ...(demoSettings.selfManagement ? {} : { selfManagement: { enabled: true, maxAutonomyStage: 'limited', maxRevisionsPerDay: 10, replayRuns: 5 } }),
+    ...(demoSettings.businessContext ? {} : { businessContext: DEMO_BUSINESS_CONTEXT }),
+  }
+  if (Object.keys(missing).length) {
+    await prisma.tenant.update({ where: { id: demoTenant.id }, data: { settings: { ...demoSettings, ...missing } } })
   }
 
   // Create demo customer admin

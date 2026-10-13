@@ -265,7 +265,7 @@ tool error rate, denials, proposals, duplicates, unknown outcomes, injection-fla
 | §11 configurable routing, tracking, controlled fallback, privacy, budgets | **Done**; budget **alerts** rely on existing alert rules (no new spend alert) | `units.test.ts`, `agent.test.ts` |
 | §11 evaluate model changes on same test set | **Done** via version pin (model change = new version = re-evaluation) | — |
 | §12 tenant isolation, authn/z on management APIs, audit, safe errors, redaction | **Done** for touched routes; 2 pre-existing isolation bugs fixed | smoke test (below) |
-| §12 secret storage/rotation | **Not changed** — credentials still in `Integration.credentials` JSON (unencrypted). Needs a KMS/secret manager. | — |
+| §12 secret storage/rotation | **Done (2026-10-13)**: credentials are encrypted at rest with AES-256-GCM bound to the tenant; rotation via `CREDENTIALS_ENCRYPTION_KEY_PREVIOUS` + `scripts/encrypt-credentials.ts --apply`; API responses and audit rows never include them. Still to do for production: keep the key in a KMS/secret manager rather than `.env`. | `packages/tools/src/credentials.ts` |
 | §12 no unrestricted shell/fs/browser/db access | **N/A** — no such tools exist; only the 4 registered adapters | `policy.test.ts` (every tool classified) |
 | §13 per-run trace + dashboards metrics | **Done** (API); no UI dashboard added | smoke test |
 | §13 eval suite per agent, all categories, deterministic asserts | **Done** (runner + seed cases); model-based grading **not implemented** | `units.test.ts`, `approvals-workflow.test.ts` |

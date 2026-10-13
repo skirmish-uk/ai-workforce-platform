@@ -29,7 +29,7 @@ import { google } from 'googleapis'
 import { prisma } from '@ai-workforce/db'
 import { gmailAdapter, toGoogleCredentials } from '@ai-workforce/integrations'
 import { createToolApproval, decideApproval, executeApprovedAction } from '@ai-workforce/executor'
-import { getToolRiskProfile } from '@ai-workforce/tools'
+import { decryptCredentials, encryptCredentials, getToolRiskProfile } from '@ai-workforce/tools'
 
 const AGENT_ID = 'demo-agent-1'
 const APPROVER_EMAIL = 'admin@demo-agency.local'
@@ -92,7 +92,9 @@ async function auth(): Promise<void> {
   const credentials = await gmailAdapter.exchangeCode(code, REDIRECT_URI)
   // Real tokens: leave sandbox mode so tools hit the real mailbox.
   const config = (integration.config ?? {}) as Record<string, unknown>
-  await prisma.integration.update({ where: { id: integration.id }, data: { credentials: credentials as never, isActive: true, config: { ...config, sandbox: false } as never } })
+  // Stored encrypted (requires CREDENTIALS_ENCRYPTION_KEY); real tokens leave sandbox mode.
+  const encrypted = encryptCredentials(credentials as unknown as Record<string, unknown>, integration.tenantId)
+  await prisma.integration.update({ where: { id: integration.id }, data: { credentials: encrypted as never, isActive: true, config: { ...config, sandbox: false } as never } })
   if (duplicates.length) {
     // The seed has created duplicate Gmail rows; make sure the platform picks the one with tokens.
     await prisma.integration.updateMany({ where: { id: { in: duplicates.map((d) => d.id) } }, data: { isActive: false } })
@@ -105,7 +107,7 @@ async function auth(): Promise<void> {
 async function sendViaPlatform(args: { to: string[]; subject: string; body: string; threadId?: string; inReplyTo?: string }) {
   requireGoogleClient()
   const { agent, integration } = await demoContext()
-  const creds = integration.credentials as Record<string, unknown>
+  const creds = decryptCredentials(integration.credentials, integration.tenantId)
   if (!creds.accessToken && !creds.refreshToken) throw new Error('No Gmail tokens stored yet — run the "auth" step first.')
   const approver = await prisma.user.findUniqueOrThrow({ where: { email: APPROVER_EMAIL } })
   const runId = `live-test-${Date.now()}`
@@ -147,7 +149,7 @@ async function reply(): Promise<void> {
   if (!threadId) throw new Error('--thread <threadId> is required (printed by the send step as output.threadId)')
   requireGoogleClient()
   const { integration } = await demoContext()
-  const gmail = await gmailFor(integration.credentials as Record<string, unknown>)
+  const gmail = await gmailFor(decryptCredentials(integration.credentials, integration.tenantId))
 
   // "Receive": read the thread through the Gmail API with the stored platform credentials.
   const thread = await gmail.users.threads.get({ userId: 'me', id: threadId, format: 'metadata', metadataHeaders: ['Message-ID', 'Subject', 'From', 'To'] })

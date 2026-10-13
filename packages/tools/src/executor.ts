@@ -5,6 +5,7 @@ import { checkPermission } from './permissions'
 import { decideToolAction, type AutonomyStage, type ToolDecision } from './policy'
 import { getToolRiskProfile, type ToolRiskProfile } from './risk'
 import { sandboxExecute } from './sandbox'
+import { decryptCredentials } from './credentials'
 
 export class ToolPermissionDeniedError extends Error {
   constructor(
@@ -67,7 +68,7 @@ export async function getIntegrationForAdapter(
   const integration = await prisma.integration.findFirst({ where: { tenantId, name: adapterName, isActive: true } })
   if (!integration) throw new Error(`No active "${adapterName}" integration is configured for this tenant.`)
   const config = (integration.config ?? {}) as Record<string, unknown>
-  return { credentials: integration.credentials as Record<string, unknown>, sandbox: config.sandbox === true }
+  return { credentials: decryptCredentials(integration.credentials, tenantId), sandbox: config.sandbox === true }
 }
 
 /** Runs a tool on a tenant's connection: the real service, or the sandbox dataset for sandbox connections. */
@@ -92,7 +93,7 @@ export async function getCredentialsForAdapter(
   if (!integration) {
     throw new Error(`No active "${adapterName}" integration is configured for this tenant.`)
   }
-  return integration.credentials as Record<string, unknown>
+  return decryptCredentials(integration.credentials, tenantId)
 }
 
 export function validateToolInput(registered: RegisteredTool, input: unknown): unknown {

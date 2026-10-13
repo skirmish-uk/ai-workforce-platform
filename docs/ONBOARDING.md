@@ -149,7 +149,7 @@ The one rule: **authority is enforced in code, never by asking the model nicely.
 | Billing | UI + Stripe code; no keys configured. |
 | Dashboards | Mostly real data from the DB; system metrics (CPU, latency percentiles) intentionally report 0 rather than fake numbers. |
 | Approvals | Dashboard inbox at `/dashboard/approvals`; no email notifications yet. |
-| Integration credentials | Stored **unencrypted** in `Integration.credentials`. This must be fixed before any real customer connects anything. |
+| Integration credentials | Encrypted at rest (AES-256-GCM, bound to the tenant; `packages/tools/src/credentials.ts`). The key is `CREDENTIALS_ENCRYPTION_KEY`: back it up, and move it to a secret manager in production. APIs never return credentials. |
 
 ---
 
@@ -221,7 +221,7 @@ All of this is on the branch `feat/agent-operating-system`, waiting for the pull
    - Microsoft 365 via Graph;
    - Google Workspace via OAuth (the adapter exists; it needs Google app verification at scale);
    - a transactional email provider for platform notifications (SPF/DKIM/DMARC on our domain).
-   **Prerequisite: encrypt integration credentials.**
+   (Credential encryption, the prerequisite, is done.)
 2. **Approval notifications.** The inbox exists, but nobody is told when an agent is waiting. The fix is to make `NOTIFY` actually notify.
 3. **Run the manager against a real model** on the demo tenant and review its first proposals by hand.
 4. **Next.js 15.5 upgrade** (React 19) to clear the remaining critical advisories.

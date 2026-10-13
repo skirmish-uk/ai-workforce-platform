@@ -143,7 +143,7 @@ The one rule: **authority is enforced in code, never by asking the model nicely.
 | Area | Status |
 |---|---|
 | Auth, RBAC, tenant isolation, CRUD APIs | Real and smoke-tested. |
-| Agent loop, policy, approvals, evaluation, workflows, scheduler, self-management | Real; covered by 114 automated tests (fake model + fake adapters). Not yet run end-to-end against a real model with real integrations. |
+| Agent loop, policy, approvals, evaluation, workflows, scheduler, self-management | Real; covered by 123 automated tests (fake model + fake adapters). Not yet run end-to-end against a real model with real integrations. |
 | LLM calls | Real clients; need an API key. |
 | Gmail / Calendar / HubSpot / Drive adapters | Code paths unit-tested with stubbed Google SDKs. **No live credentials configured; never run against real accounts.** No OAuth callback route exists in the app yet (`scripts/gmail-live-test.ts` does its own loopback OAuth for testing). |
 | Billing | UI + Stripe code; no keys configured. |
@@ -173,7 +173,8 @@ npm run build    # Next build + packages
 
 | Package | Tests | Kind |
 |---|---|---|
-| executor | 80 | DB-backed with fake model/adapters + pure unit tests (contract, policy, approvals, workflows, evaluation, capabilities, self-management) |
+| executor | 83 | DB-backed with fake model/adapters + pure unit tests (contract, policy, approvals, workflows, evaluation, capabilities, self-management, voice) |
+| llm | 6 | Speech-to-text and text-to-speech requests with stubbed OpenAI and Cartesia |
 | integrations | 15 | Adapter request-building with stubbed Google SDK (send/reply threading, availability, reminders) |
 | tools | 10 | Policy decision table |
 | domain | 5 | Redaction |
@@ -206,7 +207,10 @@ No test touches a real external account, sends real email or spends money.
    - New API: `/api/revisions`, `/api/tenants/[id]/self-management`.
    - Details in `docs/WORKFORCE_MANAGER.md`.
 
-All of the above is currently **uncommitted** on `main`, alongside earlier uncommitted work.
+6. **Dashboard pages:** approvals inbox, agent run viewer, improvements page. Read-only tools now run without approval by default.
+7. **Voice agents** (`docs/VOICE.md`): talk to an agent from its page; the seeded Knowledge Assistant **Ava** answers from the agency's documents. Business-model section 1.4 covers the voice add-on and the planned AI Receptionist.
+
+All of this is on the branch `feat/agent-operating-system`, waiting for the pull request into `main`.
 
 ---
 
@@ -236,5 +240,6 @@ All of the above is currently **uncommitted** on `main`, alongside earlier uncom
 - `CLAUDE.md`: full project context, environment, commands and known gaps (kept current for AI assistants and humans alike).
 - `docs/AGENT_OPERATING_SYSTEM.md`: contracts, autonomy, run lifecycle, approvals, evaluation, operations, requirement checklist.
 - `docs/WORKFORCE_MANAGER.md`: self-management design, rules, configuration, API and limitations.
+- `docs/VOICE.md`: voice agents, costs and the AI Receptionist plan.
 - `docs/DECISIONS.md`: architecture decision records.
 - `BUSINESS_MODEL.md`, `DEMO.md`: the business, and how to run the investor demo.

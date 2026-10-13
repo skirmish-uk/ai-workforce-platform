@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { ArrowLeft, CheckCircle2, CircleDashed, Loader2, Play, XCircle } from 'lucide-react'
 import { Badge, Button, formatDateTime } from '@ai-workforce/ui'
+import { VoicePanel } from './VoicePanel'
 
 interface AgentDetail {
   id: string
@@ -15,7 +16,7 @@ interface AgentDetail {
   version: number
   modelProvider: string
   modelName: string
-  config: { contract?: { autonomyStage?: string; allowedTools?: string[]; scope?: { inScope?: string[]; outOfScope?: string[] } } }
+  config: { contract?: { autonomyStage?: string; allowedTools?: string[]; scope?: { inScope?: string[]; outOfScope?: string[] } }; voice?: { enabled?: boolean } }
   skills: Array<{ skill: { name: string; version: string; requiredTools: string[] } }>
   permissions: Array<{ action: string; level: string }>
 }
@@ -299,6 +300,8 @@ export default function AgentPage() {
           </div>
         </div>
       )}
+
+      {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} />}
 
       <form onSubmit={start} className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4 space-y-3">
         <label htmlFor="task" className="block text-sm font-medium text-neutral-900 dark:text-neutral-100">Give {agent?.name.split(' ')[0] ?? 'the agent'} a task</label>

@@ -22,6 +22,7 @@
     "@ai-workforce/knowledge": "^0.0.1",
     "@ai-workforce/monitoring": "^0.0.1",
     "@ai-workforce/queue": "^0.0.1",
+    "@ai-workforce/llm": "^0.0.1",
     "@ai-workforce/tools": "^0.0.1",
     "@ai-workforce/ui": "^0.0.1",
     "@types/bcryptjs": "^2.4.6",

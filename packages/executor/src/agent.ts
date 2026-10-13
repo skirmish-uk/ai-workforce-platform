@@ -42,7 +42,7 @@ export type RunAgentStatus =
 export type RunPhase = 'diagnose' | 'assemble' | 'act' | 'assess'
 
 /** 'replay': the revision pipeline re-running a recent real input against a candidate (always dry-run). */
-export type RunTrigger = 'manual' | 'api' | 'schedule' | 'workflow' | 'delegation' | 'evaluation' | 'replay'
+export type RunTrigger = 'manual' | 'api' | 'schedule' | 'workflow' | 'delegation' | 'evaluation' | 'replay' | 'voice'
 
 export interface RunAgentDeps {
   createClient?: (provider: string, model: string, config: LLMClientConfig) => LLMClient

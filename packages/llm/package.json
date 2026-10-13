@@ -5,7 +5,7 @@
   "types": "src/index.ts",
   "scripts": {
     "lint": "eslint src --ext .ts",
-    "test": "node -e \"console.log('no tests in this package')\""
+    "test": "tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.127.0",

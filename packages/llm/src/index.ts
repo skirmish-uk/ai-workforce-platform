@@ -33,3 +33,4 @@ export function createLLMClient(
       throw new Error(`Unsupported model provider: "${provider}". Expected "anthropic", "openai", or "ollama".`)
   }
 }
+export * from './speech'

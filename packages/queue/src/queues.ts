@@ -6,7 +6,7 @@ export interface AgentRunJobData {
   input: string
   userId?: string
   workflowRunId?: string
-  trigger?: 'api' | 'schedule' | 'manual'
+  trigger?: 'api' | 'schedule' | 'manual' | 'voice'
   scheduleId?: string
 }
 
@@ -78,6 +78,25 @@ export async function enqueueEvaluation(data: EvaluationJobData) {
 /** One job per revision (processing is also claimed exactly once in processRevision). */
 export async function enqueueRevision(data: RevisionJobData) {
   return revisionQueue.add('agent-revision', data, { jobId: `revision-${data.revisionId}` })
+}
+
+/**
+ * Waits for an agent run to finish (the voice route needs the answer within the request).
+ * The run itself still executes in the worker, so policy, kill switches and the audit
+ * trail are the same as for any other run. Polls job state; resolves with the job's
+ * return value, or null on timeout (the run keeps going and is visible on the agent page).
+ */
+export async function waitForAgentRun<T = unknown>(jobId: string, timeoutMs = 45_000, pollMs = 250): Promise<{ state: 'completed'; result: T } | { state: 'failed'; reason: string } | null> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const job = await agentRunQueue.getJob(jobId)
+    if (!job) return { state: 'failed', reason: 'Run not found' }
+    const state = await job.getState()
+    if (state === 'completed') return { state: 'completed', result: job.returnvalue as T }
+    if (state === 'failed') return { state: 'failed', reason: job.failedReason ?? 'Run failed' }
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
+  return null
 }
 
 const CANCEL_KEY_PREFIX = 'agent-run-cancel'

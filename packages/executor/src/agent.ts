@@ -23,6 +23,7 @@ import { canonicalJson, readKillSwitch, resolveEffectiveStage } from './safety'
 import { checkSpendCap } from './spend-cap'
 import { runAuthorizedTool, type ToolExecutorFn } from './tool-runner'
 import { wrapUntrusted } from './untrusted'
+import { detectQualitySignals, type QualitySignal } from './quality'
 import { readSelfManagementPolicy } from './workforce/policy'
 import { executeWorkforceTool, workforceToolsFor, WORKFORCE_READ_TOOLS } from './workforce/tools'
 
@@ -42,7 +43,7 @@ export type RunAgentStatus =
 export type RunPhase = 'diagnose' | 'assemble' | 'act' | 'assess'
 
 /** 'replay': the revision pipeline re-running a recent real input against a candidate (always dry-run). */
-export type RunTrigger = 'manual' | 'api' | 'schedule' | 'workflow' | 'delegation' | 'evaluation' | 'replay' | 'voice'
+export type RunTrigger = 'manual' | 'api' | 'schedule' | 'workflow' | 'delegation' | 'evaluation' | 'replay' | 'voice' | 'event'
 
 export interface RunAgentDeps {
   createClient?: (provider: string, model: string, config: LLMClientConfig) => LLMClient
@@ -142,6 +143,8 @@ export interface RunAgentResult {
   childRuns: ChildRunRecord[]
   contextWarnings: string[]
   injectionSignals: Array<{ source: string; signals: string[] }>
+  /** Problems a finished run can have despite its status (see ./quality.ts). */
+  qualitySignals: QualitySignal[]
   approvalId?: string
   pendingTool?: { toolName: string; input: unknown }
   error?: string
@@ -175,6 +178,7 @@ interface Specialist {
   id: string
   name: string
   role: string
+  mission?: string
 }
 
 function delegateTool(specialists: Specialist[]): LLMTool {
@@ -182,7 +186,7 @@ function delegateTool(specialists: Specialist[]): LLMTool {
     name: 'platform__delegate',
     description:
       'Delegate one bounded subtask to a specialist agent and receive its validated result. Give it only the information it needs. Available specialists: ' +
-      specialists.map((s) => `${s.id} (${s.name} — ${s.role})`).join('; '),
+      specialists.map((s) => `${s.id} (${s.name} — ${s.role}${s.mission ? `: ${s.mission.slice(0, 160)}` : ''})`).join('; '),
     inputSchema: {
       type: 'object',
       properties: {
@@ -267,6 +271,7 @@ class AgentRun {
   private readonly childRuns: ChildRunRecord[] = []
   private contextWarnings: string[] = []
   private injectionSignals: RunAgentResult['injectionSignals'] = []
+  private qualitySignals: QualitySignal[] = []
   private iterations = 0
   private modelUsed?: { provider: string; model: string }
   private contract!: AgentContract
@@ -428,17 +433,23 @@ class AgentRun {
 
     const specialists = new Map<string, Specialist>()
     if (this.contract.delegation.enabled) {
+      // "*" = the whole team (front desk). Only a manager may use it; other managers are never delegates.
+      const wholeTeam = this.contract.management.enabled && this.contract.delegation.allowedSpecialists.includes('*')
       const rows = await prisma.agent.findMany({
         where: {
-          id: { in: this.contract.delegation.allowedSpecialists },
+          ...(wholeTeam ? {} : { id: { in: this.contract.delegation.allowedSpecialists } }),
           tenantId: this.agent.tenantId,
           isCandidate: false,
           status: { notIn: ['PAUSED', 'ARCHIVED'] },
         },
-        select: { id: true, name: true, role: true },
+        select: { id: true, name: true, role: true, mission: true, config: true },
       })
-      for (const row of rows) if (row.id !== this.agent.id) specialists.set(row.id, row)
-      const missing = this.contract.delegation.allowedSpecialists.filter((id) => !specialists.has(id))
+      for (const row of rows) {
+        if (row.id === this.agent.id) continue
+        if (wholeTeam && resolveAgentContract(row).contract.management.enabled) continue
+        specialists.set(row.id, { id: row.id, name: row.name, role: row.role, mission: wholeTeam ? row.mission : undefined })
+      }
+      const missing = this.contract.delegation.allowedSpecialists.filter((id) => id !== '*' && !specialists.has(id))
       if (missing.length) this.note(`specialists unavailable (missing, paused, self or other tenant): ${missing.join(', ')}`)
     }
 
@@ -799,7 +810,7 @@ class AgentRun {
 
     if (child.status === 'approval_required') {
       return {
-        terminal: await this.finish('approval_required', { approvalId: child.approvalId, pendingTool: child.pendingTool, output: `Waiting on approval requested by specialist ${specialistId}.` }),
+        terminal: await this.finish('approval_required', { approvalId: child.approvalId, pendingTool: child.pendingTool, output: `${specialists.get(specialistId)?.name ?? specialistId} has prepared this and it is waiting for your approval.` }),
       }
     }
     // The manager must not blindly trust specialists: only a completed run whose
@@ -828,6 +839,8 @@ class AgentRun {
       this.contract.outputs
     )
     for (const r of dod.results) this.note(`${r.passed ? 'PASS' : 'FAIL'} ${r.check.type}: ${r.detail}`)
+    this.qualitySignals = detectQualitySignals(output, this.toolCalls)
+    for (const signal of this.qualitySignals) this.note(`quality signal: ${signal}`)
 
     if (dod.passed) return this.finish('completed', { output, dod })
     const madeProgress = Boolean(output?.trim()) || this.toolCalls.some((c) => c.status === 'completed')
@@ -864,6 +877,7 @@ class AgentRun {
       childRuns: this.childRuns,
       contextWarnings: this.contextWarnings,
       injectionSignals: this.injectionSignals,
+      qualitySignals: this.qualitySignals,
       approvalId: extra.approvalId,
       pendingTool: extra.pendingTool,
       error: extra.error ? redactString(extra.error, 1000) : undefined,
@@ -899,6 +913,7 @@ class AgentRun {
         childRuns: this.childRuns,
         contextWarnings: this.contextWarnings,
         injectionSignals: this.injectionSignals,
+        qualitySignals: this.qualitySignals,
         phases: this.phases,
         parentRunId: this.options.parent?.runId,
         rootRunId: this.rootRunId,

@@ -1,7 +1,7 @@
 import { CronExpressionParser } from 'cron-parser'
 import { prisma } from '@ai-workforce/db'
 import type { AgentStatus, Prisma, Schedule } from '@prisma/client'
-import { expireStaleApprovals, findPendingRevisionIds, resolveAgentContract, watchPromotedRevisions } from '@ai-workforce/executor'
+import { expireStaleApprovals, findDueManagerReviews, findPendingRevisionIds, resolveAgentContract, watchPromotedRevisions } from '@ai-workforce/executor'
 import { agentRunQueue, enqueueRevision, type AgentRunJobData } from './queues'
 
 const POLL_INTERVAL_MS = 60_000
@@ -120,11 +120,32 @@ export async function dispatchRevisions(): Promise<number> {
   return ids.length
 }
 
+/** Starts an automatic manager review for each tenant whose agents crossed a problem threshold. */
+export async function dispatchManagerReviews(now = new Date()): Promise<number> {
+  const due = await findDueManagerReviews(now)
+  for (const review of due) {
+    await agentRunQueue.add(
+      'manager-review',
+      { agentId: review.managerId, input: review.input, trigger: 'event' },
+      { jobId: `manager-review-${review.tenantId}-${Math.floor(now.getTime() / 60_000)}` }
+    )
+  }
+  return due.length
+}
+
+const MANAGER_CHECK_INTERVAL_MS = 10 * 60_000
+let lastManagerCheck = 0
+
 export function startScheduler(intervalMs = POLL_INTERVAL_MS): NodeJS.Timeout {
   return setInterval(() => {
     dispatchDueSchedules().catch((error) => console.error('Scheduler tick failed:', error))
     expireStaleApprovals().catch((error) => console.error('Approval expiry sweep failed:', error))
     dispatchRevisions().catch((error) => console.error('Revision dispatch failed:', error))
     watchPromotedRevisions().catch((error) => console.error('Revision watch failed:', error))
+    // Checking every tenant's metrics is heavier than the rest of the tick: every 10 minutes is enough.
+    if (Date.now() - lastManagerCheck >= MANAGER_CHECK_INTERVAL_MS) {
+      lastManagerCheck = Date.now()
+      dispatchManagerReviews().catch((error) => console.error('Manager review dispatch failed:', error))
+    }
   }, intervalMs)
 }

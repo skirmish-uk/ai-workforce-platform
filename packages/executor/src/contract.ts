@@ -269,6 +269,9 @@ export function validateAgentDefinition(
   if (contract.delegation.enabled && contract.delegation.allowedSpecialists.length === 0) {
     errors.push('contract.delegation is enabled but allowedSpecialists is empty.')
   }
+  if (contract.delegation.allowedSpecialists.includes('*') && !contract.management.enabled) {
+    errors.push('contract.delegation.allowedSpecialists "*" (the whole team) is only allowed for a manager agent.')
+  }
 
   if (contract.model.privacy === 'local_only') {
     const refs: ModelRef[] = [

@@ -6,7 +6,7 @@ export interface AgentRunJobData {
   input: string
   userId?: string
   workflowRunId?: string
-  trigger?: 'api' | 'schedule' | 'manual' | 'voice'
+  trigger?: 'api' | 'schedule' | 'manual' | 'voice' | 'event'
   scheduleId?: string
 }
 

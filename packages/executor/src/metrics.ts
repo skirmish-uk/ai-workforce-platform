@@ -27,6 +27,8 @@ export interface AgentRunMetrics {
   duplicatesSuppressed: number
   unknownOutcomes: number
   injectionFlaggedRuns: number
+  /** Finished runs flagged by quality signals (e.g. promised an action and didn't take it). */
+  qualityFlaggedRuns: number
 }
 
 const rate = (num: number, den: number) => (den > 0 ? num / den : null)
@@ -56,7 +58,13 @@ export async function getAgentRunMetrics(params: { tenantId?: string; agentId?: 
     prisma.auditLog.groupBy({ by: ['action'], where: { ...where, action: { startsWith: 'AGENT_TOOL' } }, _count: { _all: true } }),
     prisma.auditLog.groupBy({
       by: ['action'],
-      where: { ...(params.tenantId ? { tenantId: params.tenantId } : {}), createdAt: { gte: since }, action: { in: ['APPROVAL_GRANTED', 'APPROVAL_REJECTED'] } },
+      where: {
+        ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+        // Decision rows carry the requesting agent, so overrides are counted per agent too.
+        ...(params.agentId ? { newData: { path: ['agentId'], equals: params.agentId } } : {}),
+        createdAt: { gte: since },
+        action: { in: ['APPROVAL_GRANTED', 'APPROVAL_REJECTED'] },
+      },
       _count: { _all: true },
     }),
   ])
@@ -68,6 +76,7 @@ export async function getAgentRunMetrics(params: { tenantId?: string; agentId?: 
   let dodPassed = 0
   let fallbackRuns = 0
   let injectionFlagged = 0
+  let qualityFlagged = 0
   let runs = 0
 
   for (const row of runRows) {
@@ -84,6 +93,7 @@ export async function getAgentRunMetrics(params: { tenantId?: string; agentId?: 
     }
     if (data.fallbackUsed === true) fallbackRuns++
     if (Array.isArray(data.injectionSignals) && data.injectionSignals.length) injectionFlagged++
+    if (Array.isArray(data.qualitySignals) && data.qualitySignals.length) qualityFlagged++
   }
 
   const toolCount = (action: string) => toolRows.find((r) => r.action === action)?._count._all ?? 0
@@ -116,5 +126,6 @@ export async function getAgentRunMetrics(params: { tenantId?: string; agentId?: 
     duplicatesSuppressed: toolCount('AGENT_TOOL_CALL_DUPLICATE_SUPPRESSED'),
     unknownOutcomes: toolCount('AGENT_TOOL_CALL_UNKNOWN') + toolCount('AGENT_TOOL_CALL_BLOCKED_UNKNOWN_PRIOR'),
     injectionFlaggedRuns: injectionFlagged,
+    qualityFlaggedRuns: qualityFlagged,
   }
 }

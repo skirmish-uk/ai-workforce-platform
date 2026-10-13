@@ -105,6 +105,27 @@ All of this is returned to the manager wrapped as untrusted data (`<untrusted_da
 
 ---
 
+## 4a. Running the team (added 2026-10-13)
+
+**Quality signals** (`packages/executor/src/quality.ts`). Every run that finishes as completed/partial is checked for three problems its status hides: it *announced* an action it never took, *claimed* one with nothing to show for it, or *asked questions in its answer* instead of with the clarification tool. Signals go on the run's audit row and into metrics (`qualityFlaggedRuns`), and flagged runs appear in the manager's problem runs. Rejected approvals are now counted per agent too. On the 13 Oct runs the detector flagged 7 of 10 original Sarah runs and none after her fix.
+
+**Automatic repair reviews** (`packages/executor/src/workforce/triggers.ts`). Every 10 minutes the scheduler checks each tenant (self-management and `autoReview` on, a manager present, no kill switch). Any of these in the last 24 h starts one combined manager review:
+- failure rate ≥ 30% over ≥ 5 runs;
+- ≥ 2 quality-flagged runs;
+- ≥ 50% of ≥ 3 decided approvals rejected;
+- tool error rate ≥ 30% over ≥ 5 calls. The review is told that a broken connection needs a person, not a revision.
+- an automatic rollback.
+
+Each (problem, agent) pair fires at most once per 24 h (`MANAGER_REVIEW_TRIGGERED` audit rows). There are at most `autoReview.maxPerDay` reviews per tenant (default 4). All thresholds are in `Tenant.settings.selfManagement.autoReview`.
+
+**Front desk.** A manager whose contract has `delegation.allowedSpecialists: ["*"]` can hand any request to any non-manager, non-paused agent on the team with `platform__delegate`, and reports the outcome. If the agent's action needs approval, the manager's run ends `approval_required` with that approval. `"*"` is refused for non-managers (contract validation, and the revision pipeline rejects it as an unknown delegate). Morgan is seeded this way. Each routed request costs a manager run (Sonnet 5, about $0.015 for a simple routing on 13 Oct) plus the agent's run.
+
+**Team page** (`/dashboard/team`, `GET /api/team`):
+- each agent's 7-day health, flagged "needs attention" on the same thresholds as automatic reviews;
+- the manager's latest report, with **Ask the team** (front desk) and **Review the team now**;
+- what's waiting for a person;
+- recent manager activity: automatic reviews, proposals, promotions, rollbacks.
+
 ## 5. Manager tools
 
 These are offered only when the tenant's `selfManagement.enabled` is true and the agent's contract has `management.enabled`. There is deliberately **no** tool to promote, approve, edit tenant settings, touch kill switches or change billing.

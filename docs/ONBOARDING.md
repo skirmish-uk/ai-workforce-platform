@@ -143,7 +143,7 @@ The one rule: **authority is enforced in code, never by asking the model nicely.
 | Area | Status |
 |---|---|
 | Auth, RBAC, tenant isolation, CRUD APIs | Real and smoke-tested. |
-| Agent loop, policy, approvals, evaluation, workflows, scheduler, self-management | Real; covered by 126 automated tests (fake model + fake adapters). Not yet run end-to-end against a real model with real integrations. |
+| Agent loop, policy, approvals, evaluation, workflows, scheduler, self-management | Real; covered by 135 automated tests (fake model + fake adapters). Not yet run end-to-end against a real model with real integrations. |
 | LLM calls | Real clients; need an API key. |
 | Gmail / Calendar / HubSpot / Drive adapters | Code paths unit-tested with stubbed Google SDKs. **No live credentials configured; never run against real accounts.** No OAuth callback route exists in the app yet (`scripts/gmail-live-test.ts` does its own loopback OAuth for testing). |
 | Billing | UI + Stripe code; no keys configured. |
@@ -173,7 +173,7 @@ npm run build    # Next build + packages
 
 | Package | Tests | Kind |
 |---|---|---|
-| executor | 84 | DB-backed with fake model/adapters + pure unit tests (contract, policy, approvals, workflows, evaluation, capabilities, self-management, voice) |
+| executor | 93 | DB-backed with fake model/adapters + pure unit tests (contract, policy, approvals, workflows, evaluation, capabilities, self-management, voice) |
 | llm | 8 | Speech requests with stubbed OpenAI and Cartesia; Anthropic sampling rules and assistant-turn replay |
 | integrations | 15 | Adapter request-building with stubbed Google SDK (send/reply threading, availability, reminders) |
 | tools | 10 | Policy decision table |

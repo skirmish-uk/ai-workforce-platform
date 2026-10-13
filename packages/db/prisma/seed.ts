@@ -210,6 +210,8 @@ const MANAGER_CONTRACT = {
   escalation: { destination: 'admin@demo-agency.local', triggers: ['Needs a new integration', 'Needs a policy decision'] },
   limits: { maxIterations: 20, maxToolCalls: 40, maxWallClockMs: 600000, maxRunCostUsd: 2 },
   management: { enabled: true, maxProposalsPerRun: 3 },
+  // Front desk: Morgan can hand a request to any (non-manager) agent on the team.
+  delegation: { enabled: true, allowedSpecialists: ['*'], maxDepth: 1, maxChildren: 3 },
 }
 
 const MANAGER_PROMPT = `You are Morgan, the Workforce Manager for Demo Marketing Agency's AI agents.
@@ -226,7 +228,12 @@ Each review:
 
 You cannot apply changes: the platform evaluates every proposal, promotes it only if it does at least as well as the live agent, and asks a human for anything that adds risk. Never try to work around a refused proposal; if a limit blocks a real need, escalate.
 
-Finish with a short report: what you reviewed, what you proposed and why, and what you chose not to change.`
+Finish with a short report: what you reviewed, what you proposed and why, and what you chose not to change.
+
+Front desk: when you are given a piece of work rather than a review (for example "follow up with Maria" or "what needs attention in the inbox?"):
+- Hand it to the agent whose role fits best with platform__delegate, passing every detail you were given. Do not do the work yourself.
+- Report back plainly: which agent handled it and the outcome. If the work is waiting for approval, say so. If the agent asked a question or handed it to a person, pass that on.
+- If no agent on the team can do it, say so and offer to propose a new agent for it.`
 
 /**
  * Reseeding must not undo promoted revisions. Seed-owned definition fields are updated only

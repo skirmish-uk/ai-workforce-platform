@@ -161,6 +161,9 @@ function summarizeMetrics(m: Awaited<ReturnType<typeof getAgentRunMetrics>>) {
     clarificationRate: round(m.clarificationRate),
     humanOverrideRate: round(m.humanOverrideRate),
     toolErrorRate: round(m.toolErrorRate),
+    /** Runs that "completed" but promised or claimed actions they never took. */
+    qualityFlaggedRuns: m.qualityFlaggedRuns,
+    approvalsDecided: m.approvalsDecided,
     totalCostUsd: Math.round(m.totalCostUsd * 10_000) / 10_000,
   }
 }
@@ -209,9 +212,9 @@ async function inspectAgent(agentId: string, tenantId: string): Promise<Workforc
     prisma.skill.findMany({ where: { id: { in: spec.skills.flatMap((s) => ('skillId' in s ? [s.skillId] : [])) } } }),
     getAgentRunMetrics({ tenantId, agentId, since }),
     prisma.auditLog.findMany({
-      where: { tenantId, entityType: 'Agent', entityId: agentId, action: { in: ['AGENT_RUN_FAILED', 'AGENT_RUN_FINISHED', 'AGENT_RUN_ESCALATED'] }, createdAt: { gte: since } },
+      where: { tenantId, entityType: 'Agent', entityId: agentId, action: { in: ['AGENT_RUN_FAILED', 'AGENT_RUN_FINISHED', 'AGENT_RUN_ESCALATED', 'AGENT_RUN_COMPLETED'] }, createdAt: { gte: since } },
       orderBy: { createdAt: 'desc' },
-      take: 30,
+      take: 60,
       select: { createdAt: true, newData: true },
     }),
     prisma.approval.findMany({ where: { tenantId, agentId, status: 'REJECTED' }, orderBy: { updatedAt: 'desc' }, take: 10, select: { action: true, reason: true, decidedAt: true } }),
@@ -221,7 +224,9 @@ async function inspectAgent(agentId: string, tenantId: string): Promise<Workforc
   ])
   const problems = problemRuns
     .map((r) => ({ at: r.createdAt, data: (r.newData ?? {}) as Record<string, unknown> }))
+    // Problem runs: anything that did not complete, plus completed runs with quality signals.
     .filter((r) => r.data.dryRun !== true && r.data.status !== 'approval_required')
+    .filter((r) => r.data.status !== 'completed' || (Array.isArray(r.data.qualitySignals) && r.data.qualitySignals.length > 0))
     .slice(0, 10)
     .map((r) => ({
       at: r.at,
@@ -232,6 +237,8 @@ async function inspectAgent(agentId: string, tenantId: string): Promise<Workforc
       clarificationQuestions: r.data.clarificationQuestions,
       escalation: r.data.escalation,
       toolCalls: r.data.toolCalls,
+      qualitySignals: r.data.qualitySignals,
+      output: r.data.status === 'completed' ? redactString(str(r.data.output), 600) : undefined,
     }))
   return {
     status: 'completed',

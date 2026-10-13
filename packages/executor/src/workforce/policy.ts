@@ -22,6 +22,27 @@ export const selfManagementPolicySchema = z
     approvalTtlHours: z.number().positive().max(720).default(72),
     /** Every agent gets platform__suggest_improvement, feeding the manager. */
     collectSuggestions: z.boolean().default(true),
+    /**
+     * Automatic repair reviews: the scheduler starts a focused manager review when an
+     * agent's last-24h metrics cross these thresholds or a promotion was rolled back.
+     * Each (problem, agent) pair triggers at most once per 24 h.
+     */
+    autoReview: z
+      .object({
+        enabled: z.boolean().default(true),
+        /** Manager reviews started automatically per tenant per rolling 24 h. */
+        maxPerDay: z.number().int().min(0).max(24).default(4),
+        /** Runs in the last 24 h before rates count. */
+        minRuns: z.number().int().min(1).max(1000).default(5),
+        failureRate: z.number().min(0).max(1).default(0.3),
+        /** Completed runs flagged by quality signals (promised actions not taken, questions in text). */
+        qualityFlaggedRuns: z.number().int().min(1).max(1000).default(2),
+        /** Share of an agent's decided approvals that people rejected (needs at least 3 decisions). */
+        rejectionRate: z.number().min(0).max(1).default(0.5),
+        /** Tool call error rate (needs at least 5 calls); often a broken connection. */
+        toolErrorRate: z.number().min(0).max(1).default(0.3),
+      })
+      .default({}),
     /** Post-promotion watch: automatic rollback if live metrics degrade. */
     watch: z
       .object({

@@ -145,7 +145,7 @@ The one rule: **authority is enforced in code, never by asking the model nicely.
 | Auth, RBAC, tenant isolation, CRUD APIs | Real and smoke-tested. |
 | Agent loop, policy, approvals, evaluation, workflows, scheduler, self-management | Real; covered by 135 automated tests (fake model + fake adapters). Not yet run end-to-end against a real model with real integrations. |
 | LLM calls | Real clients; need an API key. |
-| Gmail / Calendar / HubSpot / Drive adapters | Code paths unit-tested with stubbed Google SDKs. **No live credentials configured; never run against real accounts.** No OAuth callback route exists in the app yet (`scripts/gmail-live-test.ts` does its own loopback OAuth for testing). |
+| Gmail / Calendar / HubSpot / Drive adapters | Code paths unit-tested with stubbed Google SDKs. **No live credentials configured; never run against real accounts.** **Connect Google** (Gmail + Calendar OAuth, `docs/GOOGLE_CONNECT.md`) is built and tested up to Google's token exchange; it needs a Google Cloud OAuth client before a real account can connect. |
 | Billing | UI + Stripe code; no keys configured. |
 | Dashboards | Mostly real data from the DB; system metrics (CPU, latency percentiles) intentionally report 0 rather than fake numbers. |
 | Approvals | Dashboard inbox at `/dashboard/approvals`; no email notifications yet. |
@@ -209,6 +209,14 @@ No test touches a real external account, sends real email or spends money.
 
 6. **Dashboard pages:** approvals inbox, agent run viewer, improvements page. Read-only tools now run without approval by default.
 7. **Voice agents** (`docs/VOICE.md`): talk to an agent from its page; the seeded Knowledge Assistant **Ava** answers from the agency's documents. Business-model section 1.4 covers the voice add-on and the planned AI Receptionist.
+
+8. **Later on 13 Oct:**
+   - integration credentials encrypted at rest;
+   - `npm run demo:reset`;
+   - showcase agents Riley (meetings), Iris (inbox triage) and Casey (CRM hygiene);
+   - agents see the current date and time;
+   - prompt caching;
+   - **Connect Google** (`docs/GOOGLE_CONNECT.md`).
 
 All of this is on the branch `feat/agent-operating-system`, waiting for the pull request into `main`.
 

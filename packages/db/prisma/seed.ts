@@ -620,11 +620,13 @@ Guidelines:
       await prisma.integration.create({ data: { ...integration, config: { ...integration.config, sandbox: true }, credentials: placeholder, tenantId: demoTenant.id } })
       continue
     }
-    const keep = rows.find((r) => JSON.stringify(r.credentials) !== JSON.stringify(placeholder)) ?? rows[0]
-    const extras = rows.filter((r) => r.id !== keep.id && JSON.stringify(r.credentials) === JSON.stringify(placeholder))
+    // No real tokens: the seed placeholder, or {} left by "Disconnect" (packages/tools connections.ts).
+    const noTokens = (c: unknown) => JSON.stringify(c) === JSON.stringify(placeholder) || JSON.stringify(c ?? {}) === '{}'
+    const keep = rows.find((r) => !noTokens(r.credentials)) ?? rows[0]
+    const extras = rows.filter((r) => r.id !== keep.id && noTokens(r.credentials))
     if (extras.length) await prisma.integration.deleteMany({ where: { id: { in: extras.map((r) => r.id) } } })
     const keepConfig = (keep.config ?? {}) as Record<string, unknown>
-    if (JSON.stringify(keep.credentials) === JSON.stringify(placeholder) && (keepConfig.sandbox !== true || !keep.isActive)) {
+    if (noTokens(keep.credentials) && (keepConfig.sandbox !== true || !keep.isActive)) {
       await prisma.integration.update({ where: { id: keep.id }, data: { isActive: true, config: { ...keepConfig, sandbox: true } } })
     }
   }

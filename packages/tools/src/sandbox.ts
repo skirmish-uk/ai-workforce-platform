@@ -16,6 +16,10 @@ const CONTACTS = [
   { id: '902', properties: { firstname: 'Tom', lastname: 'Lee', email: 'tom.lee@brightstack.example', company: 'BrightStack Software', phone: '+61 3 5550 0202', lifecyclestage: 'lead', hs_lead_status: 'IN_PROGRESS', numemployees: '120', notes_last_contacted: daysAgo(2) } },
   { id: '903', properties: { firstname: 'Maria', lastname: 'Gonzalez', email: 'maria@cloudnine-analytics.example', company: 'CloudNine Analytics', phone: '+61 2 5550 0303', lifecyclestage: 'marketingqualifiedlead', hs_lead_status: 'OPEN', numemployees: '340', notes_last_contacted: daysAgo(12) } },
   { id: '904', properties: { firstname: 'James', lastname: 'Okafor', email: 'james@okafor-plumbing.example', company: 'Okafor Plumbing', phone: '+61 7 5550 0404', lifecyclestage: 'lead', hs_lead_status: 'NEW', numemployees: '6', notes_last_contacted: '' } },
+  // Deliberately messy, so CRM Hygiene (Casey) has something real to find: a duplicate of Tom Lee
+  // with a differently spelled company, and a lead with no company, phone or lifecycle stage.
+  { id: '905', properties: { firstname: 'Thomas', lastname: 'Lee', email: 'tom.lee@brightstack.example', company: 'Brightstack', phone: '', lifecyclestage: 'lead', hs_lead_status: 'NEW', notes_last_contacted: '' } },
+  { id: '906', properties: { firstname: 'Lena', lastname: 'Park', email: 'lena@northwind-logistics.example', company: '', phone: '', lifecyclestage: '', hs_lead_status: 'NEW', notes_last_contacted: '' } },
 ]
 
 const EMAILS = [

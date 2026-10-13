@@ -7,19 +7,23 @@ import type {
   LLMMessage,
   LLMResponse,
   LLMStopReason,
+  LLMSystemBlock,
   LLMTool,
   LLMToolCall,
 } from './types'
-import { LLMConfigError } from './types'
+import { LLMConfigError, systemText } from './types'
 
 const DEFAULT_MAX_TOKENS = 4096
 
 /** Exported so OllamaLLMClient (an OpenAI-compatible server) can reuse the same conversion. */
-export function toOpenAIMessages(system: string | undefined, messages: LLMMessage[]): ChatCompletionMessageParam[] {
+export function toOpenAIMessages(system: string | LLMSystemBlock[] | undefined, messages: LLMMessage[]): ChatCompletionMessageParam[] {
   const result: ChatCompletionMessageParam[] = []
 
-  if (system) {
-    result.push({ role: 'system', content: system })
+  // OpenAI caches the longest identical prefix automatically, so the blocks are simply joined
+  // in order (stable part first, request-specific part last).
+  const systemPrompt = systemText(system)
+  if (systemPrompt) {
+    result.push({ role: 'system', content: systemPrompt })
   }
 
   for (const message of messages) {
@@ -99,8 +103,10 @@ export function parseOpenAIChatCompletion(response: OpenAI.Chat.Completions.Chat
     toolCalls,
     stopReason: mapOpenAIStopReason(choice?.finish_reason ?? null),
     usage: {
-      inputTokens: response.usage?.prompt_tokens ?? 0,
+      // prompt_tokens includes cached tokens; split them out so they're priced at the cached rate.
+      inputTokens: (response.usage?.prompt_tokens ?? 0) - (response.usage?.prompt_tokens_details?.cached_tokens ?? 0),
       outputTokens: response.usage?.completion_tokens ?? 0,
+      cacheReadTokens: response.usage?.prompt_tokens_details?.cached_tokens ?? 0,
     },
     model: response.model,
     raw: response,
@@ -132,6 +138,8 @@ export class OpenAILLMClient implements LLMClient {
       tools: params.tools?.length ? toOpenAITools(params.tools) : undefined,
       max_completion_tokens: params.maxTokens ?? this.defaultMaxTokens,
       temperature: params.temperature ?? this.defaultTemperature,
+      // Routes requests with the same prefix (one agent's runs) to the same prompt cache.
+      ...(params.cacheKey ? { prompt_cache_key: params.cacheKey } : {}),
     })
 
     return parseOpenAIChatCompletion(response)

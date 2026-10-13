@@ -2,6 +2,7 @@ import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '@ai-workforce/db'
 import type { Prisma } from '@prisma/client'
+import { systemText, type LLMSystemBlock } from '@ai-workforce/llm'
 import { runAgent } from '../agent'
 import { BASE_CONTRACT, assertTestDatabase, auditRows, createAgent, createFixture, createTenant, deps, fakeTools, scriptedLLM, text, toolUse, type Fixture } from './helpers'
 
@@ -218,7 +219,7 @@ describe('untrusted content and secrets', () => {
     const fed = llm.calls[1].params.messages.at(-1)!.toolResults![0].output as string
     assert.match(fed, /^<untrusted_data source="tool:hubspot-crm__search_contacts" flagged="possible-prompt-injection/)
     assert.ok(!fed.includes('super-secret'), 'secrets redacted before reaching the model')
-    assert.ok(llm.calls[0].params.system!.includes('<platform_policy>'))
+    assert.ok(systemText(llm.calls[0].params.system)!.includes('<platform_policy>'))
     assert.equal(result.status, 'approval_required', 'the application gate holds even if the model is fooled')
     assert.equal(tools.executed.length, 1, 'only the read executed')
     assert.ok(result.injectionSignals.some((s) => s.source === `tool:${CRM_SEARCH}`))
@@ -239,8 +240,15 @@ describe('untrusted content and secrets', () => {
 
     const llm = scriptedLLM([text('ok')])
     const result = await runAgent(f.agentId, 'pricing?', { deps: deps(llm) })
-    const system = llm.calls[0].params.system!
+    const system = systemText(llm.calls[0].params.system)!
     assert.match(system, new RegExp(`<untrusted_data source="knowledge:${doc.id}" flagged=`))
+    // Prompt caching: the cached block is the agent's stable prefix; retrieved knowledge and the
+    // current time come after it, so a different request doesn't invalidate the cache.
+    const [stable, perRequest] = llm.calls[0].params.system as LLMSystemBlock[]
+    assert.equal(stable.cache, true)
+    assert.ok(stable.text.includes('<platform_policy>') && !stable.text.includes('knowledge:') && !stable.text.includes('Current date'))
+    assert.ok(!perRequest.cache && perRequest.text.includes(`knowledge:${doc.id}`) && perRequest.text.includes('## Current date and time'))
+    assert.equal(llm.calls[0].params.cacheKey, `agent:${f.agentId}`)
     assert.match(system, /STALE/)
     assert.ok(!system.includes('confidential'))
     assert.ok(result.contextWarnings.some((w) => w.includes('stale')))

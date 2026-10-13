@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { prisma } from '@ai-workforce/db'
 import type { Agent } from '@prisma/client'
 import { AgentExecutionError, redact, redactString, safeErrorMessage } from '@ai-workforce/domain'
-import { estimateCostUsd, type LLMClient, type LLMClientConfig, type LLMMessage, type LLMTool } from '@ai-workforce/llm'
+import { estimateCostUsd, totalInputTokens, type LLMClient, type LLMClientConfig, type LLMMessage, type LLMSystemBlock, type LLMTool } from '@ai-workforce/llm'
 import { agentFailure, agentHeartbeat } from '@ai-workforce/monitoring'
 import {
   authorizeToolCall,
@@ -124,7 +124,7 @@ export interface RunAgentResult {
   status: RunAgentStatus
   output: string | null
   toolCalls: RunAgentToolCallRecord[]
-  tokensUsed: { input: number; output: number }
+  tokensUsed: { input: number; output: number; cacheRead?: number; cacheWrite?: number }
   /** This run's own LLM cost. null when every model used is missing from the pricing table. */
   costUsd: number | null
   /** Cost of delegated child runs (recorded on their own audit rows). */
@@ -261,7 +261,8 @@ export async function runAgent(agentId: string, input: string, options: RunAgent
 
 class AgentRun {
   private readonly toolCalls: RunAgentToolCallRecord[] = []
-  private readonly usage = { input: 0, output: 0 }
+  /** input = every input token (cached or not); cacheRead/cacheWrite = the cached share of it. */
+  private readonly usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   private ownCost = 0
   private costKnown = false
   private childCost = 0
@@ -399,14 +400,15 @@ class AgentRun {
   // ------------------------------------------------------------------ ASSEMBLE
   private async assemble(): Promise<
     | RunAgentResult
-    | { registered: Map<string, RegisteredTool>; llmTools: LLMTool[]; systemPrompt: string; specialists: Map<string, Specialist>; workforce: Set<string> }
+    | { registered: Map<string, RegisteredTool>; llmTools: LLMTool[]; systemPrompt: string; systemBlocks: LLMSystemBlock[]; specialists: Map<string, Specialist>; workforce: Set<string> }
   > {
     this.enter('assemble')
     const killSwitch = readKillSwitch(this.agent.tenant.settings)
 
     // Skill tools ∩ contract allowlist, minus anything policy would always deny (least privilege:
     // a prohibited tool isn't even offered to the model).
-    const skillLinks = await prisma.agentSkill.findMany({ where: { agentId: this.agent.id, enabled: true }, include: { skill: true } })
+    // Deterministic order (here and below): tools and prompt must be byte-identical between runs for prompt caching.
+    const skillLinks = await prisma.agentSkill.findMany({ where: { agentId: this.agent.id, enabled: true }, include: { skill: true }, orderBy: [{ skill: { name: 'asc' } }, { skillId: 'asc' }] })
     const requested = toolRegistry.resolve(skillLinks.filter((l) => l.skill.isActive).flatMap((l) => l.skill.requiredTools))
     const registered = new Map<string, RegisteredTool>()
     const toolNotes: string[] = []
@@ -443,6 +445,7 @@ class AgentRun {
           status: { notIn: ['PAUSED', 'ARCHIVED'] },
         },
         select: { id: true, name: true, role: true, mission: true, config: true },
+        orderBy: { id: 'asc' },
       })
       for (const row of rows) {
         if (row.id === this.agent.id) continue
@@ -488,7 +491,7 @@ class AgentRun {
     this.note(
       `plan: tools=[${Array.from(registered.keys()).join(', ')}] dod=[${checks}] limits={iterations:${this.maxIterations()},toolCalls:${limits.maxToolCalls},wallClockMs:${limits.maxWallClockMs}}`
     )
-    return { registered, llmTools, systemPrompt: context.systemPrompt, specialists, workforce: new Set(workforceTools.map((t) => t.name)) }
+    return { registered, llmTools, systemPrompt: context.systemPrompt, systemBlocks: context.systemBlocks, specialists, workforce: new Set(workforceTools.map((t) => t.name)) }
   }
 
   private maxIterations(): number {
@@ -501,6 +504,7 @@ class AgentRun {
     registered: Map<string, RegisteredTool>
     llmTools: LLMTool[]
     systemPrompt: string
+    systemBlocks: LLMSystemBlock[]
     specialists: Map<string, Specialist>
     workforce: Set<string>
   }): Promise<RunAgentResult> {
@@ -524,7 +528,8 @@ class AgentRun {
       try {
         completion = await completeWithFallback({
           candidates,
-          request: { system: assembled.systemPrompt, messages, tools: assembled.llmTools },
+          // Same agent → same stable prefix: one cache key per agent (OpenAI routing; Anthropic matches by prefix).
+          request: { system: assembled.systemBlocks, messages, tools: assembled.llmTools, cacheKey: `agent:${this.agent.id}` },
           modelConfig: readModelConfig(this.agent.modelConfig),
           maxRetries: limits.maxRetries,
           deps: { createClient: this.options.deps?.createClient, sleep: this.options.deps?.sleep },
@@ -538,9 +543,11 @@ class AgentRun {
       const { response, candidate } = completion
       this.modelUsed = { provider: candidate.provider, model: candidate.model }
       if (candidate.role === 'fallback') this.note(`fell back to ${candidate.provider}/${candidate.model}`)
-      this.usage.input += response.usage.inputTokens
+      this.usage.input += totalInputTokens(response.usage)
       this.usage.output += response.usage.outputTokens
-      const callCost = estimateCostUsd(candidate.model, { inputTokens: response.usage.inputTokens, outputTokens: response.usage.outputTokens })
+      this.usage.cacheRead += response.usage.cacheReadTokens ?? 0
+      this.usage.cacheWrite += response.usage.cacheWriteTokens ?? 0
+      const callCost = estimateCostUsd(candidate.model, response.usage)
       if (callCost !== null) {
         this.ownCost += callCost
         this.costKnown = true

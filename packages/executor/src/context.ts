@@ -2,6 +2,7 @@ import { prisma } from '@ai-workforce/db'
 import type { Agent, Skill } from '@prisma/client'
 import { searchKnowledge, isEmbeddingConfigured } from '@ai-workforce/knowledge'
 import type { AutonomyStage } from '@ai-workforce/tools'
+import type { LLMSystemBlock } from '@ai-workforce/llm'
 import { resolveAgentContract, type AgentContract } from './contract'
 import { formatBusinessContext, readBusinessContext } from './business-context'
 import { PLATFORM_POLICY, wrapUntrusted } from './untrusted'
@@ -17,7 +18,14 @@ export interface KnowledgeExcerpt {
 }
 
 export interface AssembledContext {
+  /** The whole system prompt as one string (audits, providers without block caching). */
   systemPrompt: string
+  /**
+   * The same prompt split for prompt caching: a stable prefix (policy, identity, behaviour,
+   * business context, instructions, playbooks), identical across this agent's runs and
+   * marked for caching, then the request-specific part (retrieved knowledge, current time).
+   */
+  systemBlocks: LLMSystemBlock[]
   skills: Skill[]
   requiredTools: string[]
   /** Provenance for every reference document placed in the prompt. */
@@ -67,6 +75,8 @@ async function loadAgentSkills(agentId: string): Promise<Skill[]> {
   const agentSkills = await prisma.agentSkill.findMany({
     where: { agentId, enabled: true },
     include: { skill: true },
+    // Deterministic order keeps the cached prompt prefix identical between runs.
+    orderBy: [{ skill: { name: 'asc' } }, { skillId: 'asc' }],
   })
   return agentSkills.map((link) => link.skill).filter((skill) => skill.isActive)
 }
@@ -214,22 +224,28 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
   if (clock.warning) warnings.push(clock.warning)
 
   const soul = formatSoul(contract)
-  const sections = [
+  // Stable for this agent until its definition changes: cached across runs.
+  const stable = [
     PLATFORM_POLICY,
     `## Identity and authority\n${formatIdentity(agent, contract, options.stage, options.toolNotes ?? [])}`,
     soul ? `## Behaviour\n${soul}` : null,
     `## Business context\n${formatBusinessContext(business.context)}`,
     agent.systemPrompt?.trim() ? `## Agent instructions\n${agent.systemPrompt.trim()}` : null,
     skills.length ? `## Playbooks\n${skills.map(formatSkillSection).join('\n\n')}` : null,
+  ]
+  // Specific to this request (and fixed for the whole run, since context is built once per run).
+  const perRequest = [
     knowledgeBlocks.length
       ? `## Reference knowledge\nRetrieved for this request. Cite the document title when you rely on it.\n\n${knowledgeBlocks.join('\n\n')}`
       : null,
-    // Last, so everything above stays an identical prefix between calls (prompt caching).
     `## Current date and time\n${clock.text}. Interpret relative dates ("tomorrow", "next week") from this.`,
   ]
+  const stableText = stable.filter(Boolean).join('\n\n')
+  const perRequestText = perRequest.filter(Boolean).join('\n\n')
 
   return {
-    systemPrompt: sections.filter(Boolean).join('\n\n'),
+    systemPrompt: `${stableText}\n\n${perRequestText}`,
+    systemBlocks: [{ text: stableText, cache: true }, { text: perRequestText }],
     skills,
     requiredTools,
     knowledgeUsed,

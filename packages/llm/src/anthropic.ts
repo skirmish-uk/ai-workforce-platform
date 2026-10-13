@@ -6,6 +6,7 @@ import type {
   LLMMessage,
   LLMResponse,
   LLMStopReason,
+  LLMSystemBlock,
   LLMTool,
   LLMToolCall,
 } from './types'
@@ -45,6 +46,27 @@ export function toAnthropicMessages(messages: LLMMessage[], model: string): Anth
 
     return { role: message.role, content: blocks }
   })
+}
+
+/**
+ * System prompt as content blocks, with a cache breakpoint at the end of each block marked
+ * `cache: true` (tools render before system, so the first breakpoint caches tools + the
+ * stable system prefix together). At most 3 explicit breakpoints are kept: the API allows 4,
+ * and the automatic one for the conversation tail takes the last.
+ */
+export function toAnthropicSystem(system: string | LLMSystemBlock[] | undefined): string | Anthropic.TextBlockParam[] | undefined {
+  if (system === undefined || typeof system === 'string') return system || undefined
+  let breakpoints = 0
+  const blocks = system
+    .filter((block) => block.text)
+    .map((block): Anthropic.TextBlockParam => {
+      if (block.cache && breakpoints < 3) {
+        breakpoints++
+        return { type: 'text', text: block.text, cache_control: { type: 'ephemeral' } }
+      }
+      return { type: 'text', text: block.text }
+    })
+  return blocks.length ? blocks : undefined
 }
 
 function toAnthropicTools(tools: LLMTool[]): Anthropic.Tool[] {
@@ -99,15 +121,27 @@ export class AnthropicLLMClient implements LLMClient {
     this.defaultTemperature = config.temperature
   }
 
-  async complete(params: LLMCompleteParams): Promise<LLMResponse> {
-    const response = await this.client.messages.create({
+  /**
+   * Prompt caching: explicit breakpoints on the stable system blocks (shared across runs of
+   * the same agent), plus top-level automatic caching, which moves a breakpoint to the end of
+   * the conversation so each tool-loop iteration reads everything before it from the cache.
+   * Default 5-minute TTL: loop iterations are seconds apart. Prefixes below the model's
+   * minimum (512 tokens on current models, 4,096 on Haiku 4.5) silently aren't cached.
+   */
+  buildRequest(params: LLMCompleteParams): Anthropic.MessageCreateParamsNonStreaming {
+    return {
       model: this.model,
-      system: params.system,
+      system: toAnthropicSystem(params.system),
       messages: toAnthropicMessages(params.messages, this.model),
       tools: params.tools?.length ? toAnthropicTools(params.tools) : undefined,
       max_tokens: params.maxTokens ?? this.defaultMaxTokens,
+      cache_control: { type: 'ephemeral' },
       ...(supportsSamplingParams(this.model) ? { temperature: params.temperature ?? this.defaultTemperature } : {}),
-    })
+    }
+  }
+
+  async complete(params: LLMCompleteParams): Promise<LLMResponse> {
+    const response = await this.client.messages.create(this.buildRequest(params))
 
     let content: string | null = null
     const toolCalls: LLMToolCall[] = []
@@ -131,6 +165,8 @@ export class AnthropicLLMClient implements LLMClient {
       usage: {
         inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
+        cacheReadTokens: response.usage.cache_read_input_tokens ?? 0,
+        cacheWriteTokens: response.usage.cache_creation_input_tokens ?? 0,
       },
       model: response.model,
       raw: response,

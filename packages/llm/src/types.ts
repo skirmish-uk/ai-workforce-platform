@@ -51,8 +51,34 @@ export interface LLMTool {
 export type LLMStopReason = 'end_turn' | 'tool_use' | 'max_tokens' | 'stop_sequence' | 'error'
 
 export interface LLMUsage {
+  /** Input tokens billed at the full rate (not read from or written to a prompt cache). */
   inputTokens: number
   outputTokens: number
+  /** Input tokens served from the provider's prompt cache (billed at a fraction of the input rate). */
+  cacheReadTokens?: number
+  /** Input tokens written to the prompt cache this call (Anthropic bills them at 1.25x input). */
+  cacheWriteTokens?: number
+}
+
+/** Every input token of a call, cached or not. */
+export function totalInputTokens(usage: LLMUsage): number {
+  return usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+}
+
+/**
+ * One part of the system prompt. `cache: true` ends a stable prefix (everything up to and
+ * including this block is identical between calls), which the client marks for prompt caching.
+ * Put request-specific content (retrieved knowledge, the current time) in later blocks.
+ */
+export interface LLMSystemBlock {
+  text: string
+  cache?: boolean
+}
+
+/** The system prompt as one string, for providers without block-level caching. */
+export function systemText(system: string | LLMSystemBlock[] | undefined): string | undefined {
+  if (system === undefined || typeof system === 'string') return system
+  return system.map((block) => block.text).filter(Boolean).join('\n\n')
 }
 
 export interface LLMResponse {
@@ -67,8 +93,13 @@ export interface LLMResponse {
 }
 
 export interface LLMCompleteParams {
-  system?: string
+  system?: string | LLMSystemBlock[]
   messages: LLMMessage[]
+  /**
+   * Groups requests that share a prompt prefix (e.g. "agent:<id>") so the provider routes them
+   * to the same cache. Used by OpenAI (prompt_cache_key); Anthropic caches by prefix alone.
+   */
+  cacheKey?: string
   tools?: LLMTool[]
   maxTokens?: number
   temperature?: number

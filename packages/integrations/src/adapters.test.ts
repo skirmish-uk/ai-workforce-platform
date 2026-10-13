@@ -245,6 +245,13 @@ describe('create meeting + reminders', () => {
     assert.deepEqual(calls[0].params.requestBody.reminders, { useDefault: true })
   })
 
+  test('accepts local times with a UTC offset (models write Sydney times as +11:00)', async () => {
+    const calls = stubCalendar()
+    await run(calendarAdapter, 'create_event', { summary: 'x', startTime: '2027-03-16T10:00:00+11:00', endTime: '2027-03-16T10:30:00+11:00', timeZone: 'Australia/Sydney' })
+    assert.deepEqual(calls[0].params.requestBody.start, { dateTime: '2027-03-16T10:00:00+11:00', timeZone: 'Australia/Sydney' })
+    assert.equal(action(calendarAdapter, 'create_event').inputSchema.safeParse({ summary: 'x', startTime: 'next tuesday', endTime: 'later' }).success, false)
+  })
+
   test('reminder overrides must be positive minutes with a known method', () => {
     const a = action(calendarAdapter, 'create_event')
     const base = { summary: 'x', startTime: '2026-10-13T12:00:00.000Z', endTime: '2026-10-13T12:30:00.000Z' }

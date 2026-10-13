@@ -27,8 +27,8 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
         summary: z.string().min(1),
         description: z.string().optional(),
         location: z.string().optional(),
-        startTime: z.string().datetime(),
-        endTime: z.string().datetime(),
+        startTime: z.string().datetime({ offset: true }),
+        endTime: z.string().datetime({ offset: true }),
         timeZone: z.string().default('UTC'),
         attendees: z.array(z.object({
           email: z.string().email(),
@@ -83,8 +83,8 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
       name: 'list_events',
       description: 'List calendar events',
       inputSchema: z.object({
-        timeMin: z.string().datetime().optional(),
-        timeMax: z.string().datetime().optional(),
+        timeMin: z.string().datetime({ offset: true }).optional(),
+        timeMax: z.string().datetime({ offset: true }).optional(),
         maxResults: z.number().min(1).max(250).default(20),
         singleEvents: z.boolean().default(true),
         orderBy: z.enum(['startTime', 'updated']).default('startTime'),
@@ -153,8 +153,8 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
         summary: z.string().optional(),
         description: z.string().optional(),
         location: z.string().optional(),
-        startTime: z.string().datetime().optional(),
-        endTime: z.string().datetime().optional(),
+        startTime: z.string().datetime({ offset: true }).optional(),
+        endTime: z.string().datetime({ offset: true }).optional(),
         attendees: z.array(z.object({
           email: z.string().email(),
           displayName: z.string().optional(),
@@ -212,14 +212,14 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
       name: 'find_free_time',
       description: 'Find free time slots',
       inputSchema: z.object({
-        timeMin: z.string().datetime(),
-        timeMax: z.string().datetime(),
+        timeMin: z.string().datetime({ offset: true }),
+        timeMax: z.string().datetime({ offset: true }),
         durationMinutes: z.number().int().positive().default(30),
       }),
       outputSchema: z.object({
         freeSlots: z.array(z.object({
-          start: z.string().datetime(),
-          end: z.string().datetime(),
+          start: z.string().datetime({ offset: true }),
+          end: z.string().datetime({ offset: true }),
         })),
       }),
       execute: async (input, credentials) => {

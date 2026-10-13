@@ -1,6 +1,7 @@
 import { prisma } from '../src'
 import type { Prisma } from '@prisma/client'
 import { hash } from 'bcryptjs'
+import { seedShowcaseTeam } from './seed-showcase'
 
 /**
  * Agent contract for the demo agent (packages/executor/src/contract.ts). Starts approval-gated:
@@ -302,6 +303,8 @@ async function main() {
   // Business context is also filled in on reseed when missing (tenants created before it existed).
   const demoSettings = (demoTenant.settings ?? {}) as Record<string, unknown>
   const missing = {
+    // Agents see the current date and time in this zone (packages/executor/src/context.ts).
+    ...(demoSettings.timeZone ? {} : { timeZone: 'Australia/Sydney' }),
     ...(demoSettings.selfManagement ? {} : { selfManagement: { enabled: true, maxAutonomyStage: 'limited', maxRevisionsPerDay: 10, replayRuns: 5 } }),
     // Replace it while it is still the seed's own demo text (unchanged description); never overwrite a customised one.
     ...(demoSettings.businessContext && (demoSettings.businessContext as { description?: string }).description !== DEMO_BUSINESS_CONTEXT.description
@@ -583,6 +586,9 @@ Guidelines:
     })
   }
 
+  // Showcase specialists: Riley (meetings), Iris (inbox triage), Casey (CRM hygiene).
+  await seedShowcaseTeam(prisma, demoTenant.id, { seedOwned, linkSkill })
+
   // Placeholder integrations in sandbox mode (fictional data, nothing real is sent; see
   // packages/tools/src/sandbox.ts) until real accounts are connected. Idempotent: one row per name; earlier
   // non-idempotent seeds left duplicates, which are removed only while they still hold the
@@ -594,6 +600,12 @@ Guidelines:
       provider: 'google',
       config: { scopes: ['gmail.readonly', 'gmail.send', 'gmail.modify'] },
       scopes: ['gmail.readonly', 'gmail.send', 'gmail.modify'],
+    },
+    {
+      name: 'Google Calendar',
+      provider: 'google',
+      config: { scopes: ['calendar.events', 'calendar.readonly'] },
+      scopes: ['calendar.events', 'calendar.readonly'],
     },
     {
       name: 'HubSpot CRM',

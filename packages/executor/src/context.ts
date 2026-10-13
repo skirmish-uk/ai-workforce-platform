@@ -34,6 +34,33 @@ export interface BuildContextOptions {
   stage?: AutonomyStage
   /** One line per offered tool, e.g. "gmail__send_email — requires human approval". */
   toolNotes?: string[]
+  /** Clock for the "Current date and time" section (tests). */
+  now?: Date
+}
+
+/**
+ * "Current date and time" line in the tenant's time zone (Tenant.settings.timeZone, an IANA
+ * name such as "Australia/Sydney"; UTC when unset or invalid). Without it, models guess the
+ * date from training data, which breaks scheduling, "follow up in 3 days" and staleness checks.
+ */
+export function formatCurrentTime(settings: unknown, now = new Date()): { text: string; warning?: string } {
+  const configured = settings && typeof settings === 'object' ? (settings as Record<string, unknown>).timeZone : undefined
+  let timeZone = 'UTC'
+  let warning: string | undefined
+  if (typeof configured === 'string' && configured.trim()) {
+    try {
+      new Intl.DateTimeFormat('en-AU', { timeZone: configured })
+      timeZone = configured
+    } catch {
+      warning = `Tenant time zone "${configured}" is not a valid IANA time zone; using UTC.`
+    }
+  }
+  const parts = new Intl.DateTimeFormat('en-AU', {
+    timeZone, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZoneName: 'longOffset',
+  }).formatToParts(now)
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? ''
+  const offset = get('timeZoneName').replace('GMT', 'UTC') || 'UTC'
+  return { text: `${get('weekday')} ${get('day')} ${get('month')} ${get('year')}, ${get('hour')}:${get('minute')} (${timeZone === 'UTC' ? 'UTC' : `${timeZone}, ${offset}`})`, warning }
 }
 
 async function loadAgentSkills(agentId: string): Promise<Skill[]> {
@@ -183,6 +210,9 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
     return wrapped.text
   })
 
+  const clock = formatCurrentTime(agent.tenant.settings, options.now)
+  if (clock.warning) warnings.push(clock.warning)
+
   const soul = formatSoul(contract)
   const sections = [
     PLATFORM_POLICY,
@@ -194,6 +224,8 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
     knowledgeBlocks.length
       ? `## Reference knowledge\nRetrieved for this request. Cite the document title when you rely on it.\n\n${knowledgeBlocks.join('\n\n')}`
       : null,
+    // Last, so everything above stays an identical prefix between calls (prompt caching).
+    `## Current date and time\n${clock.text}. Interpret relative dates ("tomorrow", "next week") from this.`,
   ]
 
   return {

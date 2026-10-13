@@ -135,12 +135,21 @@ curl -b demo_cookies.txt -X POST http://127.0.0.1:3000/api/agents \
 |--------|-------|---------|
 | **Tenants** | 2 | `platform` (admin), `demo-agency` (customer) |
 | **Users** | 3 | Platform admin, demo admin, demo staff |
-| **Agents** | 1 | "Sarah - Sales Assistant" (DRAFT) |
-| **Skills** | 2 | `lead_follow_up`, `email_triage` (v1.0.0) |
-| **Knowledge Docs** | 3 | Company overview, ICP, pricing |
-| **Integrations** | 2 | Gmail, HubSpot (OAuth configured) |
+| **Agents** | 6 | Sarah (sales), Morgan (manager / front desk), Ava (client questions, voice), Riley (meeting scheduler), Iris (inbox triage), Casey (CRM hygiene) |
+| **Skills** | 7 | `lead_follow_up`, `email_triage`, `answer_client_questions`, `schedule_meeting`, `inbox_triage`, `crm_hygiene` (+ any versions made by revisions) |
+| **Knowledge Docs** | 4 | Company overview, ICP, pricing, client FAQ |
+| **Integrations** | 3 | Gmail, HubSpot, Google Calendar, all in sandbox mode (fictional data, nothing sent) |
 | **Subscription** | 1 | Growth plan, ACTIVE |
-| **Skills on Agent** | 2 | Both skills enabled on Sarah |
+
+### The showcase team
+
+| Agent | Starts at | Try |
+|---|---|---|
+| Riley - Meeting Scheduler | approval_gated: every invite waits in Approvals | "Book a 30-minute discovery call with Maria Gonzalez (maria@cloudnine-analytics.example) tomorrow at 10am" |
+| Iris - Inbox Triage | recommend: reports categories and labels, changes nothing | "Triage my unread inbox" |
+| Casey - CRM Hygiene | recommend: reports problems and fixes, changes nothing | "Run a CRM hygiene check" (finds the duplicate Tom Lee record) |
+
+All three are also reachable through Morgan's "Ask the team". Their test suites (4, 3 and 3 cases) passed against `claude-haiku-5-5` on 13 Oct 2026.
 
 ---
 

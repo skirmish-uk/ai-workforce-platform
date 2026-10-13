@@ -135,7 +135,7 @@ export class HubSpotAdapter extends BaseIntegrationAdapter {
         amount: z.number().optional(),
         dealstage: z.string().optional(),
         pipeline: z.string().optional(),
-        closedate: z.string().datetime().optional(),
+        closedate: z.string().datetime({ offset: true }).optional(),
         associatedContactIds: z.array(z.string()).optional(),
         properties: z.record(z.string()).optional(),
       }),

@@ -27,7 +27,7 @@ scripts/demo-deploy.sh up
 
 `scripts/demo-deploy.sh` wraps `docker compose -p ai-workforce-demo -f compose.prod.yml --env-file .env.production`. Always use it (or pass `--env-file .env.production` yourself): without it, compose would read `${DOMAIN}` etc. from the development `.env`.
 
-Other commands: `logs`, `ps`, `restart`, `down`, `reset-demo` (clears demo activity, keeps agent upgrades).
+Other commands: `logs`, `ps`, `restart` (recreates web and worker so `.env.production` edits take effect; plain `docker compose restart` keeps the old environment), `down`, `reset-demo` (clears demo activity, keeps agent upgrades).
 
 ## Updating
 

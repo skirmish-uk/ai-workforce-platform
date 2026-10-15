@@ -2,7 +2,8 @@
 # Production demo on a Docker host with nginx-proxy + acme-companion (docs/DEPLOY.md).
 #   scripts/demo-deploy.sh up        build and (re)start everything
 #   scripts/demo-deploy.sh logs      follow web + worker logs
-#   scripts/demo-deploy.sh ps|down|restart|reset-demo
+#   scripts/demo-deploy.sh restart   recreate web + worker (picks up .env.production changes)
+#   scripts/demo-deploy.sh ps|down|reset-demo
 # Always passes .env.production for variable substitution, so ${DOMAIN} etc. never come from
 # the development .env that sits next to it.
 set -euo pipefail
@@ -14,7 +15,9 @@ case "${1:-up}" in
   logs) dc logs -f --tail=100 web worker ;;
   ps) dc ps ;;
   down) dc down ;;
-  restart) dc restart web worker ;;
+  # Recreate (not `docker compose restart`, which keeps the old environment) so edits to
+  # .env.production take effect.
+  restart) dc up -d --no-build --no-deps --force-recreate web worker && dc ps ;;
   # Clear demo activity (keeps agents' tested upgrades): npm run demo:reset inside the stack.
   reset-demo) dc run --rm --no-deps setup sh -c "npx tsx scripts/reset-demo.ts" && dc restart worker ;;
   *) echo "usage: $0 up|logs|ps|down|restart|reset-demo"; exit 1 ;;

@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer'
+import { safeErrorMessage } from '@ai-workforce/domain'
 
 /**
  * Outgoing email for platform notifications (approval requests today). Sending is off unless
@@ -70,6 +71,22 @@ export function createSmtpMailer(config: MailerConfig): Mailer {
 export function createMailerFromEnv(env: Record<string, string | undefined> = process.env): Mailer | null {
   const config = mailerConfigFromEnv(env)
   return config ? createSmtpMailer(config) : null
+}
+
+let cachedEnvMailer: { mailer: Mailer | null; reason?: string } | undefined
+
+/** The process-wide mailer from SMTP_* (built once). `reason` says why email is off when mailer is null. */
+export function envMailer(): { mailer: Mailer | null; reason?: string } {
+  if (!cachedEnvMailer) {
+    try {
+      const mailer = createMailerFromEnv()
+      cachedEnvMailer = mailer ? { mailer } : { mailer: null, reason: 'email is not configured (SMTP_HOST is not set)' }
+    } catch (error) {
+      console.error(`Notification emails are off: ${safeErrorMessage(error)}`)
+      cachedEnvMailer = { mailer: null, reason: `email is misconfigured: ${safeErrorMessage(error)}` }
+    }
+  }
+  return cachedEnvMailer
 }
 
 /**

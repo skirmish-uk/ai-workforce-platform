@@ -704,6 +704,7 @@ class AgentRun {
           liveReads: this.options.liveReads,
           toolFixtures: this.options.toolFixtures,
           executeTool: this.options.deps?.executeTool,
+          level: decision.level,
         })
         switch (outcome.kind) {
           case 'completed':

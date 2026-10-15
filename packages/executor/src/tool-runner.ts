@@ -1,4 +1,5 @@
 import { prisma } from '@ai-workforce/db'
+import type { ApprovalLevel } from '@prisma/client'
 import { redact, safeErrorMessage } from '@ai-workforce/domain'
 import {
   executeOnTenantConnection,
@@ -26,6 +27,8 @@ export interface ToolRunContext {
   executeTool?: ToolExecutorFn
   /** Approval that authorised this exact call, for the audit trail. */
   approvalId?: string
+  /** Permission level policy executed this call at. NOTIFY marks the audit row for an email (notifications/action-emails.ts). */
+  level?: ApprovalLevel
 }
 
 export type ToolRunOutcome =
@@ -93,7 +96,11 @@ export async function runAuthorizedTool(
 ): Promise<ToolRunOutcome> {
   const toolName = registered.toolName
   const idempotencyKey = toolIdempotencyKey(ctx.tenantId, ctx.agentId, toolName, input)
-  const base = { runId: ctx.runId, tool: toolName, input, idempotencyKey, approvalId: ctx.approvalId, risk: profile.risk }
+  const base = {
+    runId: ctx.runId, tool: toolName, input, idempotencyKey, approvalId: ctx.approvalId, risk: profile.risk,
+    // Dry runs (evaluations, replays) never notify anyone.
+    ...(ctx.level === 'NOTIFY' && !ctx.dryRun ? { notify: true } : {}),
+  }
 
   const liveRead = ctx.dryRun && ctx.liveReads && profile.risk === 'read' && !(ctx.toolFixtures && toolName in ctx.toolFixtures)
   if (ctx.dryRun && !liveRead) {

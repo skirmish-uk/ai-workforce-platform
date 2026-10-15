@@ -92,6 +92,7 @@ model Tenant {
 
   users             User[]
   agents            Agent[]
+  notifications     Notification[]
   skills            Skill[]
   knowledgeDocs     KnowledgeDocument[]
   knowledgeChunks   KnowledgeChunk[]
@@ -395,6 +396,27 @@ model AgentPermission {
   agent       Agent         @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
   @@index([agentId])
+}
+
+/// One row per notification the platform sent (or skipped), keyed by what it was about, so the
+/// worker's sweep never announces the same event twice (packages/executor/src/notifications).
+/// Approvals use Approval.notifiedAt instead.
+model Notification {
+  id        String   @id @default(cuid())
+  /// e.g. "agent_action" (a NOTIFY-level tool call that ran).
+  kind      String
+  /// What it is about: for agent_action, the AuditLog id of the tool call.
+  sourceId  String
+  /// PENDING (claimed) -> SENT | SKIPPED | FAILED
+  status    String   @default("PENDING")
+  detail    Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, sourceId])
+  @@index([tenantId, createdAt])
 }
 
 model ApprovalPolicy {

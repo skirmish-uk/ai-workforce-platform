@@ -2,7 +2,10 @@ import { prisma } from '@ai-workforce/db'
 import type { ApprovalLevel, Prisma } from '@prisma/client'
 import { canApprove, redactString, safeErrorMessage } from '@ai-workforce/domain'
 import { formatCurrentTime } from '../context'
-import { createMailerFromEnv, isDeliverableAddress, type EmailMessage, type Mailer } from './mailer'
+import { appBaseUrl, describeAction, oneLine, renderDigest, splitRecipients } from './format'
+import { envMailer, isDeliverableAddress, type EmailMessage, type Mailer } from './mailer'
+
+export { describeAction } from './format'
 
 /**
  * Emails the people who can decide a pending approval, so an agent waiting on a human is not
@@ -65,19 +68,6 @@ export interface ApprovalEmailItem {
   expiresAt: Date | null
 }
 
-/** "gmail__send_email" -> "Gmail: send email"; anything else is tidied up as-is. */
-export function describeAction(action: string): string {
-  const [service, name] = action.includes('__') ? action.split('__', 2) : [null, action]
-  const words = (s: string) => s.replace(/[-_]+/g, ' ').trim()
-  const tool = words(name ?? action)
-  if (!service) return tool.charAt(0).toUpperCase() + tool.slice(1)
-  const serviceName = words(service).replace(/\b\w/g, (c) => c.toUpperCase()).replace(/\bCrm\b/, 'CRM').replace(/\bHubspot\b/, 'HubSpot')
-  return `${serviceName}: ${tool}`
-}
-
-const oneLine = (s: string) => s.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim()
-const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')
-
 export function composeApprovalEmail(params: {
   to: string
   tenantName: string
@@ -94,7 +84,7 @@ export function composeApprovalEmail(params: {
       : `${items.length} actions are waiting for your approval in ${tenantName}`
   ).slice(0, 200)
 
-  const details = items.map((item) => {
+  const sections = items.map((item) => {
     const lines: Array<[string, string]> = []
     if (item.agentName) lines.push(['Agent', item.agentName])
     if (item.target) lines.push(['Where', item.target])
@@ -102,43 +92,21 @@ export function composeApprovalEmail(params: {
     if (item.risk) lines.push(['Risk', item.risk.replace(/_/g, ' ')])
     if (item.expiresAt) lines.push(['Expires', formatCurrentTime(params.tenantSettings, item.expiresAt).text])
     if (item.sandbox) lines.push(['Sandbox', 'fictional data, nothing real will be sent'])
-    return { title: item.label, lines: lines.map(([k, v]) => [k, oneLine(v)] as [string, string]) }
+    return { title: item.label, lines }
   })
 
   const intro =
     items.length === 1
       ? `${first.agentName ?? 'A workflow'} is waiting for your approval in ${tenantName}.`
       : `${items.length} actions are waiting for your approval in ${tenantName}.`
-  const note = 'Nothing happens until someone approves. The exact content is shown in the dashboard; it is not included in this email.'
-  const why = `You're receiving this because you can approve actions for ${tenantName}.`
-
-  const text = [
+  const { text, html } = renderDigest({
     intro,
-    '',
-    ...details.flatMap((d, i) => [`${items.length > 1 ? `${i + 1}. ` : ''}${d.title}`, ...d.lines.map(([k, v]) => `   ${k}: ${v}`), '']),
-    `Review and decide: ${url}`,
-    '',
-    note,
-    why,
-  ].join('\n')
-
-  const html = `<!doctype html><html><body style="margin:0;padding:24px;background:#f5f5f5;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#171717">
-<div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:12px;padding:24px;border:1px solid #e5e5e5">
-<p style="margin:0 0 16px;font-size:16px">${escapeHtml(intro)}</p>
-${details
-  .map(
-    (d) => `<div style="border:1px solid #e5e5e5;border-radius:8px;padding:12px 16px;margin:0 0 12px">
-<p style="margin:0 0 8px;font-weight:600">${escapeHtml(d.title)}</p>
-<table style="border-collapse:collapse;font-size:14px">${d.lines
-      .map(([k, v]) => `<tr><td style="padding:2px 12px 2px 0;color:#737373;vertical-align:top">${escapeHtml(k)}</td><td style="padding:2px 0">${escapeHtml(v)}</td></tr>`)
-      .join('')}</table>
-</div>`
-  )
-  .join('\n')}
-<p style="margin:20px 0"><a href="${escapeHtml(url)}" style="display:inline-block;background:#0284c7;color:#ffffff;text-decoration:none;padding:10px 18px;border-radius:8px;font-weight:600">Review in the dashboard</a></p>
-<p style="margin:0 0 8px;font-size:13px;color:#525252">${escapeHtml(note)}</p>
-<p style="margin:0;font-size:12px;color:#a3a3a3">${escapeHtml(why)}</p>
-</div></body></html>`
+    sections,
+    url,
+    urlLabel: 'Review and decide',
+    note: 'Nothing happens until someone approves. The exact content is shown in the dashboard; it is not included in this email.',
+    why: `You're receiving this because you can approve actions for ${tenantName}.`,
+  })
 
   return { to: params.to, subject, text, html }
 }
@@ -166,20 +134,6 @@ export interface NotifyApprovalsResult {
   emailsSent: number
   skipped: number
   failed: number
-}
-
-let envMailer: { mailer: Mailer | null; reason?: string } | undefined
-function mailerFromEnv(): { mailer: Mailer | null; reason?: string } {
-  if (!envMailer) {
-    try {
-      const mailer = createMailerFromEnv()
-      envMailer = mailer ? { mailer } : { mailer: null, reason: 'email is not configured (SMTP_HOST is not set)' }
-    } catch (error) {
-      console.error(`Approval emails are off: ${safeErrorMessage(error)}`)
-      envMailer = { mailer: null, reason: `email is misconfigured: ${safeErrorMessage(error)}` }
-    }
-  }
-  return envMailer
 }
 
 type PendingApproval = {
@@ -216,10 +170,9 @@ async function audit(approval: PendingApproval, action: string, data: Record<str
 export async function notifyPendingApprovals(options: NotifyApprovalsOptions = {}): Promise<NotifyApprovalsResult> {
   const now = options.now ?? new Date()
   const { mailer, reason: mailerOffReason } =
-    options.mailer !== undefined ? { mailer: options.mailer, reason: options.mailer ? undefined : 'email is not configured' } : mailerFromEnv()
+    options.mailer !== undefined ? { mailer: options.mailer, reason: options.mailer ? undefined : 'email is not configured' } : envMailer()
   const isDeliverable = options.isDeliverable ?? isDeliverableAddress
-  const baseUrl = (options.appUrl ?? process.env.APP_URL ?? process.env.NEXTAUTH_URL ?? 'http://localhost:3000').replace(/\/+$/, '')
-  const url = `${baseUrl}/dashboard/approvals`
+  const url = `${appBaseUrl(options.appUrl)}/dashboard/approvals`
   const result: NotifyApprovalsResult = { approvals: 0, emailsSent: 0, skipped: 0, failed: 0 }
 
   const candidates: PendingApproval[] = await prisma.approval.findMany({
@@ -280,9 +233,7 @@ export async function notifyPendingApprovals(options: NotifyApprovalsOptions = {
           ...policies.filter((p) => p.agentId === approval.agentId && (p.action === approval.action || p.action === '*')).flatMap((p) => p.notifyEmails),
           ...(approval.level === 'OPERATOR_APPROVAL' ? [] : settings.extraRecipients),
         ]
-        const unique = Array.from(new Map(wanted.map((e) => [e.trim().toLowerCase(), e.trim()])).values())
-        const recipients = unique.filter((e) => isDeliverable(e))
-        const undeliverable = unique.filter((e) => !isDeliverable(e))
+        const { recipients, undeliverable } = splitRecipients(wanted, isDeliverable)
 
         const payload = (approval.input ?? {}) as { kind?: string; summary?: Summary }
         const summary = payload.summary ?? {}

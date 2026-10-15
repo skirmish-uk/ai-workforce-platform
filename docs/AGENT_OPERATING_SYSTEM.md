@@ -177,6 +177,13 @@ workflow approval steps and agent revisions.
   - The approval is older than 24 h when first seen, or already expired.
 - **Audit:** `APPROVAL_NOTIFICATION_SENT` / `_SKIPPED` / `_FAILED` on the Approval. A failed send is
   audited, not retried; the dashboard still lists the approval.
+- **NOTIFY-level actions** run without waiting and are emailed afterwards. `runAuthorizedTool` marks
+  the audit row (`newData.notify: true`; never on dry runs). `notifyAgentActions()`, in the same tick,
+  claims each one with a `Notification` row (unique on `kind` + `sourceId`) and emails one digest per
+  recipient. It goes to the tenant's admins, `ApprovalPolicy.notifyEmails` and `approvalRecipients`.
+  The email has the action, the agent, the time and whether it was a sandbox run, plus a link to the
+  agent's runs, never the content. The outcome is kept on the `Notification` row (SENT/SKIPPED/FAILED).
+  Tenants opt out with `settings.notifications.actionEmails: false`.
 - **SMTP:** `SMTP_HOST`, `SMTP_PORT` (587 STARTTLS; 465 implicit TLS; override with `SMTP_SECURE`),
   `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` (required; defaults to `SMTP_USER` if that is an address).
 

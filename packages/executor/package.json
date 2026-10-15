@@ -14,10 +14,12 @@
     "@ai-workforce/llm": "^0.0.1",
     "@ai-workforce/monitoring": "^0.0.1",
     "@ai-workforce/tools": "^0.0.1",
+    "nodemailer": "^10.0.10",
     "zod": "^3.22.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "eslint": "^8.57.0"
+    "@types/nodemailer": "^7.0.12",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.0"
   }
 }

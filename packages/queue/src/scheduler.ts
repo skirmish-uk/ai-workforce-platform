@@ -1,7 +1,7 @@
 import { CronExpressionParser } from 'cron-parser'
 import { prisma } from '@ai-workforce/db'
 import type { AgentStatus, Prisma, Schedule } from '@prisma/client'
-import { expireStaleApprovals, findDueManagerReviews, findPendingRevisionIds, resolveAgentContract, watchPromotedRevisions } from '@ai-workforce/executor'
+import { expireStaleApprovals, findDueManagerReviews, notifyPendingApprovals, findPendingRevisionIds, resolveAgentContract, watchPromotedRevisions } from '@ai-workforce/executor'
 import { agentRunQueue, enqueueRevision, type AgentRunJobData } from './queues'
 
 const POLL_INTERVAL_MS = 60_000
@@ -140,6 +140,9 @@ export function startScheduler(intervalMs = POLL_INTERVAL_MS): NodeJS.Timeout {
   return setInterval(() => {
     dispatchDueSchedules().catch((error) => console.error('Scheduler tick failed:', error))
     expireStaleApprovals().catch((error) => console.error('Approval expiry sweep failed:', error))
+    notifyPendingApprovals()
+      .then((r) => r.approvals && console.log(`Approval emails: ${r.approvals} new approval(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
+      .catch((error) => console.error('Approval notification sweep failed:', error))
     dispatchRevisions().catch((error) => console.error('Revision dispatch failed:', error))
     watchPromotedRevisions().catch((error) => console.error('Revision watch failed:', error))
     // Checking every tenant's metrics is heavier than the rest of the tick: every 10 minutes is enough.

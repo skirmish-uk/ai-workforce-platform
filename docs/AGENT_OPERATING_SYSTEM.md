@@ -157,6 +157,29 @@ the phase history (a plan summary, not chain-of-thought). All audit payloads are
    records `EXECUTED`/`EXECUTION_FAILED`, then resumes the WorkflowRun (if any) from its checkpoint.
 4. Reject → workflow `CANCELLED`. Expiry → `EXPIRED` (swept every scheduler tick), workflow `FAILED`.
 
+**Approval emails** (`packages/executor/src/notifications/`). Every scheduler tick (60 s),
+`notifyPendingApprovals()` claims new PENDING approvals (`Approval.notifiedAt`, set once, so nothing
+is announced twice) and emails the people who can decide them. That covers all three kinds: tool calls,
+workflow approval steps and agent revisions.
+- **Recipients:** tenant users whose role passes `canApprove` for the level (customer admins for
+  `CUSTOMER_APPROVAL`; platform admins/operators for `OPERATOR_APPROVAL`), the agent's
+  `ApprovalPolicy.notifyEmails` for that action (or `*`), and
+  `Tenant.settings.notifications.approvalRecipients` (customer-level only).
+- **Grouping:** one email per recipient per tick, listing every new approval for that tenant.
+- **Content:** agent, action, target, the model's reason (redacted, 300 characters), risk class,
+  expiry in the tenant's time zone, a Sandbox note, and a link to `/dashboard/approvals` (base URL
+  `APP_URL`, falling back to `NEXTAUTH_URL`). The email never contains the material content (it may be
+  customer data) and has no approve-by-email link: deciding always needs a signed-in user.
+- **When nothing is sent:**
+  - `SMTP_HOST` unset: email is off, recorded as skipped along with who would have been emailed.
+  - The tenant sets `settings.notifications.approvalEmails: false`.
+  - The address is on a reserved domain (`.local`, `.test`, `example.com`…); the demo users live there.
+  - The approval is older than 24 h when first seen, or already expired.
+- **Audit:** `APPROVAL_NOTIFICATION_SENT` / `_SKIPPED` / `_FAILED` on the Approval. A failed send is
+  audited, not retried; the dashboard still lists the approval.
+- **SMTP:** `SMTP_HOST`, `SMTP_PORT` (587 STARTTLS; 465 implicit TLS; override with `SMTP_SECURE`),
+  `SMTP_USER`, `SMTP_PASSWORD`, `EMAIL_FROM` (required; defaults to `SMTP_USER` if that is an address).
+
 Workflow resume: completed leaf steps are checkpointed in `WorkflowRun.output.steps` and skipped; the
 paused agent step re-runs with a platform note describing the executed approved action (and the
 idempotency guard suppresses a repeat). Duplicate/late workflow jobs on finished runs are no-ops.

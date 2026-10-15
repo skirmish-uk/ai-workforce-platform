@@ -13,6 +13,8 @@ x-app: &app
   environment:
     DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}@postgres:5432/ai_workforce?schema=public
     REDIS_URL: redis://redis:6379
+    # Links in approval emails sent by the worker.
+    NEXTAUTH_URL: https://${DOMAIN:?set DOMAIN in .env.production}
   networks: [internal]
 
 services:

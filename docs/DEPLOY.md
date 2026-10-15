@@ -37,6 +37,10 @@ Copy the new code to the server (git pull or rsync), then `scripts/demo-deploy.s
 
 `SITE_PASSWORD` puts HTTP Basic auth in front of the whole app (`apps/web/src/middleware.ts`). Only `/api/health` and the icons stay open. Keep it set on any public deployment: the demo logins are public in the repo and agents spend real API credit.
 
+## Approval emails
+
+Off until `SMTP_HOST` and `EMAIL_FROM` are set in `.env.production` (any SMTP provider: SendGrid, Postmark, SES, Zoho…). Then run `scripts/demo-deploy.sh restart`. The worker emails approvers within a minute of an agent asking. The seeded demo users are `@demo-agency.local` and are never mailed. To receive the emails, give an admin user a real address, or add one to the tenant's `settings.notifications.approvalRecipients`. Details: `docs/AGENT_OPERATING_SYSTEM.md` §7.
+
 ## Cloudflare
 
 - **SSL/TLS mode: Full (strict)** once the Let's Encrypt certificate exists. Until then, use **Full**.

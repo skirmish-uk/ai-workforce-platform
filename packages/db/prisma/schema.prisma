@@ -430,6 +430,9 @@ model Approval {
   /// Agent + run that requested it. Lets ad-hoc and scheduled runs (no WorkflowRun) persist approvals.
   agentId       String?
   runId         String?
+  /// When the approvers were emailed (or the email was skipped). Set once by the worker's
+  /// notification sweep, so an approval is never announced twice (packages/executor/src/notifications).
+  notifiedAt    DateTime?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 

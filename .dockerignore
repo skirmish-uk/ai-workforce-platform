@@ -1,0 +1,16 @@
+# Never bake secrets or local state into the image: env comes from compose (env_file).
+**/.env
+**/.env.*
+!.env.example
+**/node_modules
+**/.next
+**/.turbo
+.git
+graft
+logs
+opencode
+.claude_session
+.ignore
+rag_agent_transcript.txt
+compose.proxy-draft.yml
+**/*.log

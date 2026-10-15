@@ -1,0 +1,84 @@
+# Production demo deployment behind the host's nginx-proxy (docs/DEPLOY.md).
+#   docker compose -f compose.prod.yml up -d --build
+# No ports are published: nginx-proxy reaches `web` over the external `rproxy` network using
+# the VIRTUAL_* variables, and acme-companion issues the certificate (LETSENCRYPT_HOST).
+# Postgres, Redis and the worker are only on the private `internal` network.
+# App configuration and secrets: .env.production (not in git; see .env.production.example).
+
+x-app: &app
+  build: .
+  image: ai-workforce-demo:latest
+  restart: unless-stopped
+  env_file: .env.production
+  environment:
+    DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}@postgres:5432/ai_workforce?schema=public
+    REDIS_URL: redis://redis:6379
+  networks: [internal]
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ai_workforce
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+    volumes: [postgres:/var/lib/postgresql/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ai_workforce"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis:/data]
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # One-off on every `up`: apply the schema (non-destructive; fails rather than drop data) and
+  # run the idempotent seed, which never overwrites agents a revision has changed.
+  setup:
+    <<: *app
+    restart: "no"
+    command: ["sh", "-c", "cd packages/db && npx prisma db push --skip-generate && npx tsx prisma/seed.ts"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  web:
+    <<: *app
+    command: ["npx", "next", "start", "apps/web", "-p", "3000"]
+    environment:
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ai_workforce?schema=public
+      REDIS_URL: redis://redis:6379
+      VIRTUAL_HOST: ${DOMAIN:?set DOMAIN in .env.production},www.${DOMAIN}
+      LETSENCRYPT_HOST: ${DOMAIN},www.${DOMAIN}
+      VIRTUAL_PORT: "3000"
+      NEXTAUTH_URL: https://${DOMAIN}
+    networks: [internal, rproxy]
+    depends_on:
+      setup: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+  worker:
+    <<: *app
+    command: ["npx", "tsx", "packages/queue/src/start-workers.ts"]
+    depends_on:
+      setup: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+
+volumes:
+  postgres:
+  redis:
+
+networks:
+  internal:
+  rproxy:
+    external: true

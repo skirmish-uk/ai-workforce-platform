@@ -303,6 +303,9 @@ npm run test      # Test all packages
 
 `npm run build` is clean (`next build` + all workspace packages). No known build issues.
 
+### Persistent demo (Docker, behind nginx-proxy)
+`Dockerfile` + `compose.prod.yml` + `scripts/demo-deploy.sh up` (full write-up: `docs/DEPLOY.md`). No host ports: `web` joins the external `rproxy` network with `VIRTUAL_HOST`/`LETSENCRYPT_HOST`; Postgres/Redis/worker stay on a private network. Config in `.env.production` (template `.env.production.example`); `SITE_PASSWORD` enables the site-wide Basic auth in `apps/web/src/middleware.ts`.
+
 ### Sharing a demo externally (ngrok)
 Share the **production** build, not `next dev` (dev compiles each route on first visit: 2.5–3 s, and ships unminified JS; production shows every dashboard page's data in about 0.3–0.6 s). Always put a password on the tunnel: the demo logins are public in this repo and the app runs on real API keys.
 ```bash

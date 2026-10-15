@@ -74,13 +74,13 @@ function openaiClient(deps: SpeechDeps): Pick<OpenAI, 'audio'> {
 }
 
 export function sttProvider(env: Record<string, string | undefined> = process.env): SttProvider {
-  const value = (env.SPEECH_STT_PROVIDER ?? 'openai').toLowerCase()
+  const value = (env.SPEECH_STT_PROVIDER || 'openai').toLowerCase()
   if (value !== 'openai') throw new LLMConfigError(`Unsupported SPEECH_STT_PROVIDER "${value}". Supported: openai.`)
   return value
 }
 
 export function ttsProvider(env: Record<string, string | undefined> = process.env): TtsProvider {
-  const value = (env.SPEECH_TTS_PROVIDER ?? 'openai').toLowerCase()
+  const value = (env.SPEECH_TTS_PROVIDER || 'openai').toLowerCase()
   if (value !== 'openai' && value !== 'cartesia') throw new LLMConfigError(`Unsupported SPEECH_TTS_PROVIDER "${value}". Supported: openai, cartesia.`)
   return value
 }

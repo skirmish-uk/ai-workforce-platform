@@ -7,6 +7,7 @@ import {
   synthesizeSpeech,
   toSpeakableText,
   transcribeAudio,
+  sttProvider,
   ttsProvider,
 } from './speech'
 import { LLMConfigError } from './types'
@@ -89,4 +90,9 @@ test('speakable text drops markdown and is capped at a sentence boundary', () =>
   const capped = toSpeakableText(long)
   assert.ok(capped.length <= MAX_TTS_CHARS)
   assert.ok(capped.endsWith('.'))
+})
+
+test('an empty provider variable means the default (compose env files often leave them blank)', () => {
+  assert.equal(ttsProvider({ SPEECH_TTS_PROVIDER: '' }), 'openai')
+  assert.equal(sttProvider({ SPEECH_STT_PROVIDER: '' }), 'openai')
 })

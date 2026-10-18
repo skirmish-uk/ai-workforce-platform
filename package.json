@@ -15,7 +15,8 @@
     "db:push": "turbo run db:push",
     "db:migrate": "turbo run db:migrate",
     "db:studio": "turbo run db:studio",
-    "demo:reset": "tsx scripts/reset-demo.ts"
+    "demo:reset": "tsx scripts/reset-demo.ts",
+    "demo:stage-repair": "tsx scripts/stage-repair.ts"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",

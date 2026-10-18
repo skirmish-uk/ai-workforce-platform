@@ -149,7 +149,28 @@ curl -b demo_cookies.txt -X POST http://127.0.0.1:3000/api/agents \
 | Iris - Inbox Triage | recommend: reports categories and labels, changes nothing | "Triage my unread inbox" |
 | Casey - CRM Hygiene | recommend: reports problems and fixes, changes nothing | "Run a CRM hygiene check" (finds the duplicate Tom Lee record) |
 
-All three are also reachable through Morgan's "Ask the team". Their test suites (4, 3 and 3 cases) passed against `claude-haiku-5-5` on 13 Oct 2026.
+All three are also reachable through Morgan's "Ask the team". Their test suites (4, 3 and 3 cases) passed against `claude-haiku-5-5` on 13 Oct 2026, and again on 18 Oct (`npx tsx scripts/run-evals.ts --all`).
+
+**Ava** (client questions, voice) speaks with Cartesia's Australian "Bronte" voice and runs on `claude-haiku-5-5`. Besides answering from the documents she can check the calendar's free time and offer slots ("Tuesday at 10am or Wednesday at 2pm"); she never books, and says a person will confirm. Try in the Talk panel: "What are your opening hours?", "Could I come in for a chat this week?", "How much is the Growth package?".
+
+### Self-repair (staged)
+
+**Jordan - Website Enquiries** carries a deliberate flaw: its playbook predates the agency's rule that first replies never quote prices, so every draft reply lists the price list. To stage it, at least 10 minutes before the moment and with the worker running:
+
+```bash
+npm run demo:reset           # puts Jordan's flaw back (also clears earlier rehearsals)
+npm run demo:stage-repair    # Jordan answers 3 enquiries; the admin rejects each draft:
+                             # "We don't quote prices in a first reply..."   (~$0.002)
+# on the server: scripts/demo-deploy.sh reset-demo && scripts/demo-deploy.sh stage-repair
+```
+
+Three rejected approvals out of three crosses the review threshold. On the next 10-minute check the scheduler starts Morgan's automatic repair review; to start it on cue instead, click **Review the team now** on the Team page. Then show:
+1. Team page: Jordan "needs attention", Morgan's report.
+2. Improvements page: Morgan's proposed playbook change, with a new test case that reproduces the rejected drafts, the evaluation results and the replay, then promotion as Jordan v2.
+3. Ask Jordan to answer a new enquiry: the draft offers a call and has no prices.
+4. Roll back on the Improvements page (one click), and Jordan is v1 again.
+
+The model can take a different path (for example fix a different detail, or ask a person first), so keep a recording of a good rehearsal as a fallback.
 
 ---
 
@@ -165,7 +186,7 @@ npm run demo:reset -- --full    # delete the demo tenant and reseed from scratch
                                 # knowledge re-embedded if OPENAI_API_KEY is set)
 ```
 
-It only touches the `demo-agency` tenant and refuses to run against a non-local database. Restart the worker afterwards if it was running. Clearing the audit trail also resets the demo tenant's spend toward its cost cap.
+It only touches the `demo-agency` tenant and refuses to run against a non-local database. Promoted upgrades are kept, except Jordan's: Jordan always goes back to the flawed version 1 so the self-repair moment can be shown again. Restart the worker afterwards if it was running. Clearing the audit trail also resets the demo tenant's spend toward its cost cap.
 
 ---
 

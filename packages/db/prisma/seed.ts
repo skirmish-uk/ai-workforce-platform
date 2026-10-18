@@ -197,6 +197,8 @@ const ASSISTANT_VOICE = { enabled: true, greeting: "Hi, I'm Ava, Demo Marketing 
 
 /** Haiku 5.5: same 5/5 suite result as Haiku 4.5 on 18 Oct at about a tenth of the cost, and its 512-token cache minimum covers Ava's prompt. */
 const ASSISTANT_MODEL = 'claude-haiku-5-5'
+/** Room for Haiku 5.5's thinking before the answer: at 600 tokens a hard question could use it all and leave no reply. Answer length is set by the prompt. */
+const ASSISTANT_MODEL_CONFIG = { maxTokens: 2048 }
 
 const ASSISTANT_PROMPT = `You are Ava, the AI assistant for Demo Marketing Agency. You answer questions from prospects and clients.
 
@@ -248,6 +250,8 @@ Each review:
 5. Check earlier proposals with platform__get_revision and learn from failed ones.
 
 You cannot apply changes: the platform evaluates every proposal, promotes it only if it does at least as well as the live agent, and asks a human for anything that adds risk. Never try to work around a refused proposal; if a limit blocks a real need, escalate.
+
+Some problems need a person (a broken connection, a policy decision, a fault you cannot fix with a revision). platform__escalate ends your run, so deal with every agent you can first and call it at most once, last, listing everything a person must handle.
 
 Finish with a short report: what you reviewed, what you proposed and why, and what you chose not to change.
 
@@ -584,7 +588,7 @@ Guidelines:
   const assistant = await prisma.agent.upsert({
     where: { id: 'demo-assistant-1' },
     update: (await seedOwned('demo-assistant-1'))
-      ? { config: { contract: ASSISTANT_CONTRACT, voice: ASSISTANT_VOICE }, systemPrompt: ASSISTANT_PROMPT, modelName: ASSISTANT_MODEL, modelConfig: { maxTokens: 600 } }
+      ? { config: { contract: ASSISTANT_CONTRACT, voice: ASSISTANT_VOICE }, systemPrompt: ASSISTANT_PROMPT, modelName: ASSISTANT_MODEL, modelConfig: ASSISTANT_MODEL_CONFIG }
       : {},
     create: {
       id: 'demo-assistant-1',
@@ -594,7 +598,7 @@ Guidelines:
       systemPrompt: ASSISTANT_PROMPT,
       modelProvider: 'anthropic',
       modelName: ASSISTANT_MODEL,
-      modelConfig: { maxTokens: 600 },
+      modelConfig: ASSISTANT_MODEL_CONFIG,
       status: 'DRAFT',
       tenantId: demoTenant.id,
       config: { contract: ASSISTANT_CONTRACT, voice: ASSISTANT_VOICE },

@@ -10,7 +10,9 @@
  * trail, approvals, workflow runs, open/failed revisions, sandbox candidates, queued jobs, and
  * anything created during the demo (agents, workflows, documents, users without a "demo-"
  * seed id). Promoted revisions stay, so Sarah keeps her current version and playbook and the
- * Improvements page keeps its history. Then the seed runs to restore anything missing.
+ * Improvements page keeps its history. The exception is Jordan, whose flaw is staged for the
+ * self-repair moment: Jordan always goes back to the flawed version 1. Then the seed runs to
+ * restore anything missing.
  *
  * --full deletes the whole demo tenant (and its playbooks), reseeds, and re-embeds the
  * knowledge documents when OPENAI_API_KEY is set. Agents go back to version 1, so upgrades
@@ -30,6 +32,7 @@ for (const [key, value] of Object.entries(loaded.parsed ?? {})) {
 }
 
 import { prisma } from '@ai-workforce/db'
+import { restoreStagedFlaw } from '../packages/db/prisma/seed-showcase'
 
 const TENANT_SLUG = 'demo-agency'
 const SEEDED_USERS = ['admin@demo-agency.local', 'staff@demo-agency.local']
@@ -156,6 +159,9 @@ async function main(): Promise<void> {
       const settings = { ...((tenant.settings ?? {}) as Record<string, unknown>) }
       delete settings.killSwitch
       await prisma.tenant.update({ where: { id: tenantId }, data: { settings: settings as object } })
+      // Jordan's flaw is the self-repair moment: undo Morgan's fix so it can be shown again.
+      const restored = await restoreStagedFlaw(prisma, tenantId)
+      console.log(`  Jordan's staged flaw restored: ${restored.revisions} revision(s), ${restored.playbookVersions} playbook version(s) removed`)
     }
     console.log(`  kept: ${keptAgents.length} agent(s) at their current versions, ${revisions.length - removableRevisions.length} promoted/rolled-back revision(s)`)
   }

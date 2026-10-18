@@ -126,6 +126,11 @@ Each (problem, agent) pair fires at most once per 24 h (`MANAGER_REVIEW_TRIGGERE
 - what's waiting for a person;
 - recent manager activity: automatic reviews, proposals, promotions, rollbacks.
 
+**Lessons from the first staged self-repair (18 Oct).** Found by rehearsing Jordan's staged flaw (DEMO.md):
+- A sandbox candidate now starts with the live agent's knowledge documents and its non-spec settings (voice, for example). Before, an agent that answers from documents was tested blind and failed.
+- A proposal that only adds test cases is refused at proposal time, with how to send a new playbook version. Morgan had described a playbook fix but sent only the new case. The tool description now says how to edit a playbook, and that `toolInputsNotContain` checks a drafted email while `outputContains` checks the final message.
+- `platform__escalate` ends the manager's run. Its prompt and the automatic-review input now say to deal with every agent first and escalate once, last. Before, one unfixable item stopped a combined review before it reached the fixable one.
+
 ## 5. Manager tools
 
 These are offered only when the tenant's `selfManagement.enabled` is true and the agent's contract has `management.enabled`. There is deliberately **no** tool to promote, approve, edit tenant settings, touch kill switches or change billing.

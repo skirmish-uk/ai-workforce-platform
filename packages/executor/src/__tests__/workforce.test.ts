@@ -65,6 +65,27 @@ function propose(w: Awaited<ReturnType<typeof workforce>>, over: Partial<Paramet
 const passingLLM = (n = 10) => scriptedLLM(Array.from({ length: n }, () => text('Done: checked for duplicates and summarised.')))
 
 describe('revision pipeline', () => {
+  test('an update that only adds test cases is refused, with how to change a playbook', async () => {
+    const w = await workforce()
+    await assert.rejects(
+      propose(w, { changes: {}, rationale: 'Drafts were rejected for quoting prices; stop quoting prices in first replies.' }),
+      (e: RevisionError) => e.code === 'INVALID' && /changes nothing/.test(e.message) && e.issues.some((i) => /changes\.skills/.test(i))
+    )
+    assert.equal(await prisma.agentRevision.count({ where: { tenantId: w.tenantId } }), 0)
+  })
+
+  test("the candidate is tested with the live agent's knowledge documents", async () => {
+    const w = await workforce()
+    const doc = await prisma.knowledgeDocument.create({ data: { title: 'Office notes', content: 'Visitor parking is on level B2 of the building.', contentType: 'text/plain', tenantId: w.tenantId } })
+    await prisma.agentKnowledgeSource.create({ data: { agentId: w.agentId, documentId: doc.id, priority: 1 } })
+    const { revisionId } = await propose(w)
+    const llm = passingLLM()
+    const outcome = await processRevision(revisionId, { deps: deps(llm) })
+    assert.equal(outcome.status, 'PROMOTED', outcome.error)
+    assert.ok(llm.calls.length > 0)
+    for (const call of llm.calls) assert.match(JSON.stringify(call.params.system), /level B2/, 'every candidate run saw the document')
+  })
+
   test('a low-risk change that passes evaluation is promoted automatically as a new version', async () => {
     const w = await workforce()
     const { revisionId, riskIncreases } = await propose(w)

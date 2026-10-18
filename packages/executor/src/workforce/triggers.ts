@@ -74,7 +74,8 @@ export function managerReviewInput(triggers: ManagerTrigger[]): string {
     'Automatic repair review. The platform detected these problems in the last 24 hours:',
     ...triggers.map((t, i) => `${i + 1}. ${t.agentName} (${t.agentId}): ${t.detail}`),
     '',
-    'For each one, inspect the agent and its problem runs. Propose a fix only if the evidence supports it, with an evaluation case that reproduces the problem. If the cause is a connection, a policy decision or anything you cannot fix with a revision, escalate it to a person. Finish with a short report of what you found and did for each item.',
+    'For each one, inspect the agent and its problem runs. Propose a fix only if the evidence supports it, with an evaluation case that reproduces the problem. If the cause is a connection, a policy decision or anything you cannot fix with a revision, it needs a person.',
+    'Work through every item before handing anything over: platform__escalate ends your run, so call it at most once, last, naming every item a person must handle. If nothing needs a person, finish with a short report of what you found and did for each item.',
   ].join('\n')
 }
 

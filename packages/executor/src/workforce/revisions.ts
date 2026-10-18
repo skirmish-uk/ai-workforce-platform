@@ -163,6 +163,20 @@ export interface ProposeRevisionParams {
   now?: Date
 }
 
+/** JSON with sorted keys, so two specs built in different orders compare equal. */
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort().filter((k) => (value as Record<string, unknown>)[k] !== undefined).map((k) => `${JSON.stringify(k)}:${canonical((value as Record<string, unknown>)[k])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+/** True when two specs differ at most in their evaluation cases. */
+export function sameBehaviour(a: AgentSpec, b: AgentSpec): boolean {
+  return canonical({ ...a, evaluationCases: undefined }) === canonical({ ...b, evaluationCases: undefined })
+}
+
 export async function proposeRevision(params: ProposeRevisionParams): Promise<{ revisionId: string; riskIncreases: string[]; tools: string[] }> {
   const now = params.now ?? new Date()
   const state = await loadTenantState(params.tenantId)
@@ -218,6 +232,16 @@ export async function proposeRevision(params: ProposeRevisionParams): Promise<{ 
       if (error instanceof SpecError) throw new RevisionError(error.message, 'INVALID', error.issues)
       throw error
     }
+  }
+
+  // An update that only adds test cases can't fix anything: the candidate behaves exactly like the
+  // live agent (on 18 Oct the manager described a playbook fix but sent only the new case, so the
+  // unchanged agent failed it). Refuse it with how to change a playbook, so the manager can correct it.
+  if (params.changeType === 'update' && current && candidate && sameBehaviour(current.spec, candidate.spec)) {
+    throw new RevisionError('Proposal changes nothing about how the agent behaves', 'INVALID', [
+      'Only evaluation cases were added; the agent, its prompt and its playbooks are unchanged, so the new case would fail on the candidate exactly as it does live.',
+      'To change a playbook\'s instructions, put a new version in changes.skills: [{"create": {"name": "<same name>", "version": "<higher, e.g. 1.1.0>", "description", "purpose", "instructions": "<the full new text>", "requiredTools", "constraints", "evaluationCases"}}], and keep the agent\'s other playbooks as {"skillId"}.',
+    ])
   }
 
   const check = checkRevisionInvariants({
@@ -418,6 +442,17 @@ export async function processRevision(revisionId: string, options: { deps?: RunA
           tenantId: rev.tenantId,
         },
       })
+      if (rev.agentId) {
+        // The candidate must know what the live agent knows: its knowledge documents and the
+        // settings outside the spec (voice, for example). Without them an agent that answers
+        // from documents is tested blind and fails (seen 18 Oct: "the price list isn't in my
+        // reference knowledge"). applySpec below then sets everything the revision changes.
+        const live = await tx.agent.findUnique({ where: { id: rev.agentId }, select: { config: true, knowledgeSources: { select: { documentId: true, priority: true } } } })
+        if (live?.knowledgeSources.length) {
+          await tx.agentKnowledgeSource.createMany({ data: live.knowledgeSources.map((k) => ({ agentId: agent.id, documentId: k.documentId, priority: k.priority })) })
+        }
+        if (live?.config && typeof live.config === 'object') await tx.agent.update({ where: { id: agent.id }, data: { config: live.config as Prisma.InputJsonValue } })
+      }
       await applySpec(tx, agent.id, materialized.spec, { incrementVersion: false })
       return { candidateId: agent.id, spec: materialized.spec, createdSkillIds: materialized.createdSkillIds }
     })

@@ -61,7 +61,9 @@ const MANAGER_TOOLS: LLMTool[] = [
       'no tools from integrations the tenant has not connected, no autonomy above the tenant ceiling, no removing evaluation cases, no changes to manager agents.',
       'changeType "update": send only the fields to change (contract keys are replaced whole). "create": send name, role, mission, systemPrompt, contract and skills.',
       'Skills: [{"skillId": "<existing>"}] or [{"create": {name, version, description, purpose, instructions, requiredTools, constraints, evaluationCases}}].',
-      'Each evaluation case: {"name", "category", "input", "expect": {"status"?, "toolsRequested"?, "toolsNotExecuted"?, "outputContains"?, "outputNotContains"?}}.',
+      'To change a playbook\'s instructions, send changes.skills with a new version of it: {"create": {...}} with the same name, a higher version (e.g. 1.0.0 -> 1.1.0) and the full new instructions, plus the agent\'s other playbooks as {"skillId"}. Adding evaluation cases alone changes nothing and is refused.',
+      'Each evaluation case: {"name", "category", "input", "expect": {"status"?, "toolsRequested"?, "toolsNotExecuted"?, "outputContains"?, "outputNotContains"?, "toolInputsNotContain"?}}.',
+      'outputContains/outputNotContains check the agent\'s final message; toolInputsNotContain checks what it wrote into tool calls (for example the body of an email it drafted). An approval-gated email waits for approval, so its run ends "approval_required".',
       'Add a case that reproduces the problem you are fixing.',
     ].join(' '),
     inputSchema: {

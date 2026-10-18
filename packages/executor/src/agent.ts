@@ -24,6 +24,7 @@ import { checkSpendCap } from './spend-cap'
 import { runAuthorizedTool, type ToolExecutorFn } from './tool-runner'
 import { wrapUntrusted } from './untrusted'
 import { detectQualitySignals, type QualitySignal } from './quality'
+import { readVoiceConfig } from './voice'
 import { readSelfManagementPolicy } from './workforce/policy'
 import { executeWorkforceTool, workforceToolsFor, WORKFORCE_READ_TOOLS } from './workforce/tools'
 
@@ -163,6 +164,9 @@ const CLARIFY_TOOL: LLMTool = {
     required: ['questions'],
   },
 }
+
+/** Upper bound on a hand-off reason (secrets are still redacted); 1,000 cut real findings in half. */
+const ESCALATION_REASON_MAX_CHARS = 6000
 
 const ESCALATE_TOOL: LLMTool = {
   name: 'platform__escalate',
@@ -583,7 +587,8 @@ class AgentRun {
           const reason = typeof call.input.reason === 'string' && call.input.reason.trim() ? call.input.reason : 'Agent requested human help'
           const severity = typeof call.input.severity === 'string' ? call.input.severity : 'medium'
           return this.finish('escalated', {
-            escalation: { reason: redactString(reason, 1000), severity, destination: this.contract.escalation.destination },
+            // The hand-off is what the person acts on: keep a full findings list (Casey's sweeps run to ~2,000 chars).
+            escalation: { reason: redactString(reason, ESCALATION_REASON_MAX_CHARS), severity, destination: this.contract.escalation.destination },
             output: response.content,
           })
         }
@@ -847,7 +852,9 @@ class AgentRun {
       this.contract.outputs
     )
     for (const r of dod.results) this.note(`${r.passed ? 'PASS' : 'FAIL'} ${r.check.type}: ${r.detail}`)
-    this.qualitySignals = detectQualitySignals(output, this.toolCalls)
+    // Voice agents hold conversations: ending a turn with a question is how they work.
+    const conversational = this.trigger === 'voice' || readVoiceConfig(this.agent.config).voice.enabled
+    this.qualitySignals = detectQualitySignals(output, this.toolCalls, { conversational })
     for (const signal of this.qualitySignals) this.note(`quality signal: ${signal}`)
 
     if (dod.passed) return this.finish('completed', { output, dod })

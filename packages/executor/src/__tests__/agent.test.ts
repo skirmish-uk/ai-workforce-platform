@@ -82,6 +82,11 @@ describe('lifecycle and terminal states', () => {
     assert.equal(esc.status, 'escalated')
     assert.deepEqual(esc.escalation, { reason: 'Pricing is out of scope', severity: 'high', destination: 'sales-ops@example.test' })
     assert.equal((await auditRows(f.tenantId, 'AGENT_RUN_ESCALATED')).length, 1)
+
+    // A long findings list reaches the person in full (it used to be cut at 1,000 characters).
+    const findings = Array.from({ length: 30 }, (_, i) => `Finding ${i + 1}: contact ${900 + i} needs a person to review its company and phone.`).join('\n')
+    const long = await runAgent(f.agentId, 'Sweep the CRM', { deps: deps(scriptedLLM([toolUse([{ name: 'platform__escalate', input: { reason: findings } }])])) })
+    assert.equal(long.escalation?.reason, findings)
   })
 
   test('a final answer that fails the DoD is reported as partial, not completed', async () => {

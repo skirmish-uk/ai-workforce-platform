@@ -38,17 +38,58 @@ function daysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString()
 }
 
-function nextBusinessDay(from = new Date()): Date {
-  const d = new Date(from)
-  d.setDate(d.getDate() + 1)
-  while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1)
-  return d
+/** The demo tenant's time zone: sandbox calendar times are given in it unless the request names an offset. */
+const SANDBOX_TIME_ZONE = 'Australia/Sydney'
+
+/** "+11:00" for an ISO time with an offset ("Z" -> "+00:00"); null when it has none. */
+function offsetOf(iso: string): string | null {
+  const m = /([+-]\d{2}:\d{2}|Z)$/.exec(iso.trim())
+  return m ? (m[1] === 'Z' ? '+00:00' : m[1]) : null
 }
 
-function at(day: Date, hour: number, minute = 0): string {
-  const d = new Date(day)
-  d.setHours(hour, minute, 0, 0)
-  return d.toISOString()
+function zoneOffset(timeZone: string, at: Date): string {
+  const name = new Intl.DateTimeFormat('en-AU', { timeZone, timeZoneName: 'longOffset' }).formatToParts(at).find((p) => p.type === 'timeZoneName')?.value ?? 'GMT'
+  const m = /GMT([+-]\d{1,2})(?::(\d{2}))?/.exec(name)
+  if (!m) return '+00:00'
+  const sign = m[1].startsWith('-') ? '-' : '+'
+  return `${sign}${String(Math.abs(Number(m[1]))).padStart(2, '0')}:${m[2] ?? '00'}`
+}
+
+function offsetMinutes(offset: string): number {
+  const sign = offset.startsWith('-') ? -1 : 1
+  const [h, m] = offset.slice(1).split(':').map(Number)
+  return sign * (h * 60 + m)
+}
+
+/**
+ * The calendar as a business sees it: wall-clock days and times in one UTC offset, so "10am"
+ * means 10am where the business is, whatever time zone the server runs in. Starts from the
+ * request's timeMin when given (and in its offset), otherwise from now in Sydney time.
+ */
+class SandboxCalendar {
+  readonly offset: string
+  private readonly start: Date
+  constructor(timeMin?: string) {
+    const parsed = timeMin ? new Date(timeMin) : null
+    this.start = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date()
+    this.offset = (timeMin && offsetOf(timeMin)) || zoneOffset(SANDBOX_TIME_ZONE, this.start)
+  }
+  /** Business days (Mon–Fri) after the start date, as local calendar dates. */
+  businessDays(count: number): Array<{ y: number; m: number; d: number }> {
+    const local = new Date(this.start.getTime() + offsetMinutes(this.offset) * 60_000)
+    const days: Array<{ y: number; m: number; d: number }> = []
+    const cursor = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()))
+    while (days.length < count) {
+      cursor.setUTCDate(cursor.getUTCDate() + 1)
+      const dow = cursor.getUTCDay()
+      if (dow !== 0 && dow !== 6) days.push({ y: cursor.getUTCFullYear(), m: cursor.getUTCMonth() + 1, d: cursor.getUTCDate() })
+    }
+    return days
+  }
+  at(day: { y: number; m: number; d: number }, hour: number, minute = 0): string {
+    const p = (n: number) => String(n).padStart(2, '0')
+    return `${day.y}-${p(day.m)}-${p(day.d)}T${p(hour)}:${p(minute)}:00${this.offset}`
+  }
 }
 
 function matches(haystack: Record<string, unknown>, query: string): boolean {
@@ -112,12 +153,14 @@ export function sandboxExecute(toolName: string, input: unknown): Record<string,
       return message ? { sandbox: true, ...message, body: message.snippet, note: SANDBOX_NOTE } : { sandbox: true, error: 'Message not found', note: SANDBOX_NOTE }
     }
     case 'google-calendar__find_free_time': {
-      const day = nextBusinessDay()
-      return { sandbox: true, slots: [{ start: at(day, 10), end: at(day, 11) }, { start: at(day, 14), end: at(day, 15) }, { start: at(nextBusinessDay(day), 9, 30), end: at(nextBusinessDay(day), 10, 30) }], note: SANDBOX_NOTE }
+      const cal = new SandboxCalendar(str(args.timeMin))
+      const [first, second] = cal.businessDays(2)
+      return { sandbox: true, slots: [{ start: cal.at(first, 10), end: cal.at(first, 11) }, { start: cal.at(first, 14), end: cal.at(first, 15) }, { start: cal.at(second, 9, 30), end: cal.at(second, 10, 30) }], note: SANDBOX_NOTE }
     }
     case 'google-calendar__list_events': {
-      const day = nextBusinessDay()
-      return { sandbox: true, events: [{ id: 'e-301', summary: 'Team stand-up', start: at(day, 9), end: at(day, 9, 30) }, { id: 'e-302', summary: 'BrightStack content review', start: at(day, 11, 30), end: at(day, 12, 30) }], note: SANDBOX_NOTE }
+      const cal = new SandboxCalendar(str(args.timeMin))
+      const [first] = cal.businessDays(1)
+      return { sandbox: true, events: [{ id: 'e-301', summary: 'Team stand-up', start: cal.at(first, 9), end: cal.at(first, 9, 30) }, { id: 'e-302', summary: 'BrightStack content review', start: cal.at(first, 11, 30), end: cal.at(first, 12, 30) }], note: SANDBOX_NOTE }
     }
     case 'google-calendar__get_event':
       return { sandbox: true, id: str(args.eventId) || 'e-302', summary: 'BrightStack content review', note: SANDBOX_NOTE }

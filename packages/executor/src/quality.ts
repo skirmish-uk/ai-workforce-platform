@@ -28,8 +28,13 @@ function actedOnSomething(toolCalls: SignalToolCall[]): boolean {
   )
 }
 
-/** Detects signals on a run that finished as completed/partial (questions there should have used the clarification tool). */
-export function detectQualitySignals(output: string | null, toolCalls: SignalToolCall[]): QualitySignal[] {
+/**
+ * Detects signals on a run that finished as completed/partial (questions there should have used
+ * the clarification tool). A conversational agent (voice, or a chat with a client) ends turns
+ * with questions by design ("Which time suits you?"), so `conversational` skips that signal; the
+ * promised/claimed-action checks still apply.
+ */
+export function detectQualitySignals(output: string | null, toolCalls: SignalToolCall[], options: { conversational?: boolean } = {}): QualitySignal[] {
   const text = output ?? ''
   if (!text.trim()) return []
   const signals: QualitySignal[] = []
@@ -38,7 +43,7 @@ export function detectQualitySignals(output: string | null, toolCalls: SignalToo
     if (CLAIM.test(text)) signals.push('claimed_without_evidence')
   }
   // Ending on questions for the requester means the run is really waiting on an answer.
-  if (ASKS.test(text.trim().slice(-400))) signals.push('asked_in_text')
+  if (!options.conversational && ASKS.test(text.trim().slice(-400))) signals.push('asked_in_text')
   return signals
 }
 

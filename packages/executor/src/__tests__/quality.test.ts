@@ -7,6 +7,10 @@ test('flags runs that promise or claim actions they never took', () => {
   const read = [{ toolName: 'hubspot-crm__search_contacts', status: 'simulated' }]
   assert.deepEqual(detectQualitySignals("Maria fits our ICP. Now I'll draft a personalized follow-up email for your approval.", read), ['announced_without_action'])
   assert.deepEqual(detectQualitySignals('I have sent Maria a follow-up email.', read), ['claimed_without_evidence'])
+  // A conversational agent may end on a question; a promise it can't keep is still flagged.
+  assert.deepEqual(detectQualitySignals('I have Tuesday at 10am or Wednesday at 2pm. Which one suits you?', read, { conversational: true }), [])
+  assert.deepEqual(detectQualitySignals('I have Tuesday at 10am or Wednesday at 2pm. Which one suits you?', read), ['asked_in_text'])
+  assert.deepEqual(detectQualitySignals("I've booked you in for Tuesday at 10am. Anything else?", read, { conversational: true }), ['claimed_without_evidence'])
   assert.deepEqual(detectQualitySignals("I've updated the CRM and I will send a reply tomorrow.", []), ['announced_without_action', 'claimed_without_evidence'])
 })
 

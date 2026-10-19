@@ -469,12 +469,16 @@ Guidelines:
     { id: 'demo-perm-calendar-create', action: 'google-calendar__create_event', level: 'AUTOMATIC', conditions: { type: 'meeting' } },
     { id: 'demo-perm-file-delete', action: 'google-drive__delete_file', level: 'PROHIBITED', conditions: {} },
   ]
-  for (const permission of permissions) {
-    await prisma.agentPermission.upsert({
-      where: { id: permission.id },
-      update: { action: permission.action, level: permission.level, conditions: permission.conditions },
-      create: { ...permission, agentId: agent.id },
-    })
+  // Seed-owned like the rest of the definition: once a revision has changed Sarah, her permissions
+  // are the revision's (new rows), and re-adding these would duplicate every action.
+  if (await seedOwned(agent.id)) {
+    for (const permission of permissions) {
+      await prisma.agentPermission.upsert({
+        where: { id: permission.id },
+        update: { action: permission.action, level: permission.level, conditions: permission.conditions },
+        create: { ...permission, agentId: agent.id },
+      })
+    }
   }
 
   // Workforce Manager: reviews the other agents and proposes revisions through the revision

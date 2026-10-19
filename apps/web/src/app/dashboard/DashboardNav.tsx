@@ -111,7 +111,7 @@ export function DashboardNav({
           {/* Navigation */}
           <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto" aria-label="Main">
             {navigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'))
               return (
                 <Link
                   key={item.name}
@@ -130,7 +130,7 @@ export function DashboardNav({
               )
             })}
             {['PLATFORM_ADMIN', 'PLATFORM_OPERATOR'].includes(user?.role || '') && adminNavigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'))
               return (
                 <Link
                   key={item.name}

@@ -430,7 +430,7 @@ export default function DemoPage() {
         ref={(el) => { sectionRefs.current[1] = el }}
         className="min-h-screen flex items-center justify-center px-6 py-20 bg-neutral-50"
       >
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full min-w-0 max-w-5xl mx-auto">
           <SectionTitle
             eyebrow="The Problem"
             title="Every day, businesses lose time and money on repetitive work"
@@ -449,7 +449,7 @@ export default function DemoPage() {
         ref={(el) => { sectionRefs.current[2] = el }}
         className="min-h-screen flex items-center justify-center px-6 py-20"
       >
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full min-w-0 max-w-5xl mx-auto">
           <SectionTitle
             eyebrow="The Solution"
             title="Meet your AI Employee"
@@ -470,7 +470,7 @@ export default function DemoPage() {
         ref={(el) => { sectionRefs.current[3] = el }}
         className="min-h-screen flex items-center justify-center px-6 py-20 bg-neutral-50"
       >
-        <div className="max-w-6xl mx-auto">
+        <div className="w-full min-w-0 max-w-6xl mx-auto">
           <SectionTitle
             eyebrow="How It Works"
             title="5 simple steps to your AI employee"
@@ -542,7 +542,7 @@ export default function DemoPage() {
         ref={(el) => { sectionRefs.current[4] = el }}
         className="min-h-screen flex items-center justify-center px-6 py-20"
       >
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full min-w-0 max-w-5xl mx-auto">
           <SectionTitle
             eyebrow="Before & After"
             title="What changes when you hire an AI employee"
@@ -559,7 +559,7 @@ export default function DemoPage() {
         ref={(el) => { sectionRefs.current[5] = el }}
         className="min-h-screen flex items-center justify-center px-6 py-20 bg-neutral-50"
       >
-        <div className="max-w-6xl mx-auto">
+        <div className="w-full min-w-0 max-w-6xl mx-auto">
           <SectionTitle
             eyebrow="Live Demo"
             title="Your command centre"
@@ -576,7 +576,7 @@ export default function DemoPage() {
         ref={(el) => { sectionRefs.current[6] = el }}
         className="min-h-screen flex items-center justify-center px-6 py-20"
       >
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full min-w-0 max-w-5xl mx-auto">
           <SectionTitle
             eyebrow="Simple Pricing"
             title="Pick the plan that fits your team"
@@ -634,7 +634,7 @@ export default function DemoPage() {
         ref={(el) => { sectionRefs.current[7] = el }}
         className="min-h-screen flex items-center justify-center px-6 py-20 bg-neutral-50"
       >
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full min-w-0 max-w-5xl mx-auto">
           <SectionTitle
             eyebrow="Market Opportunity"
             title="Massive market, proven demand"

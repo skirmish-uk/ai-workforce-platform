@@ -50,7 +50,6 @@ export default function AgentsPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [loading, setLoading] = useState(true)
-  const [showCreateModal, setShowCreateModal] = useState(false)
 
   const fetchAgents = async () => {
     setLoading(true)
@@ -89,21 +88,23 @@ export default function AgentsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-50">Agents</h1>
           <p className="text-neutral-600 dark:text-neutral-400 mt-1">Manage your AI employees</p>
         </div>
         {canManage && (
-          <Button onClick={() => setShowCreateModal(true)}>
-            <Plus className="w-4 h-4 mr-2" />
-            Create Agent
-          </Button>
+          <Link href="/dashboard/agents/new">
+            <Button>
+              <Plus className="w-4 h-4 mr-2" />
+              Create Agent
+            </Button>
+          </Link>
         )}
       </div>
 
-      <form onSubmit={handleSearch} className="flex gap-4">
-        <div className="relative flex-1 max-w-md">
+      <form onSubmit={handleSearch} className="flex flex-wrap gap-4">
+        <div className="relative flex-1 min-w-[12rem] max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
           <input
             type="search"
@@ -133,15 +134,16 @@ export default function AgentsPage() {
         </div>
       ) : (
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-neutral-50 dark:bg-neutral-800/50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Agent</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Model</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Playbooks</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Created</th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider"><span className="sr-only">Actions</span></th>
+                <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Agent</th>
+                <th className="hidden xl:table-cell px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Model</th>
+                <th className="hidden sm:table-cell px-4 sm:px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Status</th>
+                <th className="hidden lg:table-cell px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Playbooks</th>
+                <th className="hidden 2xl:table-cell px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Created</th>
+                <th className="px-4 sm:px-6 py-3 text-right text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider"><span className="sr-only">Actions</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
@@ -158,39 +160,41 @@ export default function AgentsPage() {
                   return (
                     // The whole row opens the agent; the Open button is the keyboard-accessible way in.
                     <tr key={agent.id} onClick={open} className="group cursor-pointer hover:bg-primary-50/60 dark:hover:bg-primary-900/10 transition-colors">
-                      <td className="px-6 py-4">
-                        <div className="flex items-center gap-3">
+                      <td className="px-4 sm:px-6 py-4">
+                        <div className="flex items-center gap-3 min-w-[11rem]">
                           <span aria-hidden="true" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary-100 text-sm font-semibold text-primary-700 dark:bg-primary-900/40 dark:text-primary-300">
                             {agent.name.charAt(0)}
                           </span>
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
-                              <span className="whitespace-nowrap font-medium text-neutral-900 dark:text-neutral-50 group-hover:text-primary-700 dark:group-hover:text-primary-300">{agent.name}</span>
+                              <span className="font-medium text-neutral-900 dark:text-neutral-50 group-hover:text-primary-700 dark:group-hover:text-primary-300">{agent.name}</span>
                               {voice && <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><Mic className="w-3 h-3" aria-hidden="true" />Voice</span>}
                             </div>
                             <p className="text-xs text-neutral-500 dark:text-neutral-400">{agent.role}</p>
+                            {/* Status moves under the name when its column is hidden. */}
+                            <div className="sm:hidden mt-1"><Badge variant={statusColors[agent.status] || 'default'}>{agent.status.toLowerCase()}</Badge></div>
                           </div>
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-xs text-neutral-500 dark:text-neutral-400 font-mono break-all">
+                      <td className="hidden xl:table-cell px-6 py-4 text-xs text-neutral-500 dark:text-neutral-400 font-mono whitespace-nowrap">
                         {agent.modelName}
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="hidden sm:table-cell px-4 sm:px-6 py-4">
                         <Badge variant={statusColors[agent.status] || 'default'}>{agent.status.toLowerCase()}</Badge>
                       </td>
-                      <td className="px-6 py-4">
-                        <div className="flex flex-wrap gap-1">
+                      <td className="hidden lg:table-cell px-6 py-4">
+                        <div className="flex flex-wrap gap-1 max-w-[16rem]">
                           {agent.skills?.map((s, i) => (
                             <Badge key={i} variant="outline" className="text-xs">{s.skill.name.replace(/_/g, ' ')}</Badge>
                           ))}
                           {!agent.skills?.length && <span className="text-sm text-neutral-400">None</span>}
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400 whitespace-nowrap">
+                      <td className="hidden 2xl:table-cell px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400 whitespace-nowrap">
                         {formatDate(agent.createdAt)}
                       </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-4 sm:px-6 py-4 text-right">
+                        <div className="flex flex-wrap items-center justify-end gap-2" onClick={(e) => e.stopPropagation()}>
                           {voice && (
                             <Link href={`/dashboard/agents/${agent.id}`} className="inline-flex items-center gap-1.5 rounded-full border border-rose-200 dark:border-rose-800 px-3 py-1.5 text-xs font-medium text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-900/20 focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400">
                               <Mic className="w-3.5 h-3.5" aria-hidden="true" />Talk
@@ -207,9 +211,10 @@ export default function AgentsPage() {
               )}
             </tbody>
           </table>
+          </div>
 
           {pagination.totalPages > 1 && (
-            <div className="px-6 py-4 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
+            <div className="px-6 py-4 border-t border-neutral-200 dark:border-neutral-800 flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm text-neutral-600 dark:text-neutral-400">
                 Page {pagination.page} of {pagination.totalPages} ({pagination.total} total)
               </p>
@@ -236,35 +241,6 @@ export default function AgentsPage() {
         </div>
       )}
 
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-white dark:bg-neutral-900 rounded-xl p-6 w-full max-w-md mx-4">
-            <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50 mb-4">Create Agent</h2>
-            <form onSubmit={(e) => { e.preventDefault(); setShowCreateModal(false); }} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Name</label>
-                <input type="text" required className="w-full px-4 py-2.5 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Role</label>
-                <input type="text" required className="w-full px-4 py-2.5 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">Mission</label>
-                <textarea required rows={3} className="w-full px-4 py-2.5 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">System Prompt</label>
-                <textarea required rows={4} className="w-full px-4 py-2.5 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-primary-500" />
-              </div>
-              <div className="flex gap-3 pt-4">
-                <Button type="button" variant="outline" onClick={() => setShowCreateModal(false)} className="flex-1">Cancel</Button>
-                <Button type="submit" className="flex-1">Create Agent</Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

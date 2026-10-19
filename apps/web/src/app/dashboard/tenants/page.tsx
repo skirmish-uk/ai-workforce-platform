@@ -149,6 +149,7 @@ export default function TenantsPage() {
         </div>
       ) : (
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-neutral-50 dark:bg-neutral-800/50">
               <tr>
@@ -212,6 +213,7 @@ export default function TenantsPage() {
               )}
             </tbody>
           </table>
+          </div>
 
           {pagination.totalPages > 1 && (
             <div className="px-6 py-4 border-t border-neutral-200 dark:border-neutral-800 flex items-center justify-between">

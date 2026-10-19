@@ -244,17 +244,17 @@ export default function OnboardingPage() {
         <p className="text-neutral-600 dark:text-neutral-400 mt-2">Let&apos;s set up your AI employee in 5 steps</p>
       </div>
 
-      <div className="flex items-center justify-center gap-2">
+      <div className="flex items-center justify-center gap-1 sm:gap-2">
         {steps.map((step, i) => (
-          <div key={step.id} className="flex items-center gap-2">
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
+          <div key={step.id} className="flex items-center gap-1 sm:gap-2">
+            <div className={`w-8 h-8 sm:w-10 sm:h-10 shrink-0 rounded-full flex items-center justify-center text-sm font-medium transition-colors ${
               i + 1 < currentStep ? 'bg-green-600 text-white' :
               i + 1 === currentStep ? 'bg-primary-600 text-white' :
               'bg-neutral-200 dark:bg-neutral-700 text-neutral-500 dark:text-neutral-400'
             }`}>
               {i + 1 < currentStep ? <Check className="w-5 h-5" /> : step.id}
             </div>
-            {i < steps.length - 1 && <div className={`w-16 h-1 ${i + 1 < currentStep ? 'bg-green-600' : 'bg-neutral-200 dark:bg-neutral-700'}`} />}
+            {i < steps.length - 1 && <div className={`w-6 sm:w-16 h-1 ${i + 1 < currentStep ? 'bg-green-600' : 'bg-neutral-200 dark:bg-neutral-700'}`} />}
           </div>
         ))}
       </div>

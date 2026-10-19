@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { hasPermission, canAccessTenant } from '@ai-workforce/domain'
-import { resolveAgentContract } from '@ai-workforce/executor'
+import { resolveAgentContract, validateNewAgentVoice } from '@ai-workforce/executor'
 import { UserRole } from '@prisma/client'
 import { createAgentSchema, paginationSchema } from '@ai-workforce/domain'
 
@@ -87,6 +87,8 @@ export async function POST(request: NextRequest) {
     if (contractCheck.errors.length) {
       return NextResponse.json({ error: 'Invalid agent contract', details: contractCheck.errors }, { status: 400 })
     }
+    const voiceError = validateNewAgentVoice(validated.config)
+    if (voiceError) return NextResponse.json({ error: `Invalid voice settings: ${voiceError}` }, { status: 400 })
     if (validated.status === 'PRODUCTION' || validated.status === 'EVALUATING') {
       return NextResponse.json({ error: 'New agents start as DRAFT; deploy them via POST /api/agents/[id]/deploy' }, { status: 400 })
     }

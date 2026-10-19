@@ -95,3 +95,26 @@ export function cloneScript(speakerName: string, businessName: string): string[]
     'Have a great day, and thanks again for getting in touch.',
   ]
 }
+
+/** Cartesia's stock Australian voices offered when creating an agent (no consent record needed). */
+export const STOCK_VOICES = [
+  { id: '391f4c0a-f1a8-4c21-9aa2-7a07f0a4b0dc', name: 'Bronte', description: 'Australian, female: bright and trustworthy' },
+  { id: '12e85709-099c-480a-ba3e-875c41a9611a', name: 'Arlo', description: 'Australian, male: friendly, mid-toned' },
+  { id: '79d2cf27-444a-4c3a-9eed-2ad5cf795a3b', name: 'Fraser', description: 'Australian, male: bright and articulate' },
+] as const
+
+/**
+ * Checks the voice settings a new agent is created with. A cloned voice can't be set here:
+ * it only comes from the clone endpoint, which records the speaker's consent.
+ */
+export function validateNewAgentVoice(config: unknown): string | null {
+  const raw = config && typeof config === 'object' ? (config as Record<string, unknown>).voice : undefined
+  if (raw === undefined) return null
+  const parsed = voiceConfigSchema.safeParse(raw)
+  if (!parsed.success) return parsed.error.issues.map((i) => `voice.${i.path.join('.')}: ${i.message}`).join('; ')
+  if (parsed.data.clonedVoice || parsed.data.previous) return 'A cloned voice is added after the agent is created, with the speaker’s recorded consent (Use your own voice)'
+  if (parsed.data.provider === 'cartesia' && parsed.data.voiceId && !STOCK_VOICES.some((v) => v.id === parsed.data.voiceId)) {
+    return 'Choose one of the stock voices, or add your own voice after creating the agent'
+  }
+  return null
+}

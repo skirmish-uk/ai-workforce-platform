@@ -585,10 +585,13 @@ Guidelines:
       tenantId: demoTenant.id,
     },
   })
+  // A voice someone cloned in the dashboard (with their consent record) survives reseeding.
+  const existingVoice = ((await prisma.agent.findUnique({ where: { id: 'demo-assistant-1' }, select: { config: true } }))?.config as { voice?: { clonedVoice?: unknown } } | null)?.voice
+  const assistantVoice = existingVoice?.clonedVoice ? existingVoice : ASSISTANT_VOICE
   const assistant = await prisma.agent.upsert({
     where: { id: 'demo-assistant-1' },
     update: (await seedOwned('demo-assistant-1'))
-      ? { config: { contract: ASSISTANT_CONTRACT, voice: ASSISTANT_VOICE }, systemPrompt: ASSISTANT_PROMPT, modelName: ASSISTANT_MODEL, modelConfig: ASSISTANT_MODEL_CONFIG }
+      ? { config: { contract: ASSISTANT_CONTRACT, voice: assistantVoice }, systemPrompt: ASSISTANT_PROMPT, modelName: ASSISTANT_MODEL, modelConfig: ASSISTANT_MODEL_CONFIG }
       : {},
     create: {
       id: 'demo-assistant-1',

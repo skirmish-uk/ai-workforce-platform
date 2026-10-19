@@ -56,6 +56,18 @@ Rules enforced in code (an invalid config turns voice **off**):
 
 Agents meant for voice should answer in one to three plain sentences with no formatting. Ava's prompt and playbook say so, and `toSpeakableText()` also strips markdown and caps replies at 1,500 characters.
 
+## 2a. Using your own voice (cloning)
+
+On the agent page, under the Talk panel, **Use your own voice** (admins only; needs `CARTESIA_API_KEY`):
+1. Enter whose voice it is and tick the consent statement: the speaker agrees to their voice being copied by Cartesia and used by the business's AI assistant, which always says it's an AI.
+2. Read the on-screen script aloud, about 30–40 seconds. Its first line is a spoken consent statement with the speaker's name and the business, so the recording carries the consent too. Cartesia needs at least 10 seconds, and up to 60 seconds keeps the accent better. Use a quiet room and speak normally.
+3. Listen back, then **Create voice**. The browser converts the recording to 16-bit mono WAV (24 kHz) so every browser's format works and the server can check the length (10 s to 2 min). `POST /api/agents/[id]/voice/clone` sends it to Cartesia's instant clone (`POST /voices/clone`, private).
+4. The server switches the agent to the new voice (`voice.provider: cartesia`, `voice.voiceId`) and stores the consent record (`voice.clonedVoice`: name, date in the tenant's time zone, and who uploaded it). It remembers the previous voice (`voice.previous`), audits `VOICE_CLONED` and plays a sample greeting.
+
+**Remove this voice** (`DELETE …/voice/clone`) restores the previous voice, deletes the copy at Cartesia and audits `VOICE_CLONE_REMOVED`. Recording a new voice replaces the old copy, which is deleted at Cartesia too.
+
+The recording is not stored by the platform. Cartesia keeps the private voice until it is removed. Reseeding keeps a cloned voice (the seed doesn't overwrite a voice that has a consent record). Instant cloning needs a paid Cartesia plan (Pro or above).
+
 ## 3. Configuration
 
 | Variable | Default | Purpose |

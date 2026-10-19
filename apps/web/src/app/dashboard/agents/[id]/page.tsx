@@ -6,6 +6,7 @@ import { useParams } from 'next/navigation'
 import { ArrowLeft, CheckCircle2, CircleDashed, Loader2, Play, XCircle } from 'lucide-react'
 import { Badge, Button, formatDateTime } from '@ai-workforce/ui'
 import { VoicePanel } from './VoicePanel'
+import { VoiceClone } from './VoiceClone'
 
 interface AgentDetail {
   id: string
@@ -286,6 +287,7 @@ export default function AgentPage() {
 
       {/* Voice agents: the conversation sits at the top, so replies never need scrolling to. */}
       {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} />}
+      {agent?.config?.voice?.enabled && <VoiceClone agentId={id} agentName={agent.name} />}
 
       {agent && (
         <div className="grid gap-4 md:grid-cols-2">

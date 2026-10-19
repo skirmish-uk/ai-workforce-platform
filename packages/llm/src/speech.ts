@@ -168,3 +168,75 @@ export async function synthesizeSpeech(
   })
   return { audio: Buffer.from(await response.arrayBuffer()), mimeType: 'audio/mpeg', provider, model: OPENAI_TTS_MODEL, voice, characters: speakable.length }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Voice cloning (Cartesia instant clone). Used by the dashboard's "Use your own voice": the
+// caller must already hold the speaker's consent (Agent.config.voice.clonedVoice records it).
+// ---------------------------------------------------------------------------------------------
+
+/** Cartesia accepts clips up to 16 MB; about 10 s is the minimum, and up to 60 s keeps the accent better. */
+export const CLONE_MAX_BYTES = 16 * 1024 * 1024
+export const CLONE_MIN_SECONDS = 10
+export const CLONE_MAX_SECONDS = 120
+
+function cartesiaKey(env: Record<string, string | undefined>): string {
+  const apiKey = env.CARTESIA_API_KEY
+  if (!apiKey) throw new LLMConfigError('CARTESIA_API_KEY is not configured: voice cloning uses Cartesia.')
+  return apiKey
+}
+
+/** Creates a private Cartesia voice from one recording and returns its id. Nothing else is stored. */
+export async function cloneCartesiaVoice(
+  clip: Buffer,
+  options: { mimeType: string; name: string; description?: string; language?: string },
+  deps: SpeechDeps = {}
+): Promise<{ voiceId: string; name: string }> {
+  const env = deps.env ?? process.env
+  if (clip.length > CLONE_MAX_BYTES) throw new Error('The recording is larger than the 16 MB Cartesia accepts')
+  const form = new FormData()
+  form.append('clip', new Blob([new Uint8Array(clip)], { type: options.mimeType }), options.mimeType.includes('wav') ? 'voice.wav' : 'voice')
+  form.append('name', options.name.slice(0, 100))
+  form.append('language', options.language ?? 'en')
+  if (options.description) form.append('description', options.description.slice(0, 500))
+  form.append('access', 'private')
+  const response = await (deps.fetch ?? fetch)('https://api.cartesia.ai/voices/clone', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${cartesiaKey(env)}`, 'Cartesia-Version': CARTESIA_API_VERSION },
+    body: form,
+  })
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => '')).slice(0, 300)
+    throw new Error(`Cartesia voice cloning failed (${response.status})${detail ? `: ${detail}` : ''}`)
+  }
+  const body = (await response.json()) as { id?: unknown; name?: unknown }
+  if (typeof body.id !== 'string' || !body.id) throw new Error('Cartesia did not return a voice id')
+  return { voiceId: body.id, name: typeof body.name === 'string' ? body.name : options.name }
+}
+
+/** Deletes a cloned voice at Cartesia. A voice that is already gone counts as deleted. */
+export async function deleteCartesiaVoice(voiceId: string, deps: SpeechDeps = {}): Promise<void> {
+  const env = deps.env ?? process.env
+  const response = await (deps.fetch ?? fetch)(`https://api.cartesia.ai/voices/${encodeURIComponent(voiceId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${cartesiaKey(env)}`, 'Cartesia-Version': CARTESIA_API_VERSION },
+  })
+  if (!response.ok && response.status !== 404) {
+    const detail = (await response.text().catch(() => '')).slice(0, 300)
+    throw new Error(`Cartesia voice deletion failed (${response.status})${detail ? `: ${detail}` : ''}`)
+  }
+}
+
+/** Seconds of audio in a PCM WAV file (from its header), or null when it isn't one. */
+export function wavDurationSeconds(wav: Buffer): number | null {
+  if (wav.length < 44 || wav.toString('ascii', 0, 4) !== 'RIFF' || wav.toString('ascii', 8, 12) !== 'WAVE') return null
+  let offset = 12
+  let byteRate = 0
+  while (offset + 8 <= wav.length) {
+    const id = wav.toString('ascii', offset, offset + 4)
+    const size = wav.readUInt32LE(offset + 4)
+    if (id === 'fmt ' && offset + 16 <= wav.length) byteRate = wav.readUInt32LE(offset + 16)
+    if (id === 'data') return byteRate ? Math.min(size, wav.length - offset - 8) / byteRate : null
+    offset += 8 + size + (size % 2)
+  }
+  return null
+}

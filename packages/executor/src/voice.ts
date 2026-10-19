@@ -25,6 +25,11 @@ export const voiceConfigSchema = z
       })
       .strict()
       .optional(),
+    /** The voice in use before a cloned voice replaced it, restored when the clone is removed. */
+    previous: z
+      .object({ provider: z.enum(['openai', 'cartesia']).optional(), voiceId: z.string().min(1).max(100).optional() })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -72,4 +77,21 @@ export function spokenReply(result: Pick<RunAgentResult, 'status' | 'output' | '
     default:
       return 'Sorry, I can’t help with that right now. I’ve let the team know.'
   }
+}
+
+/**
+ * What the speaker reads when recording a voice to clone: the consent statement first (so the
+ * recording itself carries it), then everyday front-desk sentences that cover a natural range
+ * of sounds. About 30–40 seconds read at a normal pace; Cartesia needs at least 10.
+ */
+export function cloneScript(speakerName: string, businessName: string): string[] {
+  const name = speakerName.trim() || 'the speaker'
+  return [
+    `My name is ${name}, and I agree to my voice being used for ${businessName}'s AI assistant.`,
+    "Thanks for calling. We're open Monday to Friday, from nine in the morning until half past five.",
+    "I can check which times are free this week and pass your details on to the team.",
+    "Our office is just around the corner, and there's parking out the back if you're driving in.",
+    "If it's urgent, leave your name and number and someone will call you back this afternoon.",
+    'Have a great day, and thanks again for getting in touch.',
+  ]
 }

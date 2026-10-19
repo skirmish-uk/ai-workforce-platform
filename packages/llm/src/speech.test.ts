@@ -9,6 +9,9 @@ import {
   transcribeAudio,
   sttProvider,
   ttsProvider,
+  cloneCartesiaVoice,
+  deleteCartesiaVoice,
+  wavDurationSeconds,
 } from './speech'
 import { LLMConfigError } from './types'
 
@@ -95,4 +98,36 @@ test('speakable text drops markdown and is capped at a sentence boundary', () =>
 test('an empty provider variable means the default (compose env files often leave them blank)', () => {
   assert.equal(ttsProvider({ SPEECH_TTS_PROVIDER: '' }), 'openai')
   assert.equal(sttProvider({ SPEECH_STT_PROVIDER: '' }), 'openai')
+})
+
+test('cloning sends one private clip to Cartesia and returns the voice id; deleting tolerates a missing voice', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const fakeFetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init })
+    if (init.method === 'DELETE') return new Response(null, { status: url.endsWith('gone') ? 404 : 204 })
+    return Response.json({ id: 'voice-123', name: 'Ava - Dave' })
+  }) as unknown as typeof fetch
+  const env = { CARTESIA_API_KEY: 'sk_car_test' }
+  const result = await cloneCartesiaVoice(Buffer.from('RIFF....WAVE'), { mimeType: 'audio/wav', name: 'Ava - Dave' }, { fetch: fakeFetch, env })
+  assert.deepEqual(result, { voiceId: 'voice-123', name: 'Ava - Dave' })
+  assert.equal(calls[0].url, 'https://api.cartesia.ai/voices/clone')
+  const form = calls[0].init.body as FormData
+  assert.equal(form.get('access'), 'private')
+  assert.equal(form.get('language'), 'en')
+  assert.ok(form.get('clip') instanceof Blob)
+  await deleteCartesiaVoice('voice-123', { fetch: fakeFetch, env })
+  await deleteCartesiaVoice('gone', { fetch: fakeFetch, env })
+  await assert.rejects(cloneCartesiaVoice(Buffer.from('x'), { mimeType: 'audio/wav', name: 'x' }, { fetch: fakeFetch, env: {} }), /CARTESIA_API_KEY/)
+})
+
+test('WAV duration comes from the header', () => {
+  const rate = 24000
+  const samples = rate * 12
+  const wav = Buffer.alloc(44 + samples * 2)
+  wav.write('RIFF', 0, 'ascii'); wav.writeUInt32LE(36 + samples * 2, 4); wav.write('WAVE', 8, 'ascii')
+  wav.write('fmt ', 12, 'ascii'); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22)
+  wav.writeUInt32LE(rate, 24); wav.writeUInt32LE(rate * 2, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34)
+  wav.write('data', 36, 'ascii'); wav.writeUInt32LE(samples * 2, 40)
+  assert.equal(wavDurationSeconds(wav), 12)
+  assert.equal(wavDurationSeconds(Buffer.from('not a wav file at all, definitely longer than 44 bytes....')), null)
 })

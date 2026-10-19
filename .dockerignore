@@ -14,3 +14,6 @@ opencode
 rag_agent_transcript.txt
 compose.proxy-draft.yml
 **/*.log
+
+# Database dumps and agent-copy exports on the demo server (docs/DEPLOY.md)
+backups

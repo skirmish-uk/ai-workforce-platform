@@ -7,7 +7,7 @@
  *   npm run demo:reset -- --full --skip-embed   # don't call OpenAI to re-embed documents
  *
  * Default ("activity") reset removes everything a demo leaves behind: runs and their audit
- * trail, approvals, workflow runs, open/failed revisions, sandbox candidates, queued jobs, and
+ * trail, approvals, hand-offs, notification records, workflow runs, open/failed revisions, sandbox candidates, queued jobs, and
  * anything created during the demo (agents, workflows, documents, users without a "demo-"
  * seed id). Promoted revisions stay, so Sarah keeps her current version and playbook and the
  * Improvements page keeps its history. The exception is Jordan, whose flaw is staged for the
@@ -136,6 +136,8 @@ async function main(): Promise<void> {
     const removableRevisions = revisions.filter((r) => !KEPT_REVISION_STATUSES.includes(r.status) || !r.agentId || !keptAgents.includes(r.agentId)).map((r) => r.id)
     const steps: Array<[string, () => Promise<{ count: number }>, () => Promise<number>]> = [
       ['approvals', () => prisma.approval.deleteMany({ where: { tenantId } }), () => prisma.approval.count({ where: { tenantId } })],
+      ['hand-offs to a person', () => prisma.handover.deleteMany({ where: { tenantId } }), () => prisma.handover.count({ where: { tenantId } })],
+      ['notification records', () => prisma.notification.deleteMany({ where: { tenantId } }), () => prisma.notification.count({ where: { tenantId } })],
       ['workflows (and their runs)', () => prisma.workflow.deleteMany({ where: { tenantId, NOT: { id: { startsWith: 'demo-' } } } }), () => prisma.workflow.count({ where: { tenantId, NOT: { id: { startsWith: 'demo-' } } } })],
       ['workflow runs', () => prisma.workflowRun.deleteMany({ where: { tenantId } }), () => prisma.workflowRun.count({ where: { tenantId } })],
       ['revisions (open, failed or for removed agents)', () => prisma.agentRevision.deleteMany({ where: { id: { in: removableRevisions } } }), async () => removableRevisions.length],

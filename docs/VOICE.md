@@ -10,9 +10,9 @@ Agents can be talked to, not just typed to. The first voice agent is **Ava - Cli
 
 ```
 Browser (Talk panel on the agent page)
-  │ tap to talk → MediaRecorder (webm/opus) → tap to send
+  │ call mode: mic stays open; voice detection starts and ends each turn (MediaRecorder webm/opus)
   ▼
-POST /api/agents/{id}/voice   (multipart "audio", ≤10 MB)
+POST /api/agents/{id}/voice   (multipart "audio", ≤10 MB; "history": the call so far)
   1. checks: signed in, same tenant, agent:write, voice enabled and valid for this agent
   2. speech-to-text        packages/llm/src/speech.ts  (OpenAI gpt-4o-mini-transcribe)
   3. agent run             enqueued on agent-run with trigger "voice"; the route waits for the
@@ -33,13 +33,12 @@ JSON { transcript, reply, status, runId, audio (base64 mp3) } → played in the 
 
 **Garbled audio protection (2026-10-13).** Transcripts now carry a confidence score (mean token probability, `include: ['logprobs']`). Below `MIN_TRANSCRIPT_CONFIDENCE` (0.5) the turn is answered "Sorry, I didn't catch that clearly" and is **not** sent to the agent (status `unclear`). Calibration with real calls: clear speech 0.97–0.99, heavily distorted but correct 0.82, unintelligible audio that came back as foreign-sounding gibberish 0.23; silence and noise come back empty. A transcription *prompt* is deliberately not used: on silence it made the model invent whole sentences at high confidence.
 
-**Talk panel.** It sits at the top of the agent page:
-- a waveform that follows the agent's voice while it speaks and your microphone level while you talk;
-- the current exchange directly underneath, with earlier turns in a collapsible history;
-- a microphone picker (remembered per browser);
-- "Play my recording" on your turns, so you can hear exactly what was sent;
-- a silence check, so a recording that picked up almost nothing is never sent;
-- "Interrupt and talk" while the agent is speaking.
+**Talk panel: a call, not voice messages (2026-10-20).** It sits at the top of the agent page. **Start call** plays the greeting and keeps the microphone open until **End call**:
+- **No buttons per turn.** Voice detection in the browser measures the microphone level against a noise floor it learns while the room is quiet. About 150 ms of speech starts a turn, and 0.8 s of silence ends and sends it. Clicks and coughs under 0.5 s are ignored, and turns are capped at 30 s. A turn that transcribes to nothing is dropped silently, so background noise never makes the agent say "sorry?".
+- **Interrupting by talking.** While the agent speaks, about 250 ms of clearly louder speech stops it mid-sentence and starts your turn; its bubble is marked "Interrupted". The higher threshold, plus the browser's echo cancellation, keeps the agent's own voice from the speakers from cutting it off. A headset works best. Speaking while the agent is still thinking starts a new turn too; the earlier answer is then shown but not played.
+- **Memory of the call.** Each turn sends the last 8 exchanges (as `history`, 400 characters each). The route gives the agent the conversation and the new line, so follow-ups like "what about Saturdays?" work.
+- **Mute** (detection paused), a waveform that follows your microphone or the agent's voice, the current exchange with earlier turns collapsible, "Play my recording", a microphone picker, and "See how it answered", which opens that turn's run and reasoning on the same page.
+- **Latency:** measured 20 Oct with Ava, Haiku 5.5 and the Cartesia voice. The answer starts about 5–6 s after you stop talking (transcription, the agent run in the worker, then speech). That's fine for a demo, but phone-grade turn-taking needs streaming speech, which is the AI Receptionist work in §5.
 
 ## 2. Turning voice on for an agent
 

@@ -24,6 +24,25 @@ async function loadAgent(agentId: string, session: { user: { role: string; tenan
   return { agent, voice }
 }
 
+/**
+ * A call is a conversation: each turn's run gets the recent exchanges (sent by the browser as
+ * form field "history": [{who: 'caller'|'agent', text}]) so "what about Saturdays?" makes sense.
+ * Bounded: the last 8 exchanges, 400 characters each.
+ */
+function withConversation(transcript: string, rawHistory: FormDataEntryValue | null, agentName: string): string {
+  let history: Array<{ who?: unknown; text?: unknown }> = []
+  try {
+    history = typeof rawHistory === 'string' ? JSON.parse(rawHistory) : []
+  } catch { /* ignore a malformed history: the turn still works on its own */ }
+  const first = agentName.split(/\s+[-–]\s+|\s+/)[0] || 'You'
+  const lines = (Array.isArray(history) ? history : [])
+    .filter((h) => (h.who === 'caller' || h.who === 'agent') && typeof h.text === 'string' && h.text.trim())
+    .slice(-8)
+    .map((h) => `${h.who === 'caller' ? 'Caller' : first}: ${String(h.text).replace(/\s+/g, ' ').trim().slice(0, 400)}`)
+  if (!lines.length) return transcript
+  return `This is a live voice call. The conversation so far, most recent last:\n${lines.join('\n')}\n\nThe caller now says: "${transcript}"\n\nReply to what the caller just said, in the context of the call. Don't greet them again.`
+}
+
 async function speak(text: string, voice: ReturnType<typeof readVoiceConfig>['voice']) {
   try {
     const speech = await synthesizeSpeech(text, { voice: voice.voiceId, provider: voice.provider })
@@ -90,7 +109,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       status = 'unclear'
       reply = 'Sorry, I didn’t catch that clearly. Could you say it again, a little closer to the microphone?'
     } else {
-      const job = await enqueueAgentRun({ agentId: agent.id, input: transcript, userId: session.user.id, trigger: 'voice' })
+      const job = await enqueueAgentRun({ agentId: agent.id, input: withConversation(transcript, form.get('history'), agent.name), userId: session.user.id, trigger: 'voice' })
       runId = job.id ?? null
       const outcome = job.id ? await waitForAgentRun<RunAgentResult>(job.id) : null
       if (!outcome) {

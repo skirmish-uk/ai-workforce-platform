@@ -153,6 +153,10 @@ All three are also reachable through Morgan's "Ask the team". Their test suites 
 
 **Ava** (client questions, voice) speaks with Cartesia's Australian "Bronte" voice and runs on `claude-haiku-5-5`. Besides answering from the documents she can check the calendar's free time and offer slots ("Tuesday at 10am or Wednesday at 2pm"); she never books, and says a person will confirm. Try in the Talk panel: "What are your opening hours?", "Could I come in for a chat this week?", "How much is the Growth package?".
 
+### Kill switch
+
+**Stop all agents** on the Team page (admins only) stops every agent at once: new runs end as "Blocked" and approved actions don't execute. A red banner stays on the Team page until you press **Turn agents back on**. Same switch as `PUT /api/tenants/[id]/kill-switch`; every change is in the audit trail.
+
 ### Self-repair (staged)
 
 **Jordan - Website Enquiries** carries a deliberate flaw: its playbook predates the agency's rule that first replies never quote prices, so every draft reply lists the price list. To stage it, at least 10 minutes before the moment and with the worker running:

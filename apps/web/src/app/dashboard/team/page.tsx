@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, PauseCircle, Send, Sparkles, Stethoscope } from 'lucide-react'
 import { Button, formatDateTime } from '@ai-workforce/ui'
+import { KillSwitch } from './KillSwitch'
 
 interface TeamAgent {
   id: string
@@ -148,6 +149,7 @@ export default function TeamPage() {
           <Link href="/dashboard/improvements" className="px-3 py-1.5 rounded-lg text-sm font-medium border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400">
             {data.waiting.changes} change{data.waiting.changes === 1 ? '' : 's'} to approve · {data.waiting.revisionsInProgress} being tested
           </Link>
+          <KillSwitch onChange={load} />
         </div>
       </div>
 

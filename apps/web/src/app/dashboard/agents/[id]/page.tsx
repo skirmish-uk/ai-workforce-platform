@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { ArrowLeft, CheckCircle2, CircleDashed, Loader2, Play, X, XCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, CircleDashed, Loader2, MessageSquare, Mic, Play, Send, X, XCircle } from 'lucide-react'
 import { Badge, Button, formatDateTime } from '@ai-workforce/ui'
 import { VoicePanel } from './VoicePanel'
 import { VoiceClone } from './VoiceClone'
@@ -32,6 +32,9 @@ interface Run {
   status?: string
   trigger?: string
   input?: string
+  /** The person's own words in this run (the input can also carry the conversation so far). */
+  message?: string
+  conversationId?: string
   output?: string | null
   error?: string
   costUsd?: number | null
@@ -51,6 +54,19 @@ interface Run {
   escalation?: { reason: string; severity: string; destination: string }
   handover?: { id: string; status: string; resolutionNote: string | null; resolvedAt: string | null } | null
   reasoning?: ReasoningStep[]
+}
+
+interface Conversation {
+  id: string
+  /** False for a conversation guessed from older runs that weren't recorded with one. */
+  recorded: boolean
+  kind: 'voice' | 'text'
+  title: string
+  startedAt: string
+  lastAt: string
+  costUsd: number
+  /** Oldest first. */
+  runs: Run[]
 }
 
 interface ReasoningStep {
@@ -155,8 +171,14 @@ function RunTrace({ run, agentId, focus }: { run: Run; agentId: string; focus?: 
       </div>
 
       <section>
-        <h3 className="text-xs font-medium uppercase tracking-wider text-neutral-500 mb-1">Task</h3>
-        <p className="text-sm text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap">{run.input}</p>
+        <h3 className="text-xs font-medium uppercase tracking-wider text-neutral-500 mb-1">{run.trigger === 'voice' ? 'Heard' : 'Task'}</h3>
+        <p className="text-sm text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap">{run.message || run.input}</p>
+        {run.input && run.message && run.input !== run.message && (
+          <details className="mt-2">
+            <summary className="cursor-pointer text-xs text-neutral-500">What the agent was given (with the conversation so far)</summary>
+            <p className="mt-1 text-xs text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">{run.input}</p>
+          </details>
+        )}
       </section>
 
       {(run.output || run.error) && (
@@ -261,33 +283,144 @@ function RunTrace({ run, agentId, focus }: { run: Run; agentId: string; focus?: 
   )
 }
 
+/** What the agent said back in a run, or what happened instead. */
+function answerText(run: Run): string {
+  if (run.output) return run.output
+  if (run.clarificationQuestions?.length) return run.clarificationQuestions.join('\n')
+  if (run.escalation) return `Handed to ${run.escalation.destination}: ${run.escalation.reason}`
+  if (run.approvalId) return 'Waiting for your approval before going ahead.'
+  if (run.error) return run.error
+  return STATUS[run.status ?? '']?.label ?? 'No answer'
+}
+
+/** One conversation as an exchange of messages; each answer opens to show how the agent got there. */
+function ConversationView({ conversation, agentId, agentName, openRun, onToggleRun, focusRun, pending, onReply, replying }: {
+  conversation: Conversation
+  agentId: string
+  agentName: string
+  openRun: string | null
+  onToggleRun: (runId: string) => void
+  focusRun: string | null
+  pending: string | null
+  onReply: (message: string) => Promise<boolean>
+  replying: boolean
+}) {
+  const [reply, setReply] = useState('')
+  const firstName = agentName.split(' ')[0]
+  const canReply = conversation.kind === 'text' && conversation.recorded
+  const send = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!reply.trim()) return
+    if (await onReply(reply.trim())) setReply('')
+  }
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-neutral-200 dark:border-neutral-800 pb-3">
+        {conversation.kind === 'voice' ? <Mic className="w-4 h-4 text-neutral-500" aria-hidden="true" /> : <MessageSquare className="w-4 h-4 text-neutral-500" aria-hidden="true" />}
+        <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">{conversation.kind === 'voice' ? 'Voice call' : 'Conversation'}</span>
+        <span className="text-sm text-neutral-500">{formatDateTime(conversation.startedAt)}</span>
+        <span className="text-sm text-neutral-500">{conversation.runs.length} {conversation.runs.length === 1 ? 'exchange' : 'exchanges'} · {money(conversation.costUsd)}</span>
+      </div>
+
+      <ol className="space-y-4">
+        {conversation.runs.map((run) => {
+          const s = STATUS[run.status ?? ''] ?? { label: run.status ?? 'Unknown', variant: 'default' as const }
+          const open = openRun === run.runId
+          return (
+            <li key={run.runId} className="space-y-2">
+              <div className="flex justify-end">
+                <p className="max-w-[85%] rounded-2xl rounded-br-sm bg-primary-600 text-white px-4 py-2 text-sm whitespace-pre-wrap break-words">{run.message || run.input}</p>
+              </div>
+              <div className="flex flex-col items-start gap-1">
+                <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-100 dark:bg-neutral-800 px-4 py-2 text-sm text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap break-words">
+                  {answerText(run)}
+                </div>
+                <div className="flex flex-wrap items-center gap-2 pl-1">
+                  {run.status !== 'completed' && <Badge variant={s.variant} size="sm">{s.label}</Badge>}
+                  {run.dryRun && <Badge variant="outline" size="sm">Test run</Badge>}
+                  <span className="text-xs text-neutral-500">{formatDateTime(run.at)}</span>
+                  <button onClick={() => onToggleRun(run.runId)} aria-expanded={open} className="text-xs text-primary-700 dark:text-primary-300 hover:underline">
+                    {open ? 'Hide details' : 'How it got there'}
+                  </button>
+                </div>
+              </div>
+              {open && (
+                <div className="rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
+                  <RunTrace run={run} agentId={agentId} focus={focusRun === run.runId || open} />
+                </div>
+              )}
+            </li>
+          )
+        })}
+        {pending && (
+          <li className="space-y-2">
+            <div className="flex justify-end">
+              <p className="max-w-[85%] rounded-2xl rounded-br-sm bg-primary-600/80 text-white px-4 py-2 text-sm whitespace-pre-wrap break-words">{pending}</p>
+            </div>
+            <p className="flex items-center gap-2 text-sm text-neutral-500"><Loader2 className="w-4 h-4 animate-spin" />{firstName} is working on it…</p>
+          </li>
+        )}
+      </ol>
+
+      {canReply ? (
+        <form onSubmit={send} className="flex items-end gap-2 border-t border-neutral-200 dark:border-neutral-800 pt-3">
+          <label htmlFor="reply" className="sr-only">Reply to {firstName}</label>
+          <textarea
+            id="reply"
+            value={reply}
+            onChange={(e) => setReply(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(e) } }}
+            rows={2}
+            placeholder={`Reply to ${firstName}…`}
+            className="flex-1 min-w-0 px-3 py-2 border border-neutral-300 dark:border-neutral-600 rounded-lg bg-white dark:bg-neutral-800 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+          />
+          <Button type="submit" disabled={!reply.trim() || replying} aria-label="Send reply">
+            {replying ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          </Button>
+        </form>
+      ) : (
+        <p className="text-xs text-neutral-500 border-t border-neutral-200 dark:border-neutral-800 pt-3">
+          {conversation.kind === 'voice' ? 'A voice call: continue by talking in the panel above.' : 'This conversation is from before replies were possible. Start a new one above.'}
+        </p>
+      )}
+    </div>
+  )
+}
+
 export default function AgentPage() {
   const { id } = useParams<{ id: string }>()
   const [agent, setAgent] = useState<AgentDetail | null>(null)
-  const [runs, setRuns] = useState<Run[]>([])
+  const [conversations, setConversations] = useState<Conversation[]>([])
   const [selected, setSelected] = useState<string | null>(null)
+  const [openRun, setOpenRun] = useState<string | null>(null)
   const [task, setTask] = useState('')
-  const [running, setRunning] = useState<{ jobId: string; state: string } | null>(null)
+  /** The run in progress, which conversation it belongs to (null: a new one) and what was asked. */
+  const [running, setRunning] = useState<{ jobId: string; state: string; conversationId: string; message: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notFound, setNotFound] = useState(false)
-  /** A run id, or "all", waiting for the person to confirm its removal from the list. */
+  /** A conversation id, or "all", waiting for the person to confirm its removal from the list. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const [removeError, setRemoveError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Removes runs from this list only; the platform keeps the record (costs, audit trail).
-  const removeRuns = async (target: string) => {
+  // Removes conversations from this list only; the platform keeps the record (costs, audit trail).
+  const removeConversation = async (target: string) => {
     setRemoveError(null)
-    const query = target === 'all' ? 'all=1' : `run=${encodeURIComponent(target)}`
+    const conversation = conversations.find((c) => c.id === target)
+    const query = target === 'all'
+      ? 'all=1'
+      : conversation?.recorded
+        ? `conversation=${encodeURIComponent(target)}`
+        : `runs=${encodeURIComponent((conversation?.runs ?? []).map((r) => r.runId).join(','))}`
     try {
       const res = await fetch(`/api/agents/${id}/runs?${query}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error(res.status === 403 ? 'You don’t have permission to remove runs.' : 'Could not remove that from the list.')
-      const next = target === 'all' ? [] : runs.filter((r) => r.runId !== target)
-      setRuns(next)
-      // Don't leave the removed run in the address, or a refresh would show it again.
+      if (!res.ok) throw new Error(res.status === 403 ? 'You don’t have permission to remove conversations.' : 'Could not remove that from the list.')
+      const next = target === 'all' ? [] : conversations.filter((c) => c.id !== target)
+      setConversations(next)
+      // Don't leave a removed run in the address, or a refresh would show it again.
       const inUrl = new URLSearchParams(window.location.search).get('run')
-      if (inUrl && (target === 'all' || inUrl === target)) window.history.replaceState(null, '', window.location.pathname)
-      setSelected((current) => (current && next.some((r) => r.runId === current) ? current : next[0]?.runId ?? null))
+      if (inUrl && (target === 'all' || conversation?.runs.some((r) => r.runId === inUrl))) window.history.replaceState(null, '', window.location.pathname)
+      setSelected((current) => (current && next.some((c) => c.id === current) ? current : next[0]?.id ?? null))
     } catch (e) {
       setRemoveError(e instanceof Error ? e.message : 'Could not remove that from the list.')
     } finally {
@@ -295,34 +428,50 @@ export default function AgentPage() {
     }
   }
 
-  const loadRuns = useCallback(async (select?: string) => {
-    const res = await fetch(`/api/agents/${id}/runs?limit=25`)
+  /** Loads the conversation list; `select` picks a conversation by id, or the one holding a run id. */
+  const loadConversations = useCallback(async (select?: { runId?: string; conversationId?: string }) => {
+    const res = await fetch(`/api/agents/${id}/runs?view=conversations&limit=25`)
     if (!res.ok) return
     const body = await res.json()
-    let rows: Run[] = body.data ?? []
+    let rows: Conversation[] = body.data ?? []
+    let runId = select?.runId
     // A run asked for by id (a link, or "See how it answered") may be older than the list.
     // One someone removed from the list stays out of it, even when the address still names it.
-    if (select && !rows.some((r) => r.runId === select)) {
-      const one = await fetch(`/api/agents/${id}/runs?run=${encodeURIComponent(select)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
-      if (one?.data?.[0] && !one.data[0].hidden) rows = [one.data[0], ...rows]
-      else {
-        select = undefined
+    if (runId && !rows.some((c) => c.runs.some((r) => r.runId === runId))) {
+      const one = await fetch(`/api/agents/${id}/runs?run=${encodeURIComponent(runId)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      const run: Run | undefined = one?.data?.[0]
+      if (run && !(run as { hidden?: boolean }).hidden) {
+        rows = [{
+          id: run.conversationId ?? `run-${run.runId}`,
+          recorded: Boolean(run.conversationId),
+          kind: run.trigger === 'voice' ? 'voice' : 'text',
+          title: run.message || run.input || '',
+          startedAt: run.at,
+          lastAt: run.at,
+          costUsd: run.costUsd ?? 0,
+          runs: [run],
+        }, ...rows]
+      } else {
+        runId = undefined
         window.history.replaceState(null, '', window.location.pathname)
       }
     }
-    setRuns(rows)
-    setSelected((current) => select ?? current ?? rows[0]?.runId ?? null)
+    setConversations(rows)
+    const holding = runId ? rows.find((c) => c.runs.some((r) => r.runId === runId)) : undefined
+    const wanted = holding?.id ?? (select?.conversationId && rows.some((c) => c.id === select.conversationId) ? select.conversationId : undefined)
+    setSelected((current) => wanted ?? (current && rows.some((c) => c.id === current) ? current : rows[0]?.id ?? null))
+    if (runId) setOpenRun(runId)
   }, [id])
 
-  // "See how it answered" in the voice panel: show that run with its reasoning open, in view.
+  // "See how it answered" in the voice panel: show that run's conversation with its details open, in view.
   const [focusRun, setFocusRun] = useState<string | null>(null)
   const traceRef = useRef<HTMLElement | null>(null)
   const showRun = useCallback(async (runId: string) => {
-    await loadRuns(runId)
+    await loadConversations({ runId })
     setFocusRun(runId)
     window.history.replaceState(null, '', `?run=${encodeURIComponent(runId)}`)
     requestAnimationFrame(() => traceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
-  }, [loadRuns])
+  }, [loadConversations])
 
   useEffect(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('run')
@@ -330,45 +479,55 @@ export default function AgentPage() {
       if (res.status === 404 || res.status === 403) { setNotFound(true); return }
       if (res.ok) setAgent(await res.json())
     })
-    loadRuns(fromUrl ?? undefined)
+    loadConversations(fromUrl ? { runId: fromUrl } : undefined)
     return () => { if (pollRef.current) clearTimeout(pollRef.current) }
-  }, [id, loadRuns])
+  }, [id, loadConversations])
 
-  const poll = useCallback((jobId: string) => {
+  const poll = useCallback((jobId: string, conversationId: string, message: string) => {
     pollRef.current = setTimeout(async () => {
       try {
         const res = await fetch(`/api/agents/${id}/run?jobId=${encodeURIComponent(jobId)}`)
         const body = await res.json()
         if (!res.ok) throw new Error(body.error ?? 'Could not check the run')
         if (body.state === 'completed' || body.state === 'failed') {
-          setRunning(null)
           if (body.state === 'failed') setError(body.failedReason ?? 'The run failed before it could finish.')
-          await loadRuns(jobId)
+          await loadConversations({ conversationId })
+          setRunning(null)
           return
         }
-        setRunning({ jobId, state: body.state })
-        poll(jobId)
+        setRunning({ jobId, state: body.state, conversationId, message })
+        poll(jobId, conversationId, message)
       } catch (e) {
         setRunning(null)
         setError(e instanceof Error ? e.message : 'Could not check the run')
       }
     }, 1500)
-  }, [id, loadRuns])
+  }, [id, loadConversations])
+
+  /** Sends a message: a new conversation, or the next one in an existing conversation. */
+  const sendMessage = async (message: string, conversationId?: string): Promise<boolean> => {
+    setError(null)
+    try {
+      const res = await fetch(`/api/agents/${id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(conversationId ? { input: message, conversationId } : { input: message }),
+      })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
+      setRunning({ jobId: body.jobId, state: 'waiting', conversationId: body.conversationId, message })
+      poll(body.jobId, body.conversationId, message)
+      return true
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not start the run')
+      return false
+    }
+  }
 
   const start = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!task.trim()) return
-    setError(null)
-    try {
-      const res = await fetch(`/api/agents/${id}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ input: task }) })
-      const body = await res.json()
-      if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
-      setRunning({ jobId: body.jobId, state: 'waiting' })
-      setTask('')
-      poll(body.jobId)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not start the run')
-    }
+    if (await sendMessage(task)) setTask('')
   }
 
   if (notFound) {
@@ -381,8 +540,10 @@ export default function AgentPage() {
   }
 
   const contract = agent?.config?.contract
-  const selectedRun = runs.find((r) => r.runId === selected) ?? null
+  const selectedConversation = conversations.find((c) => c.id === selected) ?? null
+  const newConversationRunning = running !== null && !conversations.some((c) => c.id === running.conversationId)
   const tools = Array.from(new Set(agent?.skills.flatMap((s) => s.skill.requiredTools) ?? []))
+  const firstName = agent?.name.split(' ')[0] ?? 'the agent'
 
   return (
     <div className="space-y-6">
@@ -425,7 +586,7 @@ export default function AgentPage() {
       )}
 
       <form onSubmit={start} className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4 space-y-3">
-        <label htmlFor="task" className="block text-sm font-medium text-neutral-900 dark:text-neutral-100">Give {agent?.name.split(' ')[0] ?? 'the agent'} a task</label>
+        <label htmlFor="task" className="block text-sm font-medium text-neutral-900 dark:text-neutral-100">Give {firstName} a task</label>
         <textarea
           id="task"
           value={task}
@@ -436,23 +597,23 @@ export default function AgentPage() {
         />
         <div className="flex flex-wrap items-center gap-3">
           <Button type="submit" disabled={!task.trim() || running !== null}>
-            {running ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
-            {running ? 'Working…' : 'Run'}
+            {newConversationRunning ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Play className="w-4 h-4 mr-2" />}
+            {newConversationRunning ? 'Working…' : 'Start'}
           </Button>
           {running && <span className="text-sm text-neutral-500">{running.state === 'active' ? 'The agent is working on it.' : 'Queued. Is the worker process running?'}</span>}
         </div>
         {error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{error}</p>}
-        <p className="text-xs text-neutral-500">Anything that contacts people or changes records waits for your approval first.</p>
+        <p className="text-xs text-neutral-500">Starts a new conversation; reply to it below to follow up. Anything that contacts people or changes records waits for your approval first.</p>
       </form>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
         <section className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
-            <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500">Recent runs</h2>
-            {runs.length > 0 && (confirmRemove === 'all' ? (
+            <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500">Conversations</h2>
+            {conversations.length > 0 && (confirmRemove === 'all' ? (
               <span className="flex items-center gap-2 text-xs">
                 <span className="text-neutral-600 dark:text-neutral-300">Remove all from this list?</span>
-                <button onClick={() => removeRuns('all')} className="font-medium text-red-600 dark:text-red-400 hover:underline">Remove</button>
+                <button onClick={() => removeConversation('all')} className="font-medium text-red-600 dark:text-red-400 hover:underline">Remove</button>
                 <button onClick={() => setConfirmRemove(null)} className="text-neutral-500 hover:underline">Cancel</button>
               </span>
             ) : (
@@ -460,36 +621,43 @@ export default function AgentPage() {
             ))}
           </div>
           {removeError && <p className="px-4 pt-3 text-xs text-red-600 dark:text-red-400" role="alert">{removeError}</p>}
-          {runs.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-neutral-500 flex items-center gap-2"><CircleDashed className="w-4 h-4" />No runs yet. Give it a task above.</p>
+          {newConversationRunning && (
+            <p className="px-4 py-3 text-sm text-neutral-500 flex items-center gap-2 border-b border-neutral-100 dark:border-neutral-800"><Loader2 className="w-4 h-4 animate-spin shrink-0" /><span className="line-clamp-2">{running?.message}</span></p>
+          )}
+          {conversations.length === 0 && !newConversationRunning ? (
+            <p className="px-4 py-6 text-sm text-neutral-500 flex items-center gap-2"><CircleDashed className="w-4 h-4" />No conversations yet. Give it a task above.</p>
           ) : (
             <ul className="divide-y divide-neutral-100 dark:divide-neutral-800 max-h-[32rem] overflow-auto">
-              {runs.map((r) => {
-                const s = STATUS[r.status ?? ''] ?? { label: r.status ?? '?', variant: 'default' as const }
+              {conversations.map((c) => {
+                const last = c.runs[c.runs.length - 1]
+                const s = STATUS[last?.status ?? ''] ?? { label: last?.status ?? '?', variant: 'default' as const }
                 return (
-                  <li key={r.runId} className={`relative ${selected === r.runId ? 'bg-primary-50 dark:bg-primary-900/20' : ''}`}>
+                  <li key={c.id} className={`relative ${selected === c.id ? 'bg-primary-50 dark:bg-primary-900/20' : ''}`}>
                     <button
-                      onClick={() => setSelected(r.runId)}
-                      aria-current={selected === r.runId}
+                      onClick={() => { setSelected(c.id); setOpenRun(null) }}
+                      aria-current={selected === c.id}
                       className="w-full text-left pl-4 pr-10 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
                     >
                       <div className="flex items-center justify-between gap-2">
-                        <Badge variant={s.variant} size="sm">{s.label}</Badge>
-                        <span className="text-xs text-neutral-500 tabular-nums">{money(r.costUsd)}</span>
+                        <span className="flex items-center gap-1.5 min-w-0">
+                          {c.kind === 'voice' ? <Mic className="w-3.5 h-3.5 text-neutral-500 shrink-0" aria-label="Voice call" /> : <MessageSquare className="w-3.5 h-3.5 text-neutral-500 shrink-0" aria-label="Typed" />}
+                          <Badge variant={s.variant} size="sm">{s.label}</Badge>
+                        </span>
+                        <span className="text-xs text-neutral-500 tabular-nums">{money(c.costUsd)}</span>
                       </div>
-                      <p className="text-sm text-neutral-800 dark:text-neutral-200 mt-1 line-clamp-2">{r.input}</p>
-                      <p className="text-xs text-neutral-500 mt-0.5">{formatDateTime(r.at)}</p>
+                      <p className="text-sm text-neutral-800 dark:text-neutral-200 mt-1 line-clamp-2">{c.title}</p>
+                      <p className="text-xs text-neutral-500 mt-0.5">{formatDateTime(c.lastAt)} · {c.runs.length} {c.runs.length === 1 ? 'exchange' : 'exchanges'}</p>
                     </button>
-                    {confirmRemove === r.runId ? (
+                    {confirmRemove === c.id ? (
                       <div className="flex flex-wrap items-center gap-3 px-4 pb-3 text-xs">
-                        <span className="text-neutral-600 dark:text-neutral-300">Remove from this list?</span>
-                        <button onClick={() => removeRuns(r.runId)} className="font-medium text-red-600 dark:text-red-400 hover:underline">Remove</button>
+                        <span className="text-neutral-600 dark:text-neutral-300">Remove this conversation from the list?</span>
+                        <button onClick={() => removeConversation(c.id)} className="font-medium text-red-600 dark:text-red-400 hover:underline">Remove</button>
                         <button onClick={() => setConfirmRemove(null)} className="text-neutral-500 hover:underline">Cancel</button>
                       </div>
                     ) : (
                       <button
-                        onClick={() => setConfirmRemove(r.runId)}
-                        aria-label="Remove this run from the list"
+                        onClick={() => setConfirmRemove(c.id)}
+                        aria-label="Remove this conversation from the list"
                         title="Remove from list"
                         className="absolute right-2 top-2.5 rounded-md p-1.5 text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 dark:hover:text-neutral-200 dark:hover:bg-neutral-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
                       >
@@ -503,7 +671,22 @@ export default function AgentPage() {
           )}
         </section>
         <section ref={traceRef} className="scroll-mt-20 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5 min-w-0">
-          {selectedRun ? <RunTrace key={selectedRun.runId} run={selectedRun} agentId={id} focus={focusRun === selectedRun.runId} /> : <p className="text-sm text-neutral-500">Select a run to see what the agent did, step by step.</p>}
+          {selectedConversation ? (
+            <ConversationView
+              key={selectedConversation.id}
+              conversation={selectedConversation}
+              agentId={id}
+              agentName={agent?.name ?? 'Agent'}
+              openRun={openRun}
+              onToggleRun={(runId) => setOpenRun((current) => (current === runId ? null : runId))}
+              focusRun={focusRun}
+              pending={running?.conversationId === selectedConversation.id ? running.message : null}
+              onReply={(message) => sendMessage(message, selectedConversation.id)}
+              replying={running !== null}
+            />
+          ) : (
+            <p className="text-sm text-neutral-500">Select a conversation to read it and see how the agent answered.</p>
+          )}
         </section>
       </div>
     </div>

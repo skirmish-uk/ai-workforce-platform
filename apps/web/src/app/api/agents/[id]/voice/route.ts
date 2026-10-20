@@ -4,7 +4,7 @@ import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { canAccessTenant, hasPermission, safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
-import { defaultGreeting, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
+import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
 import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
 import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
 import { UserRole } from '@prisma/client'
@@ -103,6 +103,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const { agent, voice } = loaded
 
     const form = await request.formData()
+    const callId = form.get('conversationId')
     const file = form.get('audio')
     if (!(file instanceof Blob)) return NextResponse.json({ error: 'Send the recording as form field "audio"' }, { status: 400 })
     if (file.size > MAX_AUDIO_BYTES) return NextResponse.json({ error: 'Recording is too long' }, { status: 413 })
@@ -146,7 +147,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const channel = `voice-stream-${randomUUID()}`
     const subscriber = getRedisConnection().duplicate()
     await subscriber.subscribe(channel)
-    const job = await enqueueAgentRun({ agentId: agent.id, input: withConversation(transcript, form.get('history'), agent.name), userId: session.user.id, trigger: 'voice', streamChannel: channel })
+    const job = await enqueueAgentRun({ agentId: agent.id, input: withConversation(transcript, form.get('history'), agent.name), userId: session.user.id, trigger: 'voice', streamChannel: channel, conversation: isConversationId(callId) ? { id: callId, message: transcript } : undefined })
     const runId = job.id ?? null
     const encoder = new TextEncoder()
 

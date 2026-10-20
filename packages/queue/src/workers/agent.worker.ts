@@ -13,6 +13,7 @@ export function createAgentWorker(): Worker<AgentRunJobData> {
         userId: job.data.userId,
         workflowRunId: job.data.workflowRunId,
         trigger: job.data.trigger ?? 'api',
+        conversation: job.data.conversation,
         isCancelled: () => (job.id ? isAgentRunCancelled(job.id) : false),
         // Voice: the web route is listening on this channel to speak each sentence as it lands.
         onTextDelta: job.data.streamChannel

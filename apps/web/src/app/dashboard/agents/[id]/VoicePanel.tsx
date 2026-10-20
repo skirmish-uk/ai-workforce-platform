@@ -108,6 +108,8 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   const inCallRef = useRef(false)
   const mutedRef = useRef(false)
   const turnsRef = useRef<Turn[]>([])
+  /** Groups this call's turns into one conversation in the agent's history; a cleared conversation starts a new one. */
+  const conversationId = useRef<string>(crypto.randomUUID())
   const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0 })
 
   const setPhaseBoth = (p: Phase) => { phaseRef.current = p; setPhase(p) }
@@ -373,6 +375,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     const form = new FormData()
     form.append('audio', audio, 'utterance')
     form.append('history', JSON.stringify(history))
+    form.append('conversationId', conversationId.current)
     const turn = ++activeTurn.current
     clipQueue.current = []
     clipPlaying.current = false
@@ -604,7 +607,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
 
       {turns.length > 0 && !inCall && (
         <div className="flex justify-center">
-          <button onClick={() => { setTurns([]); setError(null) }} className="text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 underline">
+          <button onClick={() => { setTurns([]); setError(null); conversationId.current = crypto.randomUUID() }} className="text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 underline">
             Clear this conversation
           </button>
         </div>

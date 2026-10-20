@@ -10,6 +10,8 @@ export interface AgentRunJobData {
   scheduleId?: string
   /** Publish the model's text as it is written on this Redis channel (voice turns). */
   streamChannel?: string
+  /** The dashboard conversation this run belongs to, and the person's own words in it. */
+  conversation?: { id: string; message: string }
 }
 
 export interface WorkflowRunJobData {

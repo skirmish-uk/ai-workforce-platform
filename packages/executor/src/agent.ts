@@ -25,6 +25,7 @@ import { runAuthorizedTool, type ToolExecutorFn } from './tool-runner'
 import { wrapUntrusted } from './untrusted'
 import { detectQualitySignals, type QualitySignal } from './quality'
 import { readVoiceConfig } from './voice'
+import { CONVERSATION_MESSAGE_MAX_CHARS, isConversationId } from './conversations'
 import { readSelfManagementPolicy } from './workforce/policy'
 import { executeWorkforceTool, workforceToolsFor, WORKFORCE_READ_TOOLS } from './workforce/tools'
 
@@ -88,6 +89,8 @@ export interface RunAgentOptions {
    * call, and is streamed before the run's result checks have run.
    */
   onTextDelta?: (delta: string, step: number) => void
+  /** The dashboard conversation this run belongs to; its id and the person's own words go on the audit row. */
+  conversation?: { id: string; message: string }
   deps?: RunAgentDeps
 }
 
@@ -1039,6 +1042,12 @@ class AgentRun {
     return result
   }
 
+  private conversationFields(): Record<string, unknown> {
+    const c = this.options.conversation
+    if (!c || !isConversationId(c.id)) return {}
+    return { conversationId: c.id, message: c.message.slice(0, CONVERSATION_MESSAGE_MAX_CHARS) }
+  }
+
   private async audit(action: string, data: Record<string, unknown>): Promise<void> {
     try {
       await prisma.auditLog.create({
@@ -1049,7 +1058,7 @@ class AgentRun {
           tenantId: this.agent.tenantId,
           userId: this.options.userId,
           workflowRunId: this.options.workflowRunId,
-          newData: redact({ runId: this.runId, ...data }) as never,
+          newData: redact({ runId: this.runId, ...(action.startsWith('AGENT_RUN_') ? this.conversationFields() : {}), ...data }) as never,
         },
       })
     } catch (error) {

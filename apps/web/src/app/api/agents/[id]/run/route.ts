@@ -4,7 +4,9 @@ import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { hasPermission, canAccessTenant } from '@ai-workforce/domain'
 import { agentRunQueue, enqueueAgentRun, requestAgentRunCancel } from '@ai-workforce/queue'
+import { followUpInput, isConversationId, runMessage, FOLLOW_UP_HISTORY_EXCHANGES } from '@ai-workforce/executor'
 import { UserRole } from '@prisma/client'
+import { randomUUID } from 'crypto'
 
 type Session = { user: { id: string; role: string; tenantId: string } }
 
@@ -28,7 +30,31 @@ async function jobForAgent(request: NextRequest, agentId: string) {
   return { job }
 }
 
-/** Enqueues an ad-hoc agent invocation (Diagnose → Assemble → Act → Assess). */
+const RUN_ACTIONS = ['AGENT_RUN_COMPLETED', 'AGENT_RUN_FAILED', 'AGENT_RUN_FINISHED', 'AGENT_RUN_ESCALATED', 'AGENT_RUN_BLOCKED_SPEND_CAP']
+
+/** The exchanges so far in a typed conversation, read from the runs' own audit rows (not trusted from the browser). */
+async function conversationHistory(agentId: string, tenantId: string, conversationId: string) {
+  const rows = await prisma.auditLog.findMany({
+    where: { tenantId, entityType: 'Agent', entityId: agentId, action: { in: RUN_ACTIONS }, newData: { path: ['conversationId'], equals: conversationId } },
+    orderBy: { createdAt: 'desc' },
+    take: FOLLOW_UP_HISTORY_EXCHANGES,
+    select: { newData: true },
+  })
+  return rows.reverse().map((row) => {
+    const d = (row.newData ?? {}) as Record<string, unknown>
+    const message = runMessage({ message: typeof d.message === 'string' ? d.message : undefined, input: typeof d.input === 'string' ? d.input : undefined })
+    const answer = typeof d.output === 'string' && d.output
+      ? d.output
+      : `(no answer: the run ended as ${typeof d.status === 'string' ? d.status.replace(/_/g, ' ') : 'unknown'})`
+    return { message, answer }
+  })
+}
+
+/**
+ * Enqueues an ad-hoc agent invocation (Diagnose → Assemble → Act → Assess).
+ * Body: { input, conversationId? }. Without a conversation id this starts a new conversation;
+ * with one, the agent gets that conversation's recent exchanges with the new message.
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -49,10 +75,21 @@ export async function POST(
       return NextResponse.json({ error: 'input is required' }, { status: 400 })
     }
 
-    const job = await enqueueAgentRun({ agentId: auth.agent.id, input, userId: session.user.id, trigger: 'api' })
+    if (body.conversationId !== undefined && !isConversationId(body.conversationId)) {
+      return NextResponse.json({ error: 'Invalid conversationId' }, { status: 400 })
+    }
+    const conversationId: string = body.conversationId ?? randomUUID()
+    const history = body.conversationId ? await conversationHistory(auth.agent.id, auth.agent.tenantId, conversationId) : []
+    const job = await enqueueAgentRun({
+      agentId: auth.agent.id,
+      input: followUpInput(history, input, auth.agent.name),
+      userId: session.user.id,
+      trigger: 'api',
+      conversation: { id: conversationId, message: input },
+    })
 
     // runId == jobId: use it to find the run's AuditLog rows and approvals.
-    return NextResponse.json({ jobId: job.id, runId: job.id, status: 'queued' }, { status: 201 })
+    return NextResponse.json({ jobId: job.id, runId: job.id, conversationId, status: 'queued' }, { status: 201 })
   } catch (error) {
     console.error('Error enqueueing agent run:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

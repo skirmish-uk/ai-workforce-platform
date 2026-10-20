@@ -366,8 +366,8 @@ const ENQUIRY_CONTRACT = {
   rationale: 'Website enquiries answered within minutes convert far better than ones answered the next morning.',
   definitionOfDone: { summary: 'A reply to the enquirer is waiting for approval, or the enquiry is handed to a person.', checks: [{ type: 'output_present' }] },
   scope: {
-    inScope: ['Replying by email to website contact-form enquiries about services and process'],
-    outOfScope: ['Discounts, custom quotes or contract terms', 'Booking meetings', 'Emailing anyone other than the enquirer'],
+    inScope: ['Replying by email to a new website contact-form enquiry, given the form text, about services and process'],
+    outOfScope: ['Following up with existing leads or contacts (the Sales Assistant does that)', 'Discounts, custom quotes or contract terms', 'Booking meetings', 'Emailing anyone other than the enquirer'],
   },
   allowedTools: ['gmail__send_email'],
   soul: {
@@ -428,7 +428,7 @@ const TEAM = [
     id: STAGED_REPAIR_AGENT_ID,
     name: 'Jordan - Website Enquiries',
     role: 'Enquiry Responder',
-    mission: 'Answer website enquiries within minutes with accurate information and the right next step',
+    mission: 'Answer new website contact-form enquiries within minutes with accurate information and the right next step',
     prompt: ENQUIRY_PROMPT,
     contract: ENQUIRY_CONTRACT,
     skill: { name: STAGED_REPAIR_SKILL, description: 'Reply to website contact-form enquiries', purpose: 'Fast, accurate first replies to new enquiries', def: WEBSITE_ENQUIRY, constraints: ['Only state published information', 'Never offer discounts', 'Only email the enquirer'] },
@@ -460,7 +460,7 @@ export async function seedShowcaseTeam(prisma: PrismaClient, tenantId: string, h
     })
     const agent = await prisma.agent.upsert({
       where: { id: member.id },
-      update: (await helpers.seedOwned(member.id)) ? { config: { contract: member.contract }, systemPrompt: member.prompt } : {},
+      update: (await helpers.seedOwned(member.id)) ? { config: { contract: member.contract }, systemPrompt: member.prompt, mission: member.mission } : {},
       create: {
         id: member.id,
         name: member.name,

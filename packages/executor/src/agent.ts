@@ -224,6 +224,8 @@ interface Specialist {
   name: string
   role: string
   mission?: string
+  /** The specialist's contract scope (front desk only), so routing goes by what each agent handles. */
+  handles?: string[]
 }
 
 function delegateTool(specialists: Specialist[]): LLMTool {
@@ -231,7 +233,9 @@ function delegateTool(specialists: Specialist[]): LLMTool {
     name: 'platform__delegate',
     description:
       'Delegate one bounded subtask to a specialist agent and receive its validated result. Give it only the information it needs. Available specialists: ' +
-      specialists.map((s) => `${s.id} (${s.name} — ${s.role}${s.mission ? `: ${s.mission.slice(0, 160)}` : ''})`).join('; '),
+      specialists
+        .map((s) => `${s.id} (${s.name} — ${s.role}${s.mission ? `: ${s.mission.slice(0, 160)}` : ''}${s.handles?.length ? `. Handles: ${s.handles.map((h) => h.slice(0, 120)).slice(0, 4).join('; ')}` : ''})`)
+        .join('; '),
     inputSchema: {
       type: 'object',
       properties: {
@@ -519,8 +523,15 @@ class AgentRun {
       })
       for (const row of rows) {
         if (row.id === this.agent.id) continue
-        if (wholeTeam && resolveAgentContract(row).contract.management.enabled) continue
-        specialists.set(row.id, { id: row.id, name: row.name, role: row.role, mission: wholeTeam ? row.mission : undefined })
+        const specialistContract = wholeTeam ? resolveAgentContract(row).contract : null
+        if (specialistContract?.management.enabled) continue
+        specialists.set(row.id, {
+          id: row.id,
+          name: row.name,
+          role: row.role,
+          mission: wholeTeam ? row.mission : undefined,
+          handles: specialistContract?.scope.inScope,
+        })
       }
       const missing = this.contract.delegation.allowedSpecialists.filter((id) => id !== '*' && !specialists.has(id))
       if (missing.length) this.note(`specialists unavailable (missing, paused, self or other tenant): ${missing.join(', ')}`)

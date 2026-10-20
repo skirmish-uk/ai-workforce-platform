@@ -40,6 +40,9 @@ interface VoiceResponse {
 type Phase = 'idle' | 'starting' | 'listening' | 'hearing' | 'thinking' | 'speaking'
 
 const MIC_STORAGE_KEY = 'voice-mic-device'
+const VOLUME_STORAGE_KEY = 'voice-volume'
+/** Agent voice level: a compressor evens it out, then this gain (1 = as generated). */
+const DEFAULT_VOLUME = 1.6
 
 // Voice activity detection (tuned by ear in a quiet office with a laptop mic and with a headset).
 const TICK_MS = 50
@@ -75,6 +78,10 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   const [error, setError] = useState<string | null>(null)
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
   const [micId, setMicId] = useState<string>('')
+  const [volume, setVolume] = useState(DEFAULT_VOLUME)
+  const volumeRef = useRef(DEFAULT_VOLUME)
+  const playerInput = useRef<AudioNode | null>(null)
+  const playerGain = useRef<GainNode | null>(null)
 
   const canvas = useRef<HTMLCanvasElement | null>(null)
   const ctx = useRef<AudioContext | null>(null)
@@ -111,6 +118,19 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   }, [])
   useEffect(() => { if (typeof navigator !== 'undefined' && navigator.mediaDevices) void loadMics() }, [loadMics])
 
+  useEffect(() => {
+    try {
+      const saved = Number(localStorage.getItem(VOLUME_STORAGE_KEY))
+      if (saved >= 0.5 && saved <= 3) { setVolume(saved); volumeRef.current = saved }
+    } catch { /* storage unavailable */ }
+  }, [])
+  const changeVolume = (v: number) => {
+    setVolume(v)
+    volumeRef.current = v
+    if (playerGain.current) playerGain.current.gain.value = v
+    try { localStorage.setItem(VOLUME_STORAGE_KEY, String(v)) } catch { /* storage unavailable */ }
+  }
+
   const chooseMic = (id: string) => {
     setMicId(id)
     try { localStorage.setItem(MIC_STORAGE_KEY, id) } catch { /* storage unavailable */ }
@@ -124,6 +144,18 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
       playerAnalyser.current.fftSize = 1024
       playerAnalyser.current.smoothingTimeConstant = 0.75
       playerAnalyser.current.connect(ctx.current.destination)
+      // Agent voice: compressor (lifts quiet syllables, stops peaks clipping) then volume.
+      const compressor = ctx.current.createDynamicsCompressor()
+      compressor.threshold.value = -28
+      compressor.knee.value = 24
+      compressor.ratio.value = 4
+      compressor.attack.value = 0.003
+      compressor.release.value = 0.25
+      playerGain.current = ctx.current.createGain()
+      playerGain.current.gain.value = volumeRef.current
+      compressor.connect(playerGain.current)
+      playerGain.current.connect(playerAnalyser.current)
+      playerInput.current = compressor
     }
     void ctx.current.resume()
     return ctx.current
@@ -188,7 +220,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     const el = new Audio(url)
     player.current = el
     const context = audioContext()
-    try { context.createMediaElementSource(el).connect(playerAnalyser.current!) } catch { /* already connected */ }
+    try { context.createMediaElementSource(el).connect(playerInput.current ?? playerAnalyser.current!) } catch { /* already connected */ }
     const done = () => {
       if (player.current !== el) return
       if (phaseRef.current === 'speaking' || phaseRef.current === 'starting') setPhaseBoth(inCallRef.current ? 'listening' : 'idle')
@@ -402,6 +434,13 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
           <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-50">Talk to {first}</h2>
           <p className="text-xs text-neutral-500">Same agent, rules and knowledge as a typed task. {first} introduces itself as an AI assistant.</p>
         </div>
+        <div className="flex flex-wrap items-center gap-3 min-w-0">
+        <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400">
+          <Volume2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+          <span className="sr-only">{first}&apos;s volume</span>
+          <input id="voice-volume" type="range" min={0.5} max={3} step={0.1} value={volume} onChange={(e) => changeVolume(Number(e.target.value))} className="w-24 accent-primary-600" aria-valuetext={`${Math.round(volume * 100)}%`} />
+          <span className="tabular-nums w-9">{Math.round(volume * 100)}%</span>
+        </label>
         {mics.length > 0 && (
           <label className="flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-400 min-w-0">
             <Mic className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -420,6 +459,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
             </select>
           </label>
         )}
+        </div>
       </div>
 
       <div className="flex flex-col items-center gap-3">

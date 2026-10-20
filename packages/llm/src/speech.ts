@@ -21,6 +21,8 @@ export const OPENAI_STT_MODEL = 'gpt-4o-mini-transcribe'
 export const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts'
 export const OPENAI_DEFAULT_VOICE = 'coral'
 export const CARTESIA_TTS_MODEL = 'sonic-3.6'
+/** generation_config.volume: 0.5–2.0, default 1 (sonic-3 and newer). */
+export const CARTESIA_VOLUME = 1.6
 /** Cartesia API version, checked against docs.cartesia.ai on 2026-10-13. */
 export const CARTESIA_API_VERSION = '2026-08-14'
 
@@ -148,6 +150,8 @@ export async function synthesizeSpeech(
         transcript: speakable,
         voice: { id: voice },
         language: 'en',
+        // Cartesia's default level sounded quiet on laptop speakers next to the OpenAI voices.
+        generation_config: { volume: CARTESIA_VOLUME },
         output_format: { container: 'mp3', sample_rate: 44100, bit_rate: 128000 },
       }),
     })

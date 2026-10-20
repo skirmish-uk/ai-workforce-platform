@@ -44,11 +44,11 @@ export async function GET(
       },
       orderBy: { createdAt: 'desc' },
       take: runId ? 1 : limit * 3,
-      select: { id: true, action: true, createdAt: true, newData: true },
+      select: { id: true, action: true, createdAt: true, newData: true, hiddenAt: true },
     })
 
     const runs = rows
-      .map((row) => ({ at: row.createdAt, action: row.action, ...((row.newData ?? {}) as Record<string, unknown>) }))
+      .map((row) => ({ at: row.createdAt, action: row.action, ...((row.newData ?? {}) as Record<string, unknown>), hidden: row.hiddenAt !== null }))
       .filter((run) => runId || includeDryRuns || (run as { dryRun?: unknown }).dryRun !== true)
       .slice(0, limit)
     // Runs that handed work to a person carry where that hand-off stands.

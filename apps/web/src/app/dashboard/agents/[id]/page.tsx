@@ -284,6 +284,9 @@ export default function AgentPage() {
       if (!res.ok) throw new Error(res.status === 403 ? 'You don’t have permission to remove runs.' : 'Could not remove that from the list.')
       const next = target === 'all' ? [] : runs.filter((r) => r.runId !== target)
       setRuns(next)
+      // Don't leave the removed run in the address, or a refresh would show it again.
+      const inUrl = new URLSearchParams(window.location.search).get('run')
+      if (inUrl && (target === 'all' || inUrl === target)) window.history.replaceState(null, '', window.location.pathname)
       setSelected((current) => (current && next.some((r) => r.runId === current) ? current : next[0]?.runId ?? null))
     } catch (e) {
       setRemoveError(e instanceof Error ? e.message : 'Could not remove that from the list.')
@@ -298,9 +301,14 @@ export default function AgentPage() {
     const body = await res.json()
     let rows: Run[] = body.data ?? []
     // A run asked for by id (a link, or "See how it answered") may be older than the list.
+    // One someone removed from the list stays out of it, even when the address still names it.
     if (select && !rows.some((r) => r.runId === select)) {
       const one = await fetch(`/api/agents/${id}/runs?run=${encodeURIComponent(select)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
-      if (one?.data?.[0]) rows = [one.data[0], ...rows]
+      if (one?.data?.[0] && !one.data[0].hidden) rows = [one.data[0], ...rows]
+      else {
+        select = undefined
+        window.history.replaceState(null, '', window.location.pathname)
+      }
     }
     setRuns(rows)
     setSelected((current) => select ?? current ?? rows[0]?.runId ?? null)

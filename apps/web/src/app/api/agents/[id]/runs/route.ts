@@ -77,7 +77,13 @@ export async function GET(
       ? await prisma.handover.findMany({ where: { runId: { in: runIds }, tenantId: agent.tenantId }, select: { id: true, runId: true, status: true, resolutionNote: true, resolvedAt: true } })
       : []
     const handoverByRun = new Map(handovers.map((h) => [h.runId, h]))
-    const withHandover = <R extends { runId: string }>(r: R) => ({ ...r, handover: handoverByRun.get(r.runId) ?? null })
+    // Runs that paused for a decision carry what they proposed (the same redacted summary the
+    // Approvals inbox shows), so a conversation shows the draft, not just "waiting for approval".
+    const approvals = runIds.length
+      ? await prisma.approval.findMany({ where: { runId: { in: runIds }, tenantId: agent.tenantId }, orderBy: { createdAt: 'asc' }, select: { id: true, runId: true, status: true, action: true, input: true } })
+      : []
+    const approvalByRun = new Map(approvals.map(({ input, ...a }) => [a.runId, { ...a, material: ((input ?? {}) as { summary?: { material?: unknown } }).summary?.material ?? null }]))
+    const withHandover = <R extends { runId: string }>(r: R) => ({ ...r, handover: handoverByRun.get(r.runId) ?? null, approval: approvalByRun.get(r.runId) ?? null })
     if (grouped) return NextResponse.json({ data: grouped.map((c) => ({ ...c, runs: c.runs.map(withHandover) })) })
     return NextResponse.json({ data: runs.map(withHandover) })
   } catch (error) {

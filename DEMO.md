@@ -168,10 +168,10 @@ npm run demo:stage-repair    # Jordan answers 3 enquiries; the admin rejects eac
 # on the server: scripts/demo-deploy.sh reset-demo && scripts/demo-deploy.sh stage-repair
 ```
 
-Three rejected approvals out of three crosses the review threshold. On the next 10-minute check the scheduler starts Morgan's automatic repair review; to start it on cue instead, click **Review the team now** on the Team page. Then show:
+Three rejected approvals out of three crosses the review threshold. On the next 10-minute check the scheduler starts Morgan's automatic repair review by itself, often within a minute or two of staging. Tell it that way ("Morgan noticed on his own"). Check Jordan's card on the Team page before pressing **Review the team now**: if it already says a change is being tested, don't press it, or Morgan will only report that a fix is already in flight. Testing the change (evaluation suite plus replay) takes about 10 minutes, so stage at least 15 minutes before the moment. Then show:
 1. Team page: Jordan "needs attention", Morgan's report.
 2. Improvements page: Morgan's proposed playbook change, with a new test case that reproduces the rejected drafts, the evaluation results and the replay, then promotion as Jordan v2.
-3. Ask Jordan to answer a new enquiry: the draft offers a call and has no prices.
+3. Ask Jordan to answer a new enquiry like the staged ones, e.g. `Website form from Tom Nguyen <tom@brightside-cafe.example>: "Hi, we have two cafes and want more people finding us on Google. Can you help, and how does it work?"` The draft offers a call and has no prices. (Avoid enquiries asking for a custom quote: Jordan's rules hand those to a person.)
 4. Roll back on the Improvements page (one click), and Jordan is v1 again.
 
 The model can take a different path (for example fix a different detail, or ask a person first), so keep a recording of a good rehearsal as a fallback.

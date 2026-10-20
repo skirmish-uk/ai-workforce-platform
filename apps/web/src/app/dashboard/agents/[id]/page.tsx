@@ -53,6 +53,7 @@ interface Run {
   clarificationQuestions?: string[]
   escalation?: { reason: string; severity: string; destination: string }
   handover?: { id: string; status: string; resolutionNote: string | null; resolvedAt: string | null } | null
+  approval?: { id: string; status: string; action: string; material: unknown } | null
   reasoning?: ReasoningStep[]
 }
 
@@ -293,6 +294,43 @@ function answerText(run: Run): string {
   return STATUS[run.status ?? '']?.label ?? 'No answer'
 }
 
+const APPROVAL_STATE: Record<string, string> = {
+  PENDING: 'Waiting for your approval',
+  APPROVED: 'Approved',
+  EXECUTING: 'Approved, running now',
+  EXECUTED: 'Approved and done',
+  REJECTED: 'Rejected',
+  EXPIRED: 'Expired',
+  EXECUTION_FAILED: 'Approved, but it failed',
+}
+
+/** What a run proposed and is waiting on (or was decided): an email draft, or the action's details. */
+function ProposedAction({ approval }: { approval: NonNullable<Run['approval']> }) {
+  const m = approval.material && typeof approval.material === 'object' ? approval.material as Record<string, unknown> : null
+  const text = (v: unknown): string => (typeof v === 'string' ? v : Array.isArray(v) ? v.map(text).join(', ') : v === undefined || v === null ? '' : JSON.stringify(v))
+  return (
+    <div className="max-w-[85%] w-full rounded-xl border border-amber-200 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-900/10 text-sm overflow-hidden">
+      <p className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b border-amber-200 dark:border-amber-800">
+        <span className="font-medium text-amber-900 dark:text-amber-200">{toolLabel(approval.action)}: {APPROVAL_STATE[approval.status] ?? approval.status.toLowerCase()}</span>
+        {approval.status === 'PENDING' && <Link href="/dashboard/approvals" className="text-xs font-medium text-amber-900 dark:text-amber-200 underline">Open approvals</Link>}
+      </p>
+      {m && 'body' in m ? (
+        <div className="px-4 py-3 space-y-1">
+          {m.to !== undefined && <p className="text-xs text-neutral-500 break-words">To {text(m.to)}</p>}
+          {m.subject !== undefined && <p className="font-medium text-neutral-900 dark:text-neutral-100 break-words">{text(m.subject)}</p>}
+          <p className="whitespace-pre-wrap break-words text-neutral-800 dark:text-neutral-200 max-h-64 overflow-auto">{text(m.body)}</p>
+        </div>
+      ) : m ? (
+        <dl className="px-4 py-3 grid grid-cols-[minmax(5rem,auto)_1fr] gap-x-3 gap-y-1">
+          {Object.entries(m).slice(0, 8).map(([k, v]) => (
+            <div key={k} className="contents"><dt className="text-neutral-500">{k}</dt><dd className="break-words text-neutral-800 dark:text-neutral-200">{text(v)}</dd></div>
+          ))}
+        </dl>
+      ) : null}
+    </div>
+  )
+}
+
 /** One conversation as an exchange of messages; each answer opens to show how the agent got there. */
 function ConversationView({ conversation, agentId, agentName, openRun, onToggleRun, focusRun, pending, onReply, replying }: {
   conversation: Conversation
@@ -332,9 +370,12 @@ function ConversationView({ conversation, agentId, agentName, openRun, onToggleR
                 <p className="max-w-[85%] rounded-2xl rounded-br-sm bg-primary-600 text-white px-4 py-2 text-sm whitespace-pre-wrap break-words">{run.message || run.input}</p>
               </div>
               <div className="flex flex-col items-start gap-1">
-                <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-100 dark:bg-neutral-800 px-4 py-2 text-sm text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap break-words">
-                  {answerText(run)}
-                </div>
+                {(run.output || !run.approval) && (
+                  <div className="max-w-[85%] rounded-2xl rounded-bl-sm bg-neutral-100 dark:bg-neutral-800 px-4 py-2 text-sm text-neutral-900 dark:text-neutral-100 whitespace-pre-wrap break-words">
+                    {answerText(run)}
+                  </div>
+                )}
+                {run.approval && <ProposedAction approval={run.approval} />}
                 <div className="flex flex-wrap items-center gap-2 pl-1">
                   {run.status !== 'completed' && <Badge variant={s.variant} size="sm">{s.label}</Badge>}
                   {run.dryRun && <Badge variant="outline" size="sm">Test run</Badge>}

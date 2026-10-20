@@ -705,6 +705,9 @@ model AuditLog {
   oldData     Json?
   newData     Json?
   metadata    Json     @default("{}")
+  /// Hidden from the agent's "Recent runs" list by a person. The row itself is kept: spend caps,
+  /// metrics and the Workforce Manager still read it (AGENT_RUNS_HIDDEN records who hid what).
+  hiddenAt    DateTime?
   ipAddress   String?
   userAgent   String?
   createdAt   DateTime @default(now())

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
-import { ArrowLeft, CheckCircle2, CircleDashed, Loader2, Play, XCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, CircleDashed, Loader2, Play, X, XCircle } from 'lucide-react'
 import { Badge, Button, formatDateTime } from '@ai-workforce/ui'
 import { VoicePanel } from './VoicePanel'
 import { VoiceClone } from './VoiceClone'
@@ -195,7 +195,27 @@ export default function AgentPage() {
   const [running, setRunning] = useState<{ jobId: string; state: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [notFound, setNotFound] = useState(false)
+  /** A run id, or "all", waiting for the person to confirm its removal from the list. */
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
+  const [removeError, setRemoveError] = useState<string | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Removes runs from this list only; the platform keeps the record (costs, audit trail).
+  const removeRuns = async (target: string) => {
+    setRemoveError(null)
+    const query = target === 'all' ? 'all=1' : `run=${encodeURIComponent(target)}`
+    try {
+      const res = await fetch(`/api/agents/${id}/runs?${query}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(res.status === 403 ? 'You don’t have permission to remove runs.' : 'Could not remove that from the list.')
+      const next = target === 'all' ? [] : runs.filter((r) => r.runId !== target)
+      setRuns(next)
+      setSelected((current) => (current && next.some((r) => r.runId === current) ? current : next[0]?.runId ?? null))
+    } catch (e) {
+      setRemoveError(e instanceof Error ? e.message : 'Could not remove that from the list.')
+    } finally {
+      setConfirmRemove(null)
+    }
+  }
 
   const loadRuns = useCallback(async (select?: string) => {
     const res = await fetch(`/api/agents/${id}/runs?limit=25`)
@@ -329,7 +349,19 @@ export default function AgentPage() {
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
         <section className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
-          <h2 className="px-4 py-3 text-xs font-medium uppercase tracking-wider text-neutral-500 border-b border-neutral-200 dark:border-neutral-800">Recent runs</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+            <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500">Recent runs</h2>
+            {runs.length > 0 && (confirmRemove === 'all' ? (
+              <span className="flex items-center gap-2 text-xs">
+                <span className="text-neutral-600 dark:text-neutral-300">Remove all from this list?</span>
+                <button onClick={() => removeRuns('all')} className="font-medium text-red-600 dark:text-red-400 hover:underline">Remove</button>
+                <button onClick={() => setConfirmRemove(null)} className="text-neutral-500 hover:underline">Cancel</button>
+              </span>
+            ) : (
+              <button onClick={() => setConfirmRemove('all')} className="text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 hover:underline">Clear all</button>
+            ))}
+          </div>
+          {removeError && <p className="px-4 pt-3 text-xs text-red-600 dark:text-red-400" role="alert">{removeError}</p>}
           {runs.length === 0 ? (
             <p className="px-4 py-6 text-sm text-neutral-500 flex items-center gap-2"><CircleDashed className="w-4 h-4" />No runs yet. Give it a task above.</p>
           ) : (
@@ -337,11 +369,11 @@ export default function AgentPage() {
               {runs.map((r) => {
                 const s = STATUS[r.status ?? ''] ?? { label: r.status ?? '?', variant: 'default' as const }
                 return (
-                  <li key={r.runId}>
+                  <li key={r.runId} className={`relative ${selected === r.runId ? 'bg-primary-50 dark:bg-primary-900/20' : ''}`}>
                     <button
                       onClick={() => setSelected(r.runId)}
                       aria-current={selected === r.runId}
-                      className={`w-full text-left px-4 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/50 ${selected === r.runId ? 'bg-primary-50 dark:bg-primary-900/20' : ''}`}
+                      className="w-full text-left pl-4 pr-10 py-3 hover:bg-neutral-50 dark:hover:bg-neutral-800/50"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <Badge variant={s.variant} size="sm">{s.label}</Badge>
@@ -350,6 +382,22 @@ export default function AgentPage() {
                       <p className="text-sm text-neutral-800 dark:text-neutral-200 mt-1 line-clamp-2">{r.input}</p>
                       <p className="text-xs text-neutral-500 mt-0.5">{formatDateTime(r.at)}</p>
                     </button>
+                    {confirmRemove === r.runId ? (
+                      <div className="flex flex-wrap items-center gap-3 px-4 pb-3 text-xs">
+                        <span className="text-neutral-600 dark:text-neutral-300">Remove from this list?</span>
+                        <button onClick={() => removeRuns(r.runId)} className="font-medium text-red-600 dark:text-red-400 hover:underline">Remove</button>
+                        <button onClick={() => setConfirmRemove(null)} className="text-neutral-500 hover:underline">Cancel</button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setConfirmRemove(r.runId)}
+                        aria-label="Remove this run from the list"
+                        title="Remove from list"
+                        className="absolute right-2 top-2.5 rounded-md p-1.5 text-neutral-400 hover:text-neutral-700 hover:bg-neutral-100 dark:hover:text-neutral-200 dark:hover:bg-neutral-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400"
+                      >
+                        <X className="w-3.5 h-3.5" aria-hidden="true" />
+                      </button>
+                    )}
                   </li>
                 )
               })}

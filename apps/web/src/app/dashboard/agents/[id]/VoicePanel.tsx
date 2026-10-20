@@ -349,6 +349,14 @@ export function VoicePanel({ agentId, agentName }: { agentId: string; agentName:
         </div>
       )}
 
+      {turns.length > 0 && phase === 'idle' && (
+        <div className="flex justify-center">
+          <button onClick={() => { player.current?.pause(); setTurns([]); setStarted(false); setError(null) }} className="text-xs text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200 underline">
+            New conversation (clears this chat)
+          </button>
+        </div>
+      )}
+
       {earlier.length > 0 && (
         <details className="group">
           <summary className="cursor-pointer text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300">Earlier in this conversation ({earlier.length})</summary>

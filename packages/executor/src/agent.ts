@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { prisma } from '@ai-workforce/db'
 import type { Agent } from '@prisma/client'
 import { AgentExecutionError, redact, redactString, safeErrorMessage } from '@ai-workforce/domain'
-import { estimateCostUsd, totalInputTokens, type LLMClient, type LLMClientConfig, type LLMMessage, type LLMSystemBlock, type LLMTool } from '@ai-workforce/llm'
+import { LLM_EFFORTS, estimateCostUsd, totalInputTokens, type LLMEffort, type LLMClient, type LLMClientConfig, type LLMMessage, type LLMSystemBlock, type LLMTool } from '@ai-workforce/llm'
 import { agentFailure, agentHeartbeat } from '@ai-workforce/monitoring'
 import {
   authorizeToolCall,
@@ -82,6 +82,12 @@ export interface RunAgentOptions {
   liveReads?: boolean
   toolFixtures?: Record<string, unknown>
   parent?: ParentRunInfo
+  /**
+   * Streams the model's visible text as it is written (voice turns speak it sentence by
+   * sentence). `step` is the model call within the run, starting at 0. Text can precede a tool
+   * call, and is streamed before the run's result checks have run.
+   */
+  onTextDelta?: (delta: string, step: number) => void
   deps?: RunAgentDeps
 }
 
@@ -234,14 +240,27 @@ function delegateTool(specialists: Specialist[]): LLMTool {
   }
 }
 
-function readModelConfig(config: unknown): { maxTokens?: number; temperature?: number } {
+function readModelConfig(config: unknown): { maxTokens?: number; temperature?: number; effort?: LLMEffort; thinking?: 'default' | 'off'; voiceThinking?: 'default' | 'off' } {
   if (!config || typeof config !== 'object') return {}
   const c = config as Record<string, unknown>
+  const mode = (v: unknown) => (v === 'off' || v === 'default' ? v : undefined)
   return {
     maxTokens: typeof c.maxTokens === 'number' ? c.maxTokens : undefined,
     temperature: typeof c.temperature === 'number' ? c.temperature : undefined,
+    effort: LLM_EFFORTS.includes(c.effort as LLMEffort) ? (c.effort as LLMEffort) : undefined,
+    thinking: mode(c.thinking),
+    voiceThinking: mode(c.voiceThinking),
   }
 }
+
+/**
+ * Voice turns run at low effort (a caller is waiting for the first word): on 20 Oct, Ava's
+ * suite passed 20/21 at low effort vs 7/7 x3 at the default medium, and the run was ~1 s faster.
+ * Thinking stays on: turning it off (modelConfig.voiceThinking = "off") was faster but Ava
+ * stopped using the calendar and cited "the FAQ" (5-6/7). With thinking off, models can also
+ * write a tool call as text; VOICE_NOTE is the guard recommended for that case.
+ */
+const VOICE_NOTE = 'This turn is spoken on a live call. When you use a tool, you may say a brief sentence first. If no tool can express what the caller asked for, say so instead of guessing. Do not include internal or system XML tags in your response.'
 
 function parseObjectInput(input: string): Record<string, unknown> | null {
   try {
@@ -310,6 +329,13 @@ class AgentRun {
   private injectionSignals: RunAgentResult['injectionSignals'] = []
   private qualitySignals: QualitySignal[] = []
   private reasoning: ReasoningStep[] = []
+
+  /** The agent's model settings, with the voice-turn defaults (see VOICE_NOTE) applied. */
+  private modelSettings(): ReturnType<typeof readModelConfig> {
+    const cfg = readModelConfig(this.agent.modelConfig)
+    if (this.trigger !== 'voice') return cfg
+    return { ...cfg, effort: cfg.effort ?? 'low', thinking: cfg.voiceThinking ?? cfg.thinking }
+  }
 
   private recordStep(step: ReasoningStep): void {
     if (this.reasoning.length < MAX_REASONING_STEPS) this.reasoning.push(step)
@@ -502,7 +528,9 @@ class AgentRun {
     const workforceTools = workforceToolsFor({ policy, contract: this.contract, isCandidate: this.agent.isCandidate })
 
     const context = await buildAgentContext(this.agent.id, {
-      query: this.input,
+      // Voice turns skip the semantic search (an embedding round trip, ~0.3 s) and use the
+      // agent's attached documents directly: a caller is waiting on every turn.
+      query: this.trigger === 'voice' ? undefined : this.input,
       contract: this.contract,
       stage: this.stage,
       toolNotes: [
@@ -570,8 +598,15 @@ class AgentRun {
         completion = await completeWithFallback({
           candidates,
           // Same agent → same stable prefix: one cache key per agent (OpenAI routing; Anthropic matches by prefix).
-          request: { system: assembled.systemBlocks, messages, tools: assembled.llmTools, cacheKey: `agent:${this.agent.id}` },
-          modelConfig: readModelConfig(this.agent.modelConfig),
+          request: {
+            system: this.modelSettings().thinking === 'off' && this.trigger === 'voice' ? [...assembled.systemBlocks, { text: VOICE_NOTE }] : assembled.systemBlocks,
+            thinking: this.modelSettings().thinking,
+            messages,
+            tools: assembled.llmTools,
+            cacheKey: `agent:${this.agent.id}`,
+            onTextDelta: this.options.onTextDelta ? (delta: string) => this.options.onTextDelta!(delta, iteration) : undefined,
+          },
+          modelConfig: this.modelSettings(),
           maxRetries: limits.maxRetries,
           deps: { createClient: this.options.deps?.createClient, sleep: this.options.deps?.sleep },
           onAttempt: (attempt) => this.modelAttempts.push(attempt),

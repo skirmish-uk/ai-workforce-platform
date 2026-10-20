@@ -4,7 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Mic, MicOff, PhoneCall, PhoneOff, Play, Volume2 } from 'lucide-react'
 
+interface Clip { audio: string; mimeType: string }
+
 interface Turn {
+  /** Agent turns of a streamed answer: which turn the incoming sentences belong to. */
+  id?: number
+  /** A streamed answer's sentences, in order ("Play again" plays them all). */
+  clips?: Clip[]
   who: 'you' | 'agent'
   text: string
   runId?: string | null
@@ -50,7 +56,9 @@ const TICK_MS = 50
 const START_TICKS = 3
 const BARGE_IN_TICKS = 5
 /** Silence that ends the caller's turn. */
-const END_SILENCE_MS = 800
+const END_SILENCE_MS = 650
+/** No answer audio this long after the caller stops: say a short acknowledgement. */
+const FILLER_AFTER_MS = 600
 const MIN_UTTERANCE_MS = 500
 const MAX_UTTERANCE_MS = 30_000
 
@@ -210,10 +218,11 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   }, [])
 
   // ---- agent speech, routed through the analyser so the waveform follows it
-  const play = (audio?: string | null, mimeType?: string | null, src?: string) => {
+  const play = (audio?: string | null, mimeType?: string | null, src?: string, onDone?: () => void) => {
     const url = src ?? (audio && mimeType ? `data:${mimeType};base64,${audio}` : null)
     if (!url) {
-      if (inCallRef.current) setPhaseBoth('listening')
+      if (onDone) onDone()
+      else if (inCallRef.current) setPhaseBoth('listening')
       return
     }
     player.current?.pause()
@@ -223,6 +232,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     try { context.createMediaElementSource(el).connect(playerInput.current ?? playerAnalyser.current!) } catch { /* already connected */ }
     const done = () => {
       if (player.current !== el) return
+      if (onDone) return onDone()
       if (phaseRef.current === 'speaking' || phaseRef.current === 'starting') setPhaseBoth(inCallRef.current ? 'listening' : 'idle')
     }
     el.onplay = () => { if (phaseRef.current !== 'hearing') setPhaseBoth('speaking') }
@@ -231,9 +241,48 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     el.play().catch(done)
   }
 
+  const playClips = (clips: Clip[]) => {
+    const [first, ...rest] = clips
+    if (!first) return
+    play(first.audio, first.mimeType, undefined, rest.length ? () => playClips(rest) : undefined)
+  }
+
+  /**
+   * The answer being streamed in: sentences queue here and play back to back. Bumping
+   * activeTurn (when the caller talks over it, or starts talking while it is still coming in)
+   * stops the rest of that answer from playing; its text still fills in.
+   */
+  const activeTurn = useRef(0)
+  const clipQueue = useRef<Clip[]>([])
+  const clipPlaying = useRef(false)
+  const answerDone = useRef(true)
+  /** "Mm-hm." / "Okay." in the agent's voice, played when an answer is slow to start. */
+  const fillers = useRef<Clip[]>([])
+  const lastFiller = useRef(-1)
+  const pumpClips = (turn: number) => {
+    if (turn !== activeTurn.current || clipPlaying.current) return
+    const clip = clipQueue.current.shift()
+    if (!clip) {
+      if (answerDone.current && inCallRef.current && (phaseRef.current === 'speaking' || phaseRef.current === 'thinking')) setPhaseBoth('listening')
+      return
+    }
+    clipPlaying.current = true
+    play(clip.audio, clip.mimeType, undefined, () => {
+      clipPlaying.current = false
+      pumpClips(turn)
+    })
+  }
+  const cancelAnswer = () => {
+    activeTurn.current++
+    clipQueue.current = []
+    clipPlaying.current = false
+  }
+
   // ---- one utterance: start recording when speech begins, stop after a pause
   const beginUtterance = () => {
     if (!stream.current) return
+    // Talking again before the answer has finished arriving: the caller has moved on.
+    cancelAnswer()
     const mimeType = recorderMimeType()
     const rec = new MediaRecorder(stream.current, mimeType ? { mimeType } : undefined)
     chunks.current = []
@@ -265,6 +314,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
 
   /** Speaking over the agent: stop it mid-sentence and listen. */
   const bargeIn = () => {
+    cancelAnswer()
     player.current?.pause()
     player.current = null
     setTurns((prev) => {
@@ -323,27 +373,85 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     const form = new FormData()
     form.append('audio', audio, 'utterance')
     form.append('history', JSON.stringify(history))
+    const turn = ++activeTurn.current
+    clipQueue.current = []
+    clipPlaying.current = false
+    answerDone.current = false
+    // If the answer is slow to start, acknowledge, the way a person says "mm-hm" on a call.
+    setTimeout(() => {
+      if (turn !== activeTurn.current || clipPlaying.current || clipQueue.current.length || phaseRef.current !== 'thinking' || !fillers.current.length) return
+      let pick = Math.floor(Math.random() * fillers.current.length)
+      if (pick === lastFiller.current) pick = (pick + 1) % fillers.current.length
+      lastFiller.current = pick
+      clipQueue.current.push(fillers.current[pick])
+      pumpClips(turn)
+    }, FILLER_AFTER_MS)
     try {
       const res = await fetch(`/api/agents/${agentId}/voice`, { method: 'POST', body: form })
-      const body: VoiceResponse = await res.json()
-      if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
-      if (!inCallRef.current) return
-      if (body.status === 'no_speech') {
-        // Nothing intelligible: don't make the agent say "sorry?" to background noise.
-        setPhaseBoth('listening')
+      if (!res.ok) {
+        const body: VoiceResponse = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `Request failed (${res.status})`)
+      }
+      if (!(res.headers.get('content-type') ?? '').includes('ndjson')) {
+        // Nothing usable was heard: a plain JSON reply.
+        const body: VoiceResponse = await res.json()
+        answerDone.current = true
+        if (!inCallRef.current) return
+        if (body.status === 'no_speech') {
+          // Don't make the agent say "sorry?" to background noise.
+          if (phaseRef.current === 'thinking') setPhaseBoth('listening')
+          return
+        }
+        setTurns((prev) => [
+          ...prev,
+          { who: 'you', text: body.transcript || '(nothing heard)', recordingUrl, note: 'Not understood clearly, so it wasn’t sent to the agent.' },
+          { who: 'agent', text: body.reply ?? '', status: body.status, audio: body.audio, mimeType: body.mimeType },
+        ])
+        if (phaseRef.current === 'thinking') play(body.audio, body.mimeType)
         return
       }
-      const unclear = body.status === 'unclear'
-      setTurns((prev) => [
-        ...prev,
-        { who: 'you', text: body.transcript || '(nothing heard)', recordingUrl, note: unclear ? 'Not understood clearly, so it wasn’t sent to the agent.' : undefined },
-        { who: 'agent', text: body.reply ?? '', runId: unclear ? null : body.runId, status: body.status, audio: body.audio, mimeType: body.mimeType, note: body.ttsError ? `Speech unavailable: ${body.ttsError}` : undefined },
-      ])
-      // The caller may have started talking again while the agent was thinking.
-      if (phaseRef.current === 'thinking') play(body.audio, body.mimeType)
+
+      // Streamed answer: heard → audio (one event per sentence) → done.
+      const update = (fn: (t: Turn) => Turn) => setTurns((prev) => prev.map((t) => (t.who === 'agent' && t.id === turn ? fn(t) : t)))
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let pending = ''
+      for (;;) {
+        const { value, done } = await reader.read()
+        if (done) break
+        pending += decoder.decode(value, { stream: true })
+        let newline: number
+        while ((newline = pending.indexOf('\n')) >= 0) {
+          const line = pending.slice(0, newline).trim()
+          pending = pending.slice(newline + 1)
+          if (!line) continue
+          const event = JSON.parse(line) as { type: string; transcript?: string; runId?: string | null; text?: string; audio?: string | null; mimeType?: string | null; ttsError?: string; status?: string }
+          if (event.type === 'heard') {
+            setTurns((prev) => [
+              ...prev,
+              { who: 'you', text: event.transcript || '(nothing heard)', recordingUrl },
+              { who: 'agent', id: turn, text: '', runId: event.runId ?? null, clips: [] },
+            ])
+          } else if (event.type === 'audio') {
+            const clip = event.audio && event.mimeType ? { audio: event.audio, mimeType: event.mimeType } : null
+            update((t) => ({ ...t, text: t.text ? `${t.text} ${event.text ?? ''}` : event.text ?? '', clips: clip ? [...(t.clips ?? []), clip] : t.clips, note: event.ttsError ? `Speech unavailable: ${event.ttsError}` : t.note }))
+            if (clip && turn === activeTurn.current && inCallRef.current) {
+              clipQueue.current.push(clip)
+              pumpClips(turn)
+            }
+          } else if (event.type === 'done') {
+            update((t) => ({ ...t, status: event.status, runId: event.runId ?? t.runId, text: t.text || '(no answer)' }))
+          }
+        }
+      }
+      if (turn === activeTurn.current) {
+        answerDone.current = true
+        pumpClips(turn) // nothing left to play: back to listening
+      }
     } catch (e) {
+      answerDone.current = true
       setError(e instanceof Error ? e.message : 'Something went wrong')
-      if (inCallRef.current) setPhaseBoth('listening')
+      if (inCallRef.current && turn === activeTurn.current) setPhaseBoth('listening')
     }
   }
 
@@ -370,8 +478,9 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
       vad.current = { floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0 }
 
       const res = await fetch(`/api/agents/${agentId}/voice`)
-      const body: VoiceResponse = await res.json()
+      const body: VoiceResponse & { fillers?: Clip[] } = await res.json()
       if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
+      fillers.current = body.fillers ?? []
       inCallRef.current = true
       setInCall(true)
       setMuted(false)
@@ -489,7 +598,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
 
       {current.length > 0 && (
         <div className="space-y-2">
-          {current.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onShowRun={onShowRun} />)}
+          {current.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onPlayClips={playClips} onShowRun={onShowRun} />)}
         </div>
       )}
 
@@ -505,7 +614,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
         <details className="group">
           <summary className="cursor-pointer text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300">Earlier in this conversation ({earlier.length})</summary>
           <div className="mt-2 space-y-2 max-h-72 overflow-auto pr-1">
-            {earlier.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onShowRun={onShowRun} muted />)}
+            {earlier.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onPlayClips={playClips} onShowRun={onShowRun} muted />)}
           </div>
         </details>
       )}
@@ -513,7 +622,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   )
 }
 
-function Bubble({ turn, agentId, onPlay, onShowRun, muted }: { turn: Turn; agentId: string; onPlay: (audio?: string | null, mime?: string | null, src?: string) => void; onShowRun?: (runId: string) => void; muted?: boolean }) {
+function Bubble({ turn, agentId, onPlay, onPlayClips, onShowRun, muted }: { turn: Turn; agentId: string; onPlay: (audio?: string | null, mime?: string | null, src?: string) => void; onPlayClips?: (clips: Clip[]) => void; onShowRun?: (runId: string) => void; muted?: boolean }) {
   const you = turn.who === 'you'
   return (
     <div className={`flex ${you ? 'justify-end' : 'justify-start'}`}>
@@ -521,7 +630,7 @@ function Bubble({ turn, agentId, onPlay, onShowRun, muted }: { turn: Turn; agent
         <p className="whitespace-pre-wrap break-words">{turn.text}</p>
         <p className={`mt-1 flex flex-wrap items-center gap-3 text-xs ${you ? 'text-primary-100' : 'text-neutral-500 dark:text-neutral-400'}`}>
           {you && turn.recordingUrl && <button onClick={() => onPlay(null, null, turn.recordingUrl)} className="inline-flex items-center gap-1 underline"><Play className="w-3 h-3" />Play my recording</button>}
-          {!you && turn.audio && <button onClick={() => onPlay(turn.audio, turn.mimeType)} className="inline-flex items-center gap-1 underline"><Volume2 className="w-3 h-3" />Play again</button>}
+          {!you && (turn.clips?.length || turn.audio) ? <button onClick={() => (turn.clips?.length ? onPlayClips?.(turn.clips) : onPlay(turn.audio, turn.mimeType))} className="inline-flex items-center gap-1 underline"><Volume2 className="w-3 h-3" />Play again</button> : null}
           {!you && turn.runId && (onShowRun
             ? <button onClick={() => onShowRun(turn.runId!)} className="underline">See how it answered</button>
             : <Link href={`/dashboard/agents/${agentId}?run=${encodeURIComponent(turn.runId)}`} className="underline">See how it answered</Link>)}

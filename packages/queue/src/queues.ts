@@ -8,6 +8,8 @@ export interface AgentRunJobData {
   workflowRunId?: string
   trigger?: 'api' | 'schedule' | 'manual' | 'voice' | 'event'
   scheduleId?: string
+  /** Publish the model's text as it is written on this Redis channel (voice turns). */
+  streamChannel?: string
 }
 
 export interface WorkflowRunJobData {

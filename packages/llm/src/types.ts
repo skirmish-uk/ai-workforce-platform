@@ -103,12 +103,28 @@ export interface LLMCompleteParams {
   tools?: LLMTool[]
   maxTokens?: number
   temperature?: number
+  /** Thinking depth / token spend on models that support it (Anthropic output_config.effort). */
+  effort?: LLMEffort
+  /**
+   * "off" asks the model not to think before answering (fastest first word; voice turns).
+   * Only sent to models that accept it; others keep their default.
+   */
+  thinking?: 'default' | 'off'
+  /**
+   * Receives the visible answer text as it is generated (streaming). The complete response is
+   * still returned as usual. Providers without streaming support ignore it.
+   */
+  onTextDelta?: (delta: string) => void
 }
+
+export type LLMEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+export const LLM_EFFORTS: readonly LLMEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 
 export interface LLMClientConfig {
   apiKey?: string
   maxTokens?: number
   temperature?: number
+  effort?: LLMEffort
   /** Overrides the provider's default API host — how OllamaLLMClient points at a local/self-hosted server. */
   baseUrl?: string
 }

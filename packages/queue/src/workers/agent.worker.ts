@@ -14,6 +14,10 @@ export function createAgentWorker(): Worker<AgentRunJobData> {
         workflowRunId: job.data.workflowRunId,
         trigger: job.data.trigger ?? 'api',
         isCancelled: () => (job.id ? isAgentRunCancelled(job.id) : false),
+        // Voice: the web route is listening on this channel to speak each sentence as it lands.
+        onTextDelta: job.data.streamChannel
+          ? (delta, step) => { void getRedisConnection().publish(job.data.streamChannel!, JSON.stringify({ step, delta })).catch(() => undefined) }
+          : undefined,
       }),
     { connection: getRedisConnection(), concurrency: 5 }
   )

@@ -3,9 +3,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { canAccessTenant, hasPermission, safeErrorMessage } from '@ai-workforce/domain'
-import { defaultGreeting, readVoiceConfig, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
+import { randomUUID } from 'node:crypto'
+import { defaultGreeting, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
 import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
-import { enqueueAgentRun, waitForAgentRun } from '@ai-workforce/queue'
+import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
 import { UserRole } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,13 @@ function withConversation(transcript: string, rawHistory: FormDataEntryValue | n
   return `This is a live voice call. The conversation so far, most recent last:\n${lines.join('\n')}\n\nThe caller now says: "${transcript}"\n\nReply to what the caller just said, in the context of the call. Don't greet them again.`
 }
 
+/** VOICE_TURN usage row (per-minute pricing data and timings), written without holding up the reply. */
+function recordTurn(agent: { id: string; tenantId: string }, userId: string, data: Record<string, unknown> & { timings: Record<string, number> }) {
+  void prisma.auditLog
+    .create({ data: { action: 'VOICE_TURN', entityType: 'Agent', entityId: agent.id, tenantId: agent.tenantId, userId, newData: { ...data, durationMs: data.timings.totalMs } as never } })
+    .catch((error) => console.error('Failed to record voice turn:', safeErrorMessage(error)))
+}
+
 async function speak(text: string, voice: ReturnType<typeof readVoiceConfig>['voice']) {
   try {
     const speech = await synthesizeSpeech(text, { voice: voice.voiceId, provider: voice.provider })
@@ -53,7 +61,13 @@ async function speak(text: string, voice: ReturnType<typeof readVoiceConfig>['vo
   }
 }
 
-/** GET /api/agents/[id]/voice — whether voice is on and the spoken greeting (text + audio). */
+/** Short acknowledgements the call plays if the answer hasn't started ~0.6 s after the caller stops. */
+const FILLERS = ['Mm-hm.', 'Okay.', 'Right.', 'Sure.']
+
+/**
+ * GET /api/agents/[id]/voice — whether voice is on, the spoken greeting (text + audio), and the
+ * agent's acknowledgement clips ("Mm-hm.", "Okay."…) in its own voice, made once per call.
+ */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
   if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -61,11 +75,18 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const loaded = await loadAgent(id, session)
   if (loaded.error) return loaded.error
   const greeting = loaded.voice.greeting ?? defaultGreeting(loaded.agent.name)
-  return NextResponse.json({ greeting, ...(await speak(greeting, loaded.voice)) })
+  const [spoken, ...fillers] = await Promise.all([speak(greeting, loaded.voice), ...FILLERS.map((f) => speak(f, loaded.voice))])
+  return NextResponse.json({
+    greeting,
+    ...spoken,
+    fillers: fillers.filter((f) => f.audio).map((f) => ({ audio: f.audio, mimeType: f.mimeType })),
+  })
 }
 
 /**
- * POST /api/agents/[id]/voice (multipart form, field "audio": one recorded utterance)
+ * POST /api/agents/[id]/voice (multipart form, field "audio": one recorded utterance; "history":
+ * the call so far). Streams NDJSON events: heard → audio (one per sentence, in order) → done.
+ * A turn with nothing usable heard is answered with plain JSON instead.
  *
  * One voice turn: speech-to-text → agent run in the worker (same policy, approvals,
  * kill switches and audit as any run) → spoken reply → text-to-speech. Returns the
@@ -86,6 +107,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (!(file instanceof Blob)) return NextResponse.json({ error: 'Send the recording as form field "audio"' }, { status: 400 })
     if (file.size > MAX_AUDIO_BYTES) return NextResponse.json({ error: 'Recording is too long' }, { status: 413 })
     const audio = Buffer.from(await file.arrayBuffer())
+    // Where each turn's time goes (returned to the browser and kept on the VOICE_TURN row).
+    const timings: Record<string, number> = { receivedMs: Date.now() - started }
+    let mark = Date.now()
+    const lap = (name: string) => { const now = Date.now(); timings[name] = now - mark; mark = now }
 
     let transcript: string
     let confidence: number | null = null
@@ -94,50 +119,157 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       const heard = await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en' })
       transcript = heard.text
       confidence = heard.confidence
+      lap('transcribeMs')
     } catch (error) {
       const status = error instanceof LLMConfigError ? 503 : 502
       return NextResponse.json({ error: `Could not transcribe the recording: ${safeErrorMessage(error)}` }, { status })
     }
 
-    let reply: string
-    let runId: string | null = null
-    let status: string = 'no_speech'
-    if (!transcript) {
-      reply = 'Sorry, I didn’t catch that. Could you say it again?'
-    } else if (confidence !== null && confidence < MIN_TRANSCRIPT_CONFIDENCE) {
+    // Nothing usable was heard: answer at once, without running the agent.
+    if (!transcript || (confidence !== null && confidence < MIN_TRANSCRIPT_CONFIDENCE)) {
+      const status = transcript ? 'unclear' : 'no_speech'
       // Garbled audio comes back as confident-looking words in a random language; don't act on it.
-      status = 'unclear'
-      reply = 'Sorry, I didn’t catch that clearly. Could you say it again, a little closer to the microphone?'
-    } else {
-      const job = await enqueueAgentRun({ agentId: agent.id, input: withConversation(transcript, form.get('history'), agent.name), userId: session.user.id, trigger: 'voice' })
-      runId = job.id ?? null
-      const outcome = job.id ? await waitForAgentRun<RunAgentResult>(job.id) : null
-      if (!outcome) {
-        status = 'timeout'
-        reply = 'That’s taking longer than usual. I’ve noted your question and the team will follow up.'
-      } else if (outcome.state === 'failed') {
-        status = 'failed'
-        reply = spokenReply({ status: 'failed', output: null })
-      } else {
-        status = outcome.result.status
-        reply = spokenReply(outcome.result)
-      }
+      const reply = transcript ? 'Sorry, I didn’t catch that clearly. Could you say it again, a little closer to the microphone?' : 'Sorry, I didn’t catch that. Could you say it again?'
+      // The browser drops a turn with no speech, so don't spend time or money speaking it.
+      const speech = status === 'no_speech' ? { audio: null, mimeType: null, characters: 0 } : await speak(reply, voice)
+      timings.totalMs = Date.now() - started
+      recordTurn(agent, session.user.id, { runId: null, status, confidence, audioBytes: audio.length, ttsCharacters: speech.characters, timings })
+      return NextResponse.json({ transcript, confidence, reply, status, runId: null, timings, ...speech })
     }
 
-    const speech = await speak(reply, voice)
-    await prisma.auditLog.create({
-      data: {
-        action: 'VOICE_TURN',
-        entityType: 'Agent',
-        entityId: agent.id,
-        tenantId: agent.tenantId,
-        userId: session.user.id,
-        // Usage for per-minute pricing: audio received and characters spoken.
-        newData: { runId, status, confidence, audioBytes: audio.length, ttsCharacters: speech.characters, ttsModel: speech.ttsModel ?? null, ttsError: speech.ttsError ?? null, durationMs: Date.now() - started },
+    // Streamed answer (NDJSON): what was heard, then each sentence's audio as soon as it's
+    // spoken, then the outcome. The agent's text arrives over Redis while the model writes it,
+    // so the caller hears the first sentence while the rest is still being generated.
+    const forbidden = resolveAgentContract(agent).contract.definitionOfDone.checks
+      .filter((c): c is Extract<typeof c, { type: 'output_not_contains' }> => c.type === 'output_not_contains')
+      .map((c) => c.value.toLowerCase())
+    const channel = `voice-stream-${randomUUID()}`
+    const subscriber = getRedisConnection().duplicate()
+    await subscriber.subscribe(channel)
+    const job = await enqueueAgentRun({ agentId: agent.id, input: withConversation(transcript, form.get('history'), agent.name), userId: session.user.id, trigger: 'voice', streamChannel: channel })
+    const runId = job.id ?? null
+    const encoder = new TextEncoder()
+
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        const send = (event: Record<string, unknown>) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
+        send({ type: 'heard', transcript, confidence, runId })
+
+        let spokenText = ''
+        let seq = 0
+        let characters = 0
+        let ttsModel: string | null = null
+        let ttsError: string | null = null
+        let ordered: Promise<void> = Promise.resolve()
+        const say = (sentence: string) => {
+          const text = sentence.trim()
+          // Spoken before the run's result checks: never say a phrase the agent's checks forbid.
+          if (!text || forbidden.some((f) => text.toLowerCase().includes(f))) return
+          spokenText = spokenText ? `${spokenText} ${text}` : text
+          const n = seq++
+          const pending = speak(text, voice) // starts now; sentences are synthesised in parallel
+          ordered = ordered.then(async () => {
+            const speech = await pending
+            characters += speech.characters
+            ttsModel = speech.ttsModel ?? ttsModel
+            ttsError = speech.ttsError ?? ttsError
+            if (timings.firstAudioMs === undefined && speech.audio) timings.firstAudioMs = Date.now() - started
+            send({ type: 'audio', seq: n, text, audio: speech.audio, mimeType: speech.mimeType, ttsError: speech.ttsError })
+          })
+        }
+
+        // Split the streamed text into sentences as they complete.
+        let buffer = ''
+        let step = -1
+        const flush = (final: boolean) => {
+          // The answer's first words matter most: if its opening sentence is long, speak up to its
+          // first comma on its own, so that short clip is ready while the rest is synthesised.
+          if (seq === 0) {
+            const end = buffer.search(/[.!?…]["'”’)\]]*(\s|$)/)
+            const sentenceLength = end >= 0 ? end + 1 : buffer.length
+            const comma = buffer.indexOf(', ', 18)
+            if (comma > 0 && comma < sentenceLength && sentenceLength > 45) {
+              say(buffer.slice(0, comma + 1))
+              buffer = buffer.slice(comma + 2)
+            }
+          }
+          for (;;) {
+            const match = /[.!?…]["'”’)\]]*\s+/.exec(buffer)
+            if (!match) break
+            const cut = match.index + match[0].length
+            say(buffer.slice(0, cut))
+            buffer = buffer.slice(cut)
+          }
+          // A long opening sentence: start speaking at its first clause instead of waiting for
+          // the full stop, so the caller hears something sooner. Later sentences stay whole.
+          if (!final && seq === 0 && buffer.length > 60) {
+            const comma = buffer.indexOf(', ', 25)
+            if (comma > 0) {
+              say(buffer.slice(0, comma + 1))
+              buffer = buffer.slice(comma + 2)
+            }
+          }
+          if (final) {
+            say(buffer)
+            buffer = ''
+          }
+        }
+        subscriber.on('message', (_channel: string, message: string) => {
+          try {
+            const event = JSON.parse(message) as { step: number; delta: string }
+            if (event.step !== step) {
+              flush(true) // text before a tool call is a complete thought
+              step = event.step
+              if (timings.firstTextMs === undefined) timings.firstTextMs = Date.now() - started
+            }
+            buffer += event.delta
+            flush(false)
+          } catch { /* ignore a malformed event */ }
+        })
+
+        let status = 'timeout'
+        let result: RunAgentResult | null = null
+        try {
+          const outcome = runId ? await waitForAgentRun<RunAgentResult>(runId, 45_000, 100) : null
+          // The last published deltas can land just after the job completes.
+          await new Promise((resolve) => setTimeout(resolve, 80))
+          if (outcome?.state === 'completed') {
+            result = outcome.result
+            status = result.status
+            timings.agentRunMs = result.durationMs
+          } else if (outcome?.state === 'failed') {
+            status = 'failed'
+          }
+        } finally {
+          await subscriber.unsubscribe(channel).catch(() => undefined)
+          subscriber.disconnect()
+        }
+        flush(true)
+        lap('agentMs')
+
+        // What still needs saying: the full answer if nothing streamed (e.g. a provider without
+        // streaming), or how the turn ended when it wasn't a plain answer.
+        if (status === 'timeout') say('That’s taking longer than usual. I’ve noted your question and the team will follow up.')
+        else if (!result || status === 'failed') say(spokenReply({ status: 'failed', output: null }))
+        else if (status === 'completed' || status === 'partial') { if (!spokenText) say(spokenReply(result)) }
+        else say(spokenReply(result))
+
+        await ordered
+        lap('speakMs')
+        timings.totalMs = Date.now() - started
+        send({ type: 'done', status, runId, reply: spokenText, timings })
+        recordTurn(agent, session.user.id, { runId, status, confidence, audioBytes: audio.length, ttsCharacters: characters, ttsModel, ttsError, timings })
+        controller.close()
       },
     })
-
-    return NextResponse.json({ transcript, confidence, reply, status, runId, ...speech })
+    return new Response(body, {
+      headers: {
+        'Content-Type': 'application/x-ndjson; charset=utf-8',
+        'Cache-Control': 'no-store, no-transform',
+        // Don't let nginx (or anything that honours this) hold the stream back.
+        'X-Accel-Buffering': 'no',
+      },
+    })
   } catch (error) {
     console.error('Voice turn failed:', error)
     return NextResponse.json({ error: 'Voice turn failed' }, { status: 500 })

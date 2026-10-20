@@ -10,7 +10,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './types'
-import { LLMConfigError } from './types'
+import { LLMConfigError, type LLMEffort } from './types'
 
 const DEFAULT_MAX_TOKENS = 4096
 
@@ -97,6 +97,28 @@ function mapStopReason(reason: Anthropic.Message['stop_reason']): LLMStopReason 
  * deprecated for this model"); Sonnet 5.5 / Haiku 5.5 reject non-default values. Only
  * older models known to accept them get one, so a new model never fails on it.
  */
+/**
+ * output_config.effort: accepted by current models (Opus 4.5+, Sonnet 4.6+, Haiku 5.5, Fable);
+ * Haiku 4.5, Sonnet 4.5 and older return an error, so it's never sent to them.
+ */
+/**
+ * The request field that turns thinking off, per model: Haiku 5.5 accepts {type: "disabled"} at
+ * effort high or below; Sonnet 5.5 rejects "disabled" and uses {type: "between_tools"} instead
+ * (also high or below). Other current models can't turn it off (Opus 5.5, Fable) or default to
+ * no thinking already, so nothing is sent.
+ */
+export function thinkingOffParam(model: string, effort: LLMEffort | undefined): Anthropic.ThinkingConfigParam | undefined {
+  if (effort === 'xhigh' || effort === 'max') return undefined
+  if (/haiku-5-5/.test(model)) return { type: 'disabled' }
+  if (/sonnet-5-5/.test(model)) return { type: 'between_tools' } as unknown as Anthropic.ThinkingConfigParam
+  return undefined
+}
+
+export function supportsEffort(model: string): boolean {
+  // Claude 3.x, Haiku 4.5, Sonnet 4/4.5 and Opus 4/4.1 (dated ids like claude-sonnet-4-20250514).
+  return !/claude-3|haiku-4-5|sonnet-4-5|opus-4-1|claude-(sonnet|opus)-4-20\d{6}/.test(model)
+}
+
 export function supportsSamplingParams(model: string): boolean {
   // Family followed by end of id or a date snapshot (so "opus-4" never matches "opus-4-7").
   return /^claude-(3|3-5|3-7|haiku-4-5|sonnet-4|sonnet-4-5|sonnet-4-6|opus-4|opus-4-1|opus-4-5|opus-4-6)(-\d{8}|$)/.test(model) ||
@@ -109,6 +131,7 @@ export class AnthropicLLMClient implements LLMClient {
   private client: Anthropic
   private defaultMaxTokens: number
   private defaultTemperature?: number
+  private defaultEffort?: LLMEffort
 
   constructor(model: string, config: LLMClientConfig = {}) {
     const apiKey = config.apiKey ?? process.env.ANTHROPIC_API_KEY
@@ -119,6 +142,7 @@ export class AnthropicLLMClient implements LLMClient {
     this.client = new Anthropic({ apiKey })
     this.defaultMaxTokens = config.maxTokens ?? DEFAULT_MAX_TOKENS
     this.defaultTemperature = config.temperature
+    this.defaultEffort = config.effort
   }
 
   /**
@@ -129,6 +153,8 @@ export class AnthropicLLMClient implements LLMClient {
    * minimum (512 tokens on current models, 4,096 on Haiku 4.5) silently aren't cached.
    */
   buildRequest(params: LLMCompleteParams): Anthropic.MessageCreateParamsNonStreaming {
+    const effort = params.effort ?? this.defaultEffort
+    const thinkingOff = params.thinking === 'off' ? thinkingOffParam(this.model, effort) : undefined
     return {
       model: this.model,
       system: toAnthropicSystem(params.system),
@@ -137,11 +163,25 @@ export class AnthropicLLMClient implements LLMClient {
       max_tokens: params.maxTokens ?? this.defaultMaxTokens,
       cache_control: { type: 'ephemeral' },
       ...(supportsSamplingParams(this.model) ? { temperature: params.temperature ?? this.defaultTemperature } : {}),
+      ...(effort && supportsEffort(this.model) ? { output_config: { effort } } : {}),
+      ...(thinkingOff ? { thinking: thinkingOff } : {}),
     }
   }
 
   async complete(params: LLMCompleteParams): Promise<LLMResponse> {
-    const response = await this.client.messages.create(this.buildRequest(params))
+    const request = this.buildRequest(params)
+    let response: Anthropic.Message
+    if (params.onTextDelta) {
+      // Streaming: the caller hears the answer while it's being written (voice turns).
+      const onText = params.onTextDelta
+      const stream = this.client.messages.stream(request)
+      stream.on('text', (delta) => {
+        try { onText(delta) } catch { /* a listener's failure never breaks the run */ }
+      })
+      response = await stream.finalMessage()
+    } else {
+      response = await this.client.messages.create(request)
+    }
 
     let content: string | null = null
     const toolCalls: LLMToolCall[] = []

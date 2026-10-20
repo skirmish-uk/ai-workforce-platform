@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { AnthropicLLMClient, supportsSamplingParams, toAnthropicMessages, toAnthropicSystem } from './anthropic'
+import { AnthropicLLMClient, supportsEffort, supportsSamplingParams, toAnthropicMessages, toAnthropicSystem } from './anthropic'
 import { parseOpenAIChatCompletion, toOpenAIMessages } from './openai'
 import { estimateCostUsd } from './pricing'
 import { totalInputTokens } from './types'
@@ -62,4 +62,16 @@ test('OpenAI: cached prompt tokens are split out of input tokens', () => {
   } as never)
   assert.deepEqual(parsed.usage, { inputTokens: 464, outputTokens: 10, cacheReadTokens: 1536 })
   assert.deepEqual(toOpenAIMessages([{ text: 'stable', cache: true }, { text: 'per request' }], [])[0], { role: 'system', content: 'stable\n\nper request' })
+})
+
+test('effort goes in output_config, only for models that accept it', () => {
+  const haiku55 = new AnthropicLLMClient('claude-haiku-5-5', { apiKey: 'test', effort: 'low' })
+  assert.deepEqual((haiku55.buildRequest({ messages: [] }) as unknown as { output_config?: unknown }).output_config, { effort: 'low' })
+  // Per-request effort wins over the client default.
+  assert.deepEqual((haiku55.buildRequest({ messages: [], effort: 'high' }) as unknown as { output_config?: unknown }).output_config, { effort: 'high' })
+  const haiku45 = new AnthropicLLMClient('claude-haiku-4-5-20251001', { apiKey: 'test', effort: 'low' })
+  assert.equal((haiku45.buildRequest({ messages: [] }) as unknown as { output_config?: unknown }).output_config, undefined)
+  assert.equal(supportsEffort('claude-sonnet-4-20250514'), false)
+  assert.equal(supportsEffort('claude-opus-5-5'), true)
+  assert.equal((new AnthropicLLMClient('claude-opus-5-5', { apiKey: 'test' }).buildRequest({ messages: [] }) as unknown as { output_config?: unknown }).output_config, undefined)
 })

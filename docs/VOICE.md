@@ -38,7 +38,16 @@ JSON { transcript, reply, status, runId, audio (base64 mp3) } → played in the 
 - **Interrupting by talking.** While the agent speaks, about 250 ms of clearly louder speech stops it mid-sentence and starts your turn; its bubble is marked "Interrupted". The higher threshold, plus the browser's echo cancellation, keeps the agent's own voice from the speakers from cutting it off. A headset works best. Speaking while the agent is still thinking starts a new turn too; the earlier answer is then shown but not played.
 - **Memory of the call.** Each turn sends the last 8 exchanges (as `history`, 400 characters each). The route gives the agent the conversation and the new line, so follow-ups like "what about Saturdays?" work.
 - **Mute** (detection paused), a waveform that follows your microphone or the agent's voice, the current exchange with earlier turns collapsible, "Play my recording", a microphone picker, and "See how it answered", which opens that turn's run and reasoning on the same page.
-- **Latency:** measured 20 Oct with Ava, Haiku 5.5 and the Cartesia voice. The answer starts about 5–6 s after you stop talking (transcription, the agent run in the worker, then speech). That's fine for a demo, but phone-grade turn-taking needs streaming speech, which is the AI Receptionist work in §5.
+- **Latency (streamed, 20 Oct).** Before: each step finished before the next started, so the reply began 5.9–6.3 s after upload. Now:
+  - the model's text streams from the worker over Redis (`streamChannel`) as it is written;
+  - the route turns each sentence into speech as soon as it completes, and the opening clause of a long first sentence on its own;
+  - audio streams to the browser as NDJSON (`heard` → `audio` per sentence → `done`), and the browser plays the sentences back to back;
+  - voice turns run at low effort (thinking stays on: off made Ava skip the calendar);
+  - voice turns skip the embedding search (about 0.3 s) and use the attached documents;
+  - the end-of-speech wait is 0.65 s;
+  - an acknowledgement in the agent's voice ("Mm-hm.", "Okay.") plays if nothing has started 0.6 s after the caller stops.
+
+  Measured on the live site, the first answer audio arrives 2.3–3.9 s after upload (one outlier at 6 s). What remains is speech-to-text (0.55–2 s) and the model's first words (1.2–5 s), both outside our control. Every turn's breakdown is returned as `timings` and kept on its `VOICE_TURN` row. Sub-second, phone-grade turn-taking needs streaming speech recognition and synthesis end to end (§5).
 
 ## 2. Turning voice on for an agent
 

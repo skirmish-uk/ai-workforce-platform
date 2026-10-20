@@ -120,7 +120,39 @@ export interface ChildRunRecord {
   dodPassed?: boolean
 }
 
+/**
+ * One step of how a run reached its result, for the run's trace in the dashboard: what the
+ * model wrote (and any thinking the provider returned in readable form) and which tools it
+ * asked for, then a short summary of each tool's result. Redacted and truncated; tool results
+ * are data from outside systems and are shown as text, never acted on.
+ */
+export interface ReasoningStep {
+  kind: 'model' | 'tool'
+  text?: string
+  thinking?: string
+  calls?: Array<{ tool: string; input: unknown }>
+  tool?: string
+  ok?: boolean
+  result?: string
+}
+
+const MAX_REASONING_STEPS = 40
+
+function summarizeToolOutput(output: unknown): string {
+  const text = typeof output === 'string' ? output : JSON.stringify(redact(output, { maxStringLength: 300 }))
+  return redactString(text ?? '', 600)
+}
+
+/** Readable thinking from the provider's raw content blocks (often empty: some models only return a signature). */
+function readableThinking(providerContent: unknown): string | undefined {
+  const blocks = (providerContent as { content?: Array<{ type?: string; thinking?: unknown }> } | undefined)?.content
+  if (!Array.isArray(blocks)) return undefined
+  const text = blocks.filter((b) => b?.type === 'thinking' && typeof b.thinking === 'string').map((b) => b.thinking as string).join('\n').trim()
+  return text ? redactString(text, 1500) : undefined
+}
+
 export interface RunAgentResult {
+  reasoning?: ReasoningStep[]
   runId: string
   status: RunAgentStatus
   output: string | null
@@ -277,6 +309,11 @@ class AgentRun {
   private contextWarnings: string[] = []
   private injectionSignals: RunAgentResult['injectionSignals'] = []
   private qualitySignals: QualitySignal[] = []
+  private reasoning: ReasoningStep[] = []
+
+  private recordStep(step: ReasoningStep): void {
+    if (this.reasoning.length < MAX_REASONING_STEPS) this.reasoning.push(step)
+  }
   private iterations = 0
   private modelUsed?: { provider: string; model: string }
   private contract!: AgentContract
@@ -557,6 +594,13 @@ class AgentRun {
         this.costKnown = true
       }
 
+      this.recordStep({
+        kind: 'model',
+        text: response.content ? redactString(response.content, 1500) : undefined,
+        thinking: readableThinking(response.providerContent),
+        calls: response.toolCalls.length ? response.toolCalls.map((c) => ({ tool: c.name, input: redact(c.input, { maxStringLength: 300 }) })) : undefined,
+      })
+
       if (!response.toolCalls.length) {
         return this.assess(response.content)
       }
@@ -627,6 +671,7 @@ class AgentRun {
         }
       }
 
+      for (const r of toolResults) this.recordStep({ kind: 'tool', tool: r.name, ok: !r.isError, result: summarizeToolOutput(r.output) })
       messages.push({ role: 'user', toolResults })
     }
 
@@ -893,6 +938,7 @@ class AgentRun {
       contextWarnings: this.contextWarnings,
       injectionSignals: this.injectionSignals,
       qualitySignals: this.qualitySignals,
+      reasoning: this.reasoning,
       approvalId: extra.approvalId,
       pendingTool: extra.pendingTool,
       error: extra.error ? redactString(extra.error, 1000) : undefined,
@@ -930,9 +976,28 @@ class AgentRun {
         injectionSignals: this.injectionSignals,
         qualitySignals: this.qualitySignals,
         phases: this.phases,
+        reasoning: this.reasoning,
         parentRunId: this.options.parent?.runId,
         rootRunId: this.rootRunId,
       })
+    }
+    // A hand-off is work for a person: give it a record someone can find, act on and close.
+    if (status === 'escalated' && result.escalation && !this.options.dryRun && !this.agent.isCandidate) {
+      await prisma.handover
+        .upsert({
+          where: { runId: this.runId },
+          update: {},
+          create: {
+            tenantId: this.agent.tenantId,
+            agentId: this.agent.id,
+            runId: this.runId,
+            task: redactString(this.input, 4000),
+            reason: result.escalation.reason,
+            severity: result.escalation.severity,
+            destination: result.escalation.destination,
+          },
+        })
+        .catch((error) => console.error('Failed to record handover:', safeErrorMessage(error)))
     }
     if (status === 'completed' || status === 'partial') agentHeartbeatSafe(this.agent.id)
     if (status === 'failed') agentFailureSafe(this.agent.id, result.error)

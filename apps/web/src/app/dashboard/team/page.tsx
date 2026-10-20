@@ -31,7 +31,7 @@ interface TeamResponse {
     lastRun: { at: string; status: string; trigger: string; input: string; output: string; costUsd: number | null; runId: string } | null
   } | null
   team: TeamAgent[]
-  waiting: { actions: number; changes: number; revisionsInProgress: number }
+  waiting: { actions: number; changes: number; revisionsInProgress: number; handovers?: number }
   activity: Array<{ action: string; at: string; agentName: string | null; revisionId: string | null; detail: string | null; kind: string | null }>
 }
 
@@ -140,6 +140,11 @@ export default function TeamPage() {
           <Link href="/dashboard/approvals" className={`px-3 py-1.5 rounded-lg text-sm font-medium border ${waitingTotal ? 'border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200' : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400'}`}>
             {data.waiting.actions} action{data.waiting.actions === 1 ? '' : 's'} waiting for you
           </Link>
+          {data.waiting.handovers ? (
+            <Link href="/dashboard/approvals#handovers" className="px-3 py-1.5 rounded-lg text-sm font-medium border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+              {data.waiting.handovers} handed to a person
+            </Link>
+          ) : null}
           <Link href="/dashboard/improvements" className="px-3 py-1.5 rounded-lg text-sm font-medium border border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400">
             {data.waiting.changes} change{data.waiting.changes === 1 ? '' : 's'} to approve · {data.waiting.revisionsInProgress} being tested
           </Link>

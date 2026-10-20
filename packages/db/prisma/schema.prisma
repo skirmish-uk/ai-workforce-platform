@@ -93,6 +93,7 @@ model Tenant {
   users             User[]
   agents            Agent[]
   notifications     Notification[]
+  handovers         Handover[]
   skills            Skill[]
   knowledgeDocs     KnowledgeDocument[]
   knowledgeChunks   KnowledgeChunk[]
@@ -417,6 +418,33 @@ model Notification {
 
   @@unique([kind, sourceId])
   @@index([tenantId, createdAt])
+}
+
+/// Work an agent handed to a person (platform__escalate): what was asked, why the agent stopped,
+/// who it is for, and whether someone has dealt with it. Created by runAgent for real runs (never
+/// test or replay runs), listed in the dashboard's Approvals inbox, emailed by the worker's sweep.
+model Handover {
+  id             String    @id @default(cuid())
+  agentId        String
+  runId          String    @unique
+  task           String    @db.Text
+  reason         String    @db.Text
+  severity       String    @default("medium")
+  /// The agent contract's escalation destination at the time (usually an email address).
+  destination    String
+  /// OPEN -> RESOLVED
+  status         String    @default("OPEN")
+  resolutionNote String?   @db.Text
+  resolvedById   String?
+  resolvedAt     DateTime?
+  notifiedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
 }
 
 model ApprovalPolicy {

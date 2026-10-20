@@ -51,7 +51,13 @@ export async function GET(
       .map((row) => ({ at: row.createdAt, action: row.action, ...((row.newData ?? {}) as Record<string, unknown>) }))
       .filter((run) => runId || includeDryRuns || (run as { dryRun?: unknown }).dryRun !== true)
       .slice(0, limit)
-    return NextResponse.json({ data: runs })
+    // Runs that handed work to a person carry where that hand-off stands.
+    const runIds = runs.map((r) => (r as { runId?: unknown }).runId).filter((x): x is string => typeof x === 'string')
+    const handovers = runIds.length
+      ? await prisma.handover.findMany({ where: { runId: { in: runIds }, tenantId: agent.tenantId }, select: { id: true, runId: true, status: true, resolutionNote: true, resolvedAt: true } })
+      : []
+    const handoverByRun = new Map(handovers.map((h) => [h.runId, h]))
+    return NextResponse.json({ data: runs.map((r) => ({ ...r, handover: handoverByRun.get((r as { runId?: string }).runId ?? '') ?? null })) })
   } catch (error) {
     console.error('Error listing agent runs:', error)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { CheckCircle2, Clock, ShieldAlert, XCircle } from 'lucide-react'
 import { Badge, Button, formatDateTime } from '@ai-workforce/ui'
+import { HandoverInbox } from './HandoverInbox'
 
 interface ApprovalSummary {
   action: string
@@ -268,8 +269,12 @@ export default function ApprovalsPage() {
     <div className="space-y-6 max-w-4xl">
       <div>
         <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-50">Approvals</h1>
-        <p className="text-neutral-600 dark:text-neutral-400 mt-1">Actions your agents want to take that need a person to say yes first.</p>
+        <p className="text-neutral-600 dark:text-neutral-400 mt-1">Actions your agents want to take that need a person to say yes first, and requests they handed to the team.</p>
       </div>
+
+      <HandoverInbox />
+
+      <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50">Waiting for a yes</h2>
 
       <div className="flex gap-2" role="tablist" aria-label="Approvals">
         {(['waiting', 'history'] as const).map((t) => (

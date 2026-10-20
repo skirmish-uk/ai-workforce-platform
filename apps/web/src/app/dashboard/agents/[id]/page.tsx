@@ -49,6 +49,59 @@ interface Run {
   approvalId?: string
   clarificationQuestions?: string[]
   escalation?: { reason: string; severity: string; destination: string }
+  handover?: { id: string; status: string; resolutionNote: string | null; resolvedAt: string | null } | null
+  reasoning?: ReasoningStep[]
+}
+
+interface ReasoningStep {
+  kind: 'model' | 'tool'
+  text?: string
+  thinking?: string
+  calls?: Array<{ tool: string; input: unknown }>
+  tool?: string
+  ok?: boolean
+  result?: string
+}
+
+/** Short, readable version of a tool call's arguments. */
+function argsSummary(input: unknown): string {
+  if (!input || typeof input !== 'object') return ''
+  const parts = Object.entries(input as Record<string, unknown>).map(([k, v]) => `${k}: ${typeof v === 'string' ? v : JSON.stringify(v)}`)
+  const text = parts.join(' · ')
+  return text.length > 220 ? `${text.slice(0, 217)}…` : text
+}
+
+/** The run's reasoning chain: what the model thought and said, what it asked tools for, and what came back. */
+function ReasoningChain({ steps }: { steps: ReasoningStep[] }) {
+  return (
+    <ol className="mt-3 space-y-3 border-l-2 border-primary-200 dark:border-primary-800 pl-4">
+      {steps.map((s, i) => (
+        <li key={i} className="space-y-1 min-w-0">
+          {s.kind === 'model' ? (
+            <>
+              <p className="text-xs font-medium uppercase tracking-wider text-primary-700 dark:text-primary-300">{s.calls?.length ? 'Decided' : 'Answered'}</p>
+              {s.thinking && <p className="text-sm italic text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-words">{s.thinking}</p>}
+              {s.text && <p className="text-sm text-neutral-800 dark:text-neutral-200 whitespace-pre-wrap break-words">{s.text}</p>}
+              {s.calls?.map((c, j) => (
+                <p key={j} className="text-sm text-neutral-700 dark:text-neutral-300 break-words">
+                  → <span className="font-medium">{toolLabel(c.tool)}</span>
+                  {argsSummary(c.input) && <span className="text-neutral-500"> ({argsSummary(c.input)})</span>}
+                </p>
+              ))}
+              {!s.text && !s.thinking && !s.calls?.length && <p className="text-sm text-neutral-500">(no visible text)</p>}
+            </>
+          ) : (
+            <>
+              <p className={`text-xs font-medium uppercase tracking-wider ${s.ok ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                {s.ok ? 'Got back' : 'Problem'} from {toolLabel(s.tool ?? 'tool')}
+              </p>
+              <p className="text-xs font-mono text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap break-all">{s.result}</p>
+            </>
+          )}
+        </li>
+      ))}
+    </ol>
+  )
 }
 
 const STATUS: Record<string, { label: string; variant: 'default' | 'success' | 'warning' | 'danger' | 'info' }> = {
@@ -91,7 +144,7 @@ function money(usd: number | null | undefined): string {
   return usd < 0.01 ? `$${usd.toFixed(4)}` : `$${usd.toFixed(2)}`
 }
 
-function RunTrace({ run, agentId }: { run: Run; agentId: string }) {
+function RunTrace({ run, agentId, focus }: { run: Run; agentId: string; focus?: boolean }) {
   const status = STATUS[run.status ?? ''] ?? { label: run.status ?? 'Unknown', variant: 'default' as const }
   return (
     <div className="space-y-5">
@@ -126,7 +179,22 @@ function RunTrace({ run, agentId }: { run: Run; agentId: string }) {
         </section>
       ) : null}
       {run.escalation && (
-        <p className="text-sm text-neutral-700 dark:text-neutral-300">Handed to {run.escalation.destination}: {run.escalation.reason}</p>
+        <section className="rounded-lg bg-amber-50 dark:bg-amber-900/20 px-4 py-3 space-y-2">
+          <h3 className="text-xs font-medium uppercase tracking-wider text-amber-800 dark:text-amber-300">Handed to {run.escalation.destination}</h3>
+          <p className="text-sm text-amber-950 dark:text-amber-100 whitespace-pre-wrap break-words">{run.escalation.reason}</p>
+          {run.handover?.status === 'RESOLVED' ? (
+            <p className="text-sm text-green-800 dark:text-green-300">
+              <CheckCircle2 className="inline w-4 h-4 mr-1 -mt-0.5" aria-hidden="true" />
+              Handled{run.handover.resolvedAt ? ` ${formatDateTime(run.handover.resolvedAt)}` : ''}{run.handover.resolutionNote ? `: ${run.handover.resolutionNote}` : ''}
+            </p>
+          ) : run.handover ? (
+            <p className="text-sm text-amber-900 dark:text-amber-200">
+              Waiting for someone to deal with it. <Link href="/dashboard/approvals#handovers" className="underline font-medium">Open the handover inbox</Link>
+            </p>
+          ) : (
+            <p className="text-xs text-amber-800/80 dark:text-amber-300/80">{run.dryRun ? 'Test run: no handover was created.' : 'This run is older than the handover inbox.'}</p>
+          )}
+        </section>
       )}
 
       {run.toolCalls?.length ? (
@@ -159,8 +227,15 @@ function RunTrace({ run, agentId }: { run: Run; agentId: string }) {
         </section>
       ) : null}
 
+      {run.reasoning?.length ? (
+        <details className="group" open={focus || run.reasoning.length <= 6}>
+          <summary className="cursor-pointer text-xs font-medium uppercase tracking-wider text-neutral-500">How it got there ({run.reasoning.length} steps)</summary>
+          <ReasoningChain steps={run.reasoning} />
+        </details>
+      ) : null}
+
       {run.phases?.length ? (
-        <details className="group">
+        <details className="group" open={focus && !run.reasoning?.length}>
           <summary className="cursor-pointer text-xs font-medium uppercase tracking-wider text-neutral-500">Step-by-step trace</summary>
           <ol className="mt-3 space-y-3 border-l border-neutral-200 dark:border-neutral-700 pl-4">
             {run.phases.map((p, i) => (
@@ -221,10 +296,25 @@ export default function AgentPage() {
     const res = await fetch(`/api/agents/${id}/runs?limit=25`)
     if (!res.ok) return
     const body = await res.json()
-    const rows: Run[] = body.data ?? []
+    let rows: Run[] = body.data ?? []
+    // A run asked for by id (a link, or "See how it answered") may be older than the list.
+    if (select && !rows.some((r) => r.runId === select)) {
+      const one = await fetch(`/api/agents/${id}/runs?run=${encodeURIComponent(select)}`).then((r) => (r.ok ? r.json() : null)).catch(() => null)
+      if (one?.data?.[0]) rows = [one.data[0], ...rows]
+    }
     setRuns(rows)
     setSelected((current) => select ?? current ?? rows[0]?.runId ?? null)
   }, [id])
+
+  // "See how it answered" in the voice panel: show that run with its reasoning open, in view.
+  const [focusRun, setFocusRun] = useState<string | null>(null)
+  const traceRef = useRef<HTMLElement | null>(null)
+  const showRun = useCallback(async (runId: string) => {
+    await loadRuns(runId)
+    setFocusRun(runId)
+    window.history.replaceState(null, '', `?run=${encodeURIComponent(runId)}`)
+    requestAnimationFrame(() => traceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }, [loadRuns])
 
   useEffect(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('run')
@@ -306,7 +396,7 @@ export default function AgentPage() {
       </header>
 
       {/* Voice agents: the conversation sits at the top, so replies never need scrolling to. */}
-      {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} />}
+      {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} onShowRun={showRun} />}
       {agent?.config?.voice?.enabled && <VoiceClone agentId={id} agentName={agent.name} />}
 
       {agent && (
@@ -404,8 +494,8 @@ export default function AgentPage() {
             </ul>
           )}
         </section>
-        <section className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5 min-w-0">
-          {selectedRun ? <RunTrace run={selectedRun} agentId={id} /> : <p className="text-sm text-neutral-500">Select a run to see what the agent did, step by step.</p>}
+        <section ref={traceRef} className="scroll-mt-20 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5 min-w-0">
+          {selectedRun ? <RunTrace key={selectedRun.runId} run={selectedRun} agentId={id} focus={focusRun === selectedRun.runId} /> : <p className="text-sm text-neutral-500">Select a run to see what the agent did, step by step.</p>}
         </section>
       </div>
     </div>

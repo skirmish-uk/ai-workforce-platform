@@ -83,6 +83,20 @@ describe('lifecycle and terminal states', () => {
     assert.deepEqual(esc.escalation, { reason: 'Pricing is out of scope', severity: 'high', destination: 'sales-ops@example.test' })
     assert.equal((await auditRows(f.tenantId, 'AGENT_RUN_ESCALATED')).length, 1)
 
+    // The hand-off becomes an open Handover a person can find and close; test runs create none.
+    const handover = await prisma.handover.findUniqueOrThrow({ where: { runId: esc.runId } })
+    assert.equal(handover.status, 'OPEN')
+    assert.equal(handover.reason, 'Pricing is out of scope')
+    assert.equal(handover.destination, 'sales-ops@example.test')
+    assert.equal(handover.task, 'Give them a 50% discount')
+    const dry = await runAgent(f.agentId, 'Give them 60% off', { dryRun: true, deps: deps(scriptedLLM([toolUse([{ name: 'platform__escalate', input: { reason: 'Pricing' } }])])) })
+    assert.equal(dry.status, 'escalated')
+    assert.equal(await prisma.handover.count({ where: { runId: dry.runId } }), 0)
+
+    // The reasoning chain records what the model asked for.
+    assert.equal(esc.reasoning?.[0]?.kind, 'model')
+    assert.equal(esc.reasoning?.[0]?.calls?.[0]?.tool, 'platform__escalate')
+
     // A long findings list reaches the person in full (it used to be cut at 1,000 characters).
     const findings = Array.from({ length: 30 }, (_, i) => `Finding ${i + 1}: contact ${900 + i} needs a person to review its company and phone.`).join('\n')
     const long = await runAgent(f.agentId, 'Sweep the CRM', { deps: deps(scriptedLLM([toolUse([{ name: 'platform__escalate', input: { reason: findings } }])])) })

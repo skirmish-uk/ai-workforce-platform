@@ -118,6 +118,7 @@ export async function GET(request: NextRequest) {
       (revisionIds.length ? await prisma.agentRevision.findMany({ where: { id: { in: revisionIds }, tenantId }, select: { id: true, agentId: true } }) : []).map((r) => [r.id, r.agentId])
     )
     const kinds = pendingApprovals.map((a) => (a.input as { kind?: string } | null)?.kind)
+    const openHandovers = await prisma.handover.count({ where: { tenantId, status: 'OPEN' } })
     return NextResponse.json({
       selfManagement: policy,
       manager,
@@ -126,6 +127,7 @@ export async function GET(request: NextRequest) {
         actions: kinds.filter((k) => k !== 'agent_revision').length,
         changes: kinds.filter((k) => k === 'agent_revision').length,
         revisionsInProgress: openRevisions.filter((r) => r.status !== 'AWAITING_APPROVAL').length,
+        handovers: openHandovers,
       },
       activity: activity.map((e) => {
         const d = (e.newData ?? {}) as Record<string, unknown>

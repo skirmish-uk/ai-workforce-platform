@@ -49,7 +49,7 @@ function recorderMimeType(): string | undefined {
  * it speaks and your microphone level while you talk; the current exchange sits directly
  * under it. Each turn is a normal agent run.
  */
-export function VoicePanel({ agentId, agentName }: { agentId: string; agentName: string }) {
+export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string; agentName: string; onShowRun?: (runId: string) => void }) {
   const first = agentName.split(/\s+[-–]\s+|\s+/)[0]
   const [turns, setTurns] = useState<Turn[]>([])
   const [phase, setPhase] = useState<Phase>('idle')
@@ -345,7 +345,7 @@ export function VoicePanel({ agentId, agentName }: { agentId: string; agentName:
       {/* Current exchange, right under the waveform */}
       {current.length > 0 && (
         <div className="space-y-2">
-          {current.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} />)}
+          {current.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onShowRun={onShowRun} />)}
         </div>
       )}
 
@@ -361,7 +361,7 @@ export function VoicePanel({ agentId, agentName }: { agentId: string; agentName:
         <details className="group">
           <summary className="cursor-pointer text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300">Earlier in this conversation ({earlier.length})</summary>
           <div className="mt-2 space-y-2 max-h-72 overflow-auto pr-1">
-            {earlier.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} muted />)}
+            {earlier.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onShowRun={onShowRun} muted />)}
           </div>
         </details>
       )}
@@ -369,7 +369,7 @@ export function VoicePanel({ agentId, agentName }: { agentId: string; agentName:
   )
 }
 
-function Bubble({ turn, agentId, onPlay, muted }: { turn: Turn; agentId: string; onPlay: (audio?: string | null, mime?: string | null, src?: string) => void; muted?: boolean }) {
+function Bubble({ turn, agentId, onPlay, onShowRun, muted }: { turn: Turn; agentId: string; onPlay: (audio?: string | null, mime?: string | null, src?: string) => void; onShowRun?: (runId: string) => void; muted?: boolean }) {
   const you = turn.who === 'you'
   return (
     <div className={`flex ${you ? 'justify-end' : 'justify-start'}`}>
@@ -378,7 +378,9 @@ function Bubble({ turn, agentId, onPlay, muted }: { turn: Turn; agentId: string;
         <p className={`mt-1 flex flex-wrap items-center gap-3 text-xs ${you ? 'text-primary-100' : 'text-neutral-500 dark:text-neutral-400'}`}>
           {you && turn.recordingUrl && <button onClick={() => onPlay(null, null, turn.recordingUrl)} className="inline-flex items-center gap-1 underline"><Play className="w-3 h-3" />Play my recording</button>}
           {!you && turn.audio && <button onClick={() => onPlay(turn.audio, turn.mimeType)} className="inline-flex items-center gap-1 underline"><Volume2 className="w-3 h-3" />Play again</button>}
-          {!you && turn.runId && <Link href={`/dashboard/agents/${agentId}?run=${encodeURIComponent(turn.runId)}`} className="underline">See how it answered</Link>}
+          {!you && turn.runId && (onShowRun
+            ? <button onClick={() => onShowRun(turn.runId!)} className="underline">See how it answered</button>
+            : <Link href={`/dashboard/agents/${agentId}?run=${encodeURIComponent(turn.runId)}`} className="underline">See how it answered</Link>)}
           {turn.note && <span>{turn.note}</span>}
         </p>
       </div>

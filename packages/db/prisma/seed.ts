@@ -279,8 +279,11 @@ const ASSISTANT_CONTRACT = {
   context: { maxKnowledgeExcerpts: 8 },
 }
 
+/** Names callers say that speech-to-text gets wrong without a hint ("Cloud9", "Paramatta"). */
+const ASSISTANT_VOCABULARY = ['Starter', 'Growth', 'Enterprise', 'SEO', 'LinkedIn', 'Google Ads', 'HubSpot', 'CloudNine Analytics', 'Maria Gonzalez', 'Parramatta', 'Example Street']
+
 // Cartesia "Bronte": a stock Australian voice (no cloning, so no consent record needed).
-const ASSISTANT_VOICE = { enabled: true, greeting: "Hi, I'm Ava, Demo Marketing Agency's AI assistant. What can I help you with?", provider: 'cartesia', voiceId: '391f4c0a-f1a8-4c21-9aa2-7a07f0a4b0dc' }
+const ASSISTANT_VOICE = { enabled: true, greeting: "Hi, I'm Ava, Demo Marketing Agency's AI assistant. What can I help you with?", provider: 'cartesia', voiceId: '391f4c0a-f1a8-4c21-9aa2-7a07f0a4b0dc', vocabulary: ASSISTANT_VOCABULARY }
 
 /** Haiku 5.5: same 5/5 suite result as Haiku 4.5 on 18 Oct at about a tenth of the cost, and its 512-token cache minimum covers Ava's prompt. */
 const ASSISTANT_MODEL = 'claude-haiku-5-5'
@@ -679,7 +682,7 @@ Guidelines:
   })
   // A voice someone cloned in the dashboard (with their consent record) survives reseeding.
   const existingVoice = ((await prisma.agent.findUnique({ where: { id: 'demo-assistant-1' }, select: { config: true } }))?.config as { voice?: { clonedVoice?: unknown } } | null)?.voice
-  const assistantVoice = existingVoice?.clonedVoice ? existingVoice : ASSISTANT_VOICE
+  const assistantVoice = existingVoice?.clonedVoice ? { vocabulary: ASSISTANT_VOCABULARY, ...existingVoice } : ASSISTANT_VOICE
   const assistant = await prisma.agent.upsert({
     where: { id: 'demo-assistant-1' },
     update: (await seedOwned('demo-assistant-1'))

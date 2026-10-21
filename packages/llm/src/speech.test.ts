@@ -16,6 +16,8 @@ import {
   echoesHint,
   soundsLikeEcho,
   notEnglishSpeech,
+  compareTranscription,
+  configuredSttProviders,
 } from './speech'
 import { LLMConfigError } from './types'
 
@@ -78,6 +80,61 @@ test('an interruption that is only the agent echoing itself, or a backchannel, i
   assert.ok(notEnglishSpeech('誰だ?'))
   assert.ok(!notEnglishSpeech('OK, two cafés.'))
   assert.ok(!notEnglishSpeech(''))
+})
+
+test('Deepgram gets the raw audio, the key terms and the token; its transcript and confidence come back', async () => {
+  const calls: Array<{ url: string; init: RequestInit }> = []
+  const fetch = (async (url: string, init: RequestInit) => {
+    calls.push({ url, init })
+    return new Response(JSON.stringify({ results: { channels: [{ alternatives: [{ transcript: 'Could I book a chat with Maria from CloudNine?', confidence: 0.93 }] }] } }), { status: 200 })
+  }) as never
+  const result = await transcribeAudio(Buffer.from('wav-bytes'), { mimeType: 'audio/wav', language: 'en', vocabulary: ['Ava', 'CloudNine Analytics'], provider: 'deepgram' }, { fetch, env: { DEEPGRAM_API_KEY: 'dg-key' } })
+  assert.equal(result.text, 'Could I book a chat with Maria from CloudNine?')
+  assert.equal(result.confidence, 0.93)
+  assert.equal(result.model, 'nova-3')
+  const url = new URL(calls[0].url)
+  assert.equal(url.origin + url.pathname, 'https://api.deepgram.com/v1/listen')
+  assert.equal(url.searchParams.get('model'), 'nova-3')
+  assert.deepEqual(url.searchParams.getAll('keyterm'), ['Ava', 'CloudNine Analytics'])
+  assert.equal((calls[0].init.headers as Record<string, string>).Authorization, 'Token dg-key')
+  assert.equal((calls[0].init.headers as Record<string, string>)['Content-Type'], 'audio/wav')
+  await assert.rejects(transcribeAudio(Buffer.from('x'), { mimeType: 'audio/wav', provider: 'deepgram' }, { fetch, env: {} }), LLMConfigError)
+})
+
+test('Speechmatics: a batch job with the custom dictionary, polled until done, transcript assembled from json-v2', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = []
+  let polls = 0
+  const fetch = (async (url: string, init?: RequestInit) => {
+    calls.push({ url, init })
+    if (url.endsWith('/v2/jobs')) return new Response(JSON.stringify({ id: 'job-1' }), { status: 201 })
+    if (url.endsWith('/v2/jobs/job-1')) return new Response(JSON.stringify({ job: { status: ++polls < 2 ? 'running' : 'done' } }))
+    return new Response(JSON.stringify({ results: [
+      { type: 'word', alternatives: [{ content: 'Hello', confidence: 0.9 }] },
+      { type: 'punctuation', attaches_to: 'previous', alternatives: [{ content: ',', confidence: 1 }] },
+      { type: 'word', alternatives: [{ content: 'CloudNine', confidence: 0.7 }] },
+      { type: 'punctuation', attaches_to: 'previous', alternatives: [{ content: '.', confidence: 1 }] },
+    ] }))
+  }) as never
+  const result = await transcribeAudio(Buffer.from('wav-bytes'), { mimeType: 'audio/wav', language: 'en', vocabulary: ['CloudNine'], provider: 'speechmatics' }, { fetch, env: { SPEECHMATICS_API_KEY: 'sm-key' } })
+  assert.equal(result.text, 'Hello, CloudNine.')
+  assert.ok(Math.abs((result.confidence ?? 0) - 0.8) < 1e-9, 'mean word confidence')
+  assert.equal(result.model, 'enhanced')
+  const form = calls[0].init?.body as FormData
+  assert.deepEqual(JSON.parse(String(form.get('config'))), { type: 'transcription', transcription_config: { language: 'en', model: 'enhanced', additional_vocab: [{ content: 'CloudNine' }] } })
+  assert.ok(form.get('data_file') instanceof Blob)
+  assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, 'Bearer sm-key')
+  assert.ok(calls.at(-1)!.url.endsWith('/v2/jobs/job-1/transcript?format=json-v2'))
+})
+
+test('comparison runs every configured provider and reports a failure without losing the others', async () => {
+  const env = { OPENAI_API_KEY: 'o', DEEPGRAM_API_KEY: 'd' }
+  assert.deepEqual(configuredSttProviders(env), ['openai', 'deepgram'])
+  const { openai } = fakeOpenAI()
+  const fetch = (async () => new Response('bad key', { status: 401 })) as never
+  const results = await compareTranscription(Buffer.from('wav'), { mimeType: 'audio/wav' }, { openai, fetch, env })
+  assert.equal(results.length, 2)
+  assert.equal(results[0].text, 'What are your office hours?')
+  assert.match(results[1].error ?? '', /Deepgram speech-to-text failed \(401\)/)
 })
 
 test('transcription refuses empty and oversized audio before calling the provider', async () => {

@@ -5,7 +5,8 @@ import { LLMConfigError } from './types'
  * Speech-to-text and text-to-speech for voice agents (docs/VOICE.md).
  *
  * Providers:
- * - speech-to-text: "openai" (gpt-4o-mini-transcribe)
+ * - speech-to-text: "openai" (gpt-4o-mini-transcribe), "deepgram" (Nova-3) or "speechmatics"
+ *   (batch, "enhanced"); compareTranscription() runs one recording through every configured one
  * - text-to-speech: "openai" (gpt-4o-mini-tts) or "cartesia" (Sonic, lower latency, custom voices)
  *
  * Selected with SPEECH_STT_PROVIDER / SPEECH_TTS_PROVIDER (default "openai", so one
@@ -14,7 +15,8 @@ import { LLMConfigError } from './types'
  * is a separate service; see docs/VOICE.md.
  */
 
-export type SttProvider = 'openai'
+export type SttProvider = 'openai' | 'deepgram' | 'speechmatics'
+export const STT_PROVIDERS: SttProvider[] = ['openai', 'deepgram', 'speechmatics']
 export type TtsProvider = 'openai' | 'cartesia'
 
 /**
@@ -23,6 +25,13 @@ export type TtsProvider = 'openai' | 'cartesia'
  * nothing where the larger one invented short phrases in other languages. SPEECH_STT_MODEL overrides.
  */
 export const OPENAI_STT_MODEL = 'gpt-4o-mini-transcribe'
+/** Deepgram's current model (docs, 21 Oct 2026); DEEPGRAM_STT_MODEL overrides. Key terms need Nova-3. */
+export const DEEPGRAM_STT_MODEL = 'nova-3'
+/** Speechmatics batch `transcription_config.model` ("model" replaced "operating_point", July 2026); SPEECHMATICS_STT_MODEL overrides ("standard" is faster). */
+export const SPEECHMATICS_STT_MODEL = 'enhanced'
+/** A Speechmatics batch job for one utterance is polled this often, and given up on after STT_TIMEOUT_MS. */
+const SPEECHMATICS_POLL_MS = 250
+const STT_TIMEOUT_MS = 30_000
 export const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts'
 export const OPENAI_DEFAULT_VOICE = 'coral'
 export const CARTESIA_TTS_MODEL = 'sonic-3.6'
@@ -84,8 +93,21 @@ function openaiClient(deps: SpeechDeps): Pick<OpenAI, 'audio'> {
 
 export function sttProvider(env: Record<string, string | undefined> = process.env): SttProvider {
   const value = (env.SPEECH_STT_PROVIDER || 'openai').toLowerCase()
-  if (value !== 'openai') throw new LLMConfigError(`Unsupported SPEECH_STT_PROVIDER "${value}". Supported: openai.`)
-  return value
+  if (!STT_PROVIDERS.includes(value as SttProvider)) throw new LLMConfigError(`Unsupported SPEECH_STT_PROVIDER "${value}". Supported: ${STT_PROVIDERS.join(', ')}.`)
+  return value as SttProvider
+}
+
+const STT_KEYS: Record<SttProvider, string> = { openai: 'OPENAI_API_KEY', deepgram: 'DEEPGRAM_API_KEY', speechmatics: 'SPEECHMATICS_API_KEY' }
+
+/** The speech-to-text providers that have an API key set, in a fixed order. */
+export function configuredSttProviders(env: Record<string, string | undefined> = process.env): SttProvider[] {
+  return STT_PROVIDERS.filter((p) => Boolean(env[STT_KEYS[p]]))
+}
+
+function sttKey(provider: SttProvider, env: Record<string, string | undefined>): string {
+  const key = env[STT_KEYS[provider]]
+  if (!key) throw new LLMConfigError(`${STT_KEYS[provider]} is not configured: speech-to-text provider "${provider}" needs it.`)
+  return key
 }
 
 export function ttsProvider(env: Record<string, string | undefined> = process.env): TtsProvider {
@@ -155,13 +177,15 @@ export function notEnglishSpeech(transcript: string): boolean {
 
 export async function transcribeAudio(
   audio: Buffer,
-  options: { mimeType: string; language?: string; prompt?: string; vocabulary?: Array<string | null | undefined> },
+  options: { mimeType: string; language?: string; prompt?: string; vocabulary?: Array<string | null | undefined>; provider?: SttProvider },
   deps: SpeechDeps = {}
 ): Promise<TranscriptionResult> {
   if (!audio.length) throw new Error('No audio received')
   if (audio.length > MAX_AUDIO_BYTES) throw new Error(`Audio is larger than ${MAX_AUDIO_BYTES / 1024 / 1024} MB`)
   const env = deps.env ?? process.env
-  const provider = sttProvider(env)
+  const provider = options.provider ?? sttProvider(env)
+  if (provider === 'deepgram') return transcribeDeepgram(audio, options, env, deps)
+  if (provider === 'speechmatics') return transcribeSpeechmatics(audio, options, env, deps)
   const model = env.SPEECH_STT_MODEL || OPENAI_STT_MODEL
   const extension = options.mimeType.includes('ogg') ? 'ogg' : options.mimeType.includes('mp4') || options.mimeType.includes('m4a') ? 'm4a' : options.mimeType.includes('wav') ? 'wav' : options.mimeType.includes('mpeg') ? 'mp3' : 'webm'
   const hint = options.prompt ?? (options.vocabulary ? transcriptionHint(options.vocabulary) : undefined)
@@ -184,6 +208,127 @@ export async function transcribeAudio(
     hintRetried = true
   }
   return { text: heard.text, provider, model, audioBytes: audio.length, confidence: heard.confidence, ...(hintRetried ? { hintRetried } : {}) }
+}
+
+/** Hint terms as separate words or short phrases (the providers' custom vocabulary takes a list). */
+function hintTerms(vocabulary: Array<string | null | undefined> | undefined, maxWords: number): string[] {
+  const hint = vocabulary ? transcriptionHint(vocabulary) : undefined
+  return hint ? hint.slice(0, -1).split(', ').filter((t) => t.split(/\s+/).length <= maxWords) : []
+}
+
+async function failed(name: string, response: Response): Promise<Error> {
+  const detail = (await response.text().catch(() => '')).slice(0, 300)
+  return new Error(`${name} speech-to-text failed (${response.status})${detail ? `: ${detail}` : ''}`)
+}
+
+/**
+ * Deepgram pre-recorded: POST /v1/listen with the raw audio. The vocabulary goes in as Nova-3
+ * key terms (one `keyterm` parameter each), which bias recognition without being returned
+ * as text on noise. Confidence is Deepgram's own 0–1 score for the transcript.
+ */
+async function transcribeDeepgram(
+  audio: Buffer,
+  options: { mimeType: string; language?: string; vocabulary?: Array<string | null | undefined> },
+  env: Record<string, string | undefined>,
+  deps: SpeechDeps
+): Promise<TranscriptionResult> {
+  const model = env.DEEPGRAM_STT_MODEL || DEEPGRAM_STT_MODEL
+  const params = new URLSearchParams({ model, smart_format: 'true', language: env.DEEPGRAM_LANGUAGE || options.language || 'en' })
+  for (const term of hintTerms(options.vocabulary, 6)) params.append('keyterm', term)
+  const response = await (deps.fetch ?? fetch)(`https://api.deepgram.com/v1/listen?${params}`, {
+    method: 'POST',
+    headers: { Authorization: `Token ${sttKey('deepgram', env)}`, 'Content-Type': options.mimeType.split(';')[0] || 'audio/wav' },
+    body: new Uint8Array(audio),
+    signal: AbortSignal.timeout(STT_TIMEOUT_MS),
+  })
+  if (!response.ok) throw await failed('Deepgram', response)
+  const body = (await response.json()) as { results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string; confidence?: number }> }> } }
+  const best = body.results?.channels?.[0]?.alternatives?.[0]
+  const text = (best?.transcript ?? '').trim()
+  return { text, provider: 'deepgram', model, audioBytes: audio.length, confidence: text && typeof best?.confidence === 'number' ? best.confidence : null }
+}
+
+interface SpeechmaticsItem { type?: string; attaches_to?: string; alternatives?: Array<{ content?: string; confidence?: number }> }
+
+/**
+ * Speechmatics batch: submit a job (multipart "config" + "data_file"), poll it until "done",
+ * then read the json-v2 transcript. Batch jobs queue, so this is slower per utterance than the
+ * other two; their real-time API (a websocket) would be the one to use for live calls.
+ * The vocabulary goes in as additional_vocab (custom dictionary).
+ */
+async function transcribeSpeechmatics(
+  audio: Buffer,
+  options: { mimeType: string; language?: string; vocabulary?: Array<string | null | undefined> },
+  env: Record<string, string | undefined>,
+  deps: SpeechDeps
+): Promise<TranscriptionResult> {
+  const doFetch = deps.fetch ?? fetch
+  const base = env.SPEECHMATICS_API_URL || 'https://asr.api.speechmatics.com'
+  const auth = { Authorization: `Bearer ${sttKey('speechmatics', env)}` }
+  const model = env.SPEECHMATICS_STT_MODEL || SPEECHMATICS_STT_MODEL
+  const vocab = hintTerms(options.vocabulary, 6).map((content) => ({ content }))
+  const config = { type: 'transcription', transcription_config: { language: env.SPEECHMATICS_LANGUAGE || options.language || 'en', model, ...(vocab.length ? { additional_vocab: vocab } : {}) } }
+  const form = new FormData()
+  form.append('config', JSON.stringify(config))
+  form.append('data_file', new Blob([new Uint8Array(audio)], { type: options.mimeType }), options.mimeType.includes('wav') ? 'utterance.wav' : 'utterance')
+  const deadline = Date.now() + STT_TIMEOUT_MS
+  const created = await doFetch(`${base}/v2/jobs`, { method: 'POST', headers: auth, body: form, signal: AbortSignal.timeout(STT_TIMEOUT_MS) })
+  if (!created.ok) throw await failed('Speechmatics', created)
+  const { id } = (await created.json()) as { id?: string }
+  if (!id) throw new Error('Speechmatics did not return a job id')
+  for (;;) {
+    const status = await doFetch(`${base}/v2/jobs/${encodeURIComponent(id)}`, { headers: auth })
+    if (!status.ok) throw await failed('Speechmatics', status)
+    const { job } = (await status.json()) as { job?: { status?: string; errors?: unknown } }
+    if (job?.status === 'done') break
+    if (job?.status === 'rejected' || job?.status === 'deleted') throw new Error(`Speechmatics job ${job.status}: ${JSON.stringify(job.errors ?? '').slice(0, 200)}`)
+    if (Date.now() > deadline) throw new Error('Speechmatics did not finish within 30 s')
+    await new Promise((resolve) => setTimeout(resolve, SPEECHMATICS_POLL_MS))
+  }
+  const result = await doFetch(`${base}/v2/jobs/${encodeURIComponent(id)}/transcript?format=json-v2`, { headers: auth })
+  if (!result.ok) throw await failed('Speechmatics', result)
+  const items = ((await result.json()) as { results?: SpeechmaticsItem[] }).results ?? []
+  let text = ''
+  const confidences: number[] = []
+  for (const item of items) {
+    const best = item.alternatives?.[0]
+    if (!best?.content) continue
+    const joined = item.type === 'punctuation' || item.attaches_to === 'previous'
+    text += joined || !text ? best.content : ` ${best.content}`
+    if (item.type === 'word' && typeof best.confidence === 'number') confidences.push(best.confidence)
+  }
+  return { text: text.trim(), provider: 'speechmatics', model, audioBytes: audio.length, confidence: confidences.length ? confidences.reduce((a, b) => a + b, 0) / confidences.length : null }
+}
+
+export interface TranscriptionComparison {
+  provider: SttProvider
+  model?: string
+  text?: string
+  confidence?: number | null
+  /** Wall-clock time for this provider, request to transcript. */
+  ms: number
+  error?: string
+}
+
+/**
+ * One recording through every configured speech-to-text provider at once, with the same
+ * vocabulary, for choosing between them on real voices and microphones.
+ */
+export async function compareTranscription(
+  audio: Buffer,
+  options: { mimeType: string; language?: string; vocabulary?: Array<string | null | undefined>; providers?: SttProvider[] },
+  deps: SpeechDeps = {}
+): Promise<TranscriptionComparison[]> {
+  const providers = options.providers ?? configuredSttProviders(deps.env ?? process.env)
+  return Promise.all(providers.map(async (provider) => {
+    const started = Date.now()
+    try {
+      const heard = await transcribeAudio(audio, { ...options, provider }, deps)
+      return { provider, model: heard.model, text: heard.text, confidence: heard.confidence, ms: Date.now() - started }
+    } catch (error) {
+      return { provider, ms: Date.now() - started, error: error instanceof Error ? error.message.slice(0, 300) : 'failed' }
+    }
+  }))
 }
 
 /** Removes markdown and other things that read badly aloud, and caps the length. */

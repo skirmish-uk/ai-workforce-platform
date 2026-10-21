@@ -2,28 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
-import { canAccessTenant, hasPermission, safeErrorMessage } from '@ai-workforce/domain'
+import { safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
 import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
 import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, notEnglishSpeech, soundsLikeEcho, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
 import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
-import { UserRole } from '@prisma/client'
+import { callVocabulary, loadAgent } from './shared'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
-
-async function loadAgent(agentId: string, session: { user: { role: string; tenantId: string } }) {
-  const agent = await prisma.agent.findUnique({ where: { id: agentId } })
-  if (!agent || agent.isCandidate) return { error: NextResponse.json({ error: 'Agent not found' }, { status: 404 }) }
-  const role = session.user.role as UserRole
-  if (!canAccessTenant(role, session.user.tenantId, agent.tenantId) || !hasPermission(role, 'agent:write')) {
-    return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }) }
-  }
-  const { voice, error } = readVoiceConfig(agent.config)
-  if (error) return { error: NextResponse.json({ error: `Voice settings are invalid: ${error}` }, { status: 409 }) }
-  if (!voice.enabled) return { error: NextResponse.json({ error: 'Voice is not enabled for this agent' }, { status: 409 }) }
-  return { agent, voice }
-}
 
 /**
  * Answers are heard, not read: a full package description typed was about 100 words (35 s
@@ -48,27 +35,6 @@ function withConversation(transcript: string, rawHistory: FormDataEntryValue | n
     .map((h) => `${h.who === 'caller' ? 'Caller' : first}: ${String(h.text).replace(/\s+/g, ' ').trim().slice(0, 400)}`)
   if (!lines.length) return `${transcript}\n\n${SPOKEN_LENGTH}`
   return `This is a live voice call. The conversation so far, most recent last:\n${lines.join('\n')}\n\nThe caller now says: "${transcript}"\n\nReply to what the caller just said, in the context of the call. Don't greet them again. ${SPOKEN_LENGTH}`
-}
-
-/** Common capitalised words that are not names, so they stay out of the transcription hint. */
-const NOT_NAMES = new Set(['I', 'I’m', "I'm", 'AI', 'OK', 'Okay', 'Sure', 'Yes', 'No', 'Hi', 'Hello', 'Thanks', 'Sorry', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
-
-/**
- * What the caller is likely to say by name: the agent, the business, the agent's configured
- * vocabulary, and names already said in this call (mid-sentence capitalised words).
- */
-function callVocabulary(agentName: string, tenantName: string | undefined, configured: string[] | undefined, rawHistory: FormDataEntryValue | null): Array<string | undefined> {
-  const names: string[] = []
-  try {
-    const history = typeof rawHistory === 'string' ? JSON.parse(rawHistory) : []
-    for (const h of Array.isArray(history) ? history.slice(-8) : []) {
-      if (typeof h?.text !== 'string') continue
-      for (const m of h.text.slice(0, 400).matchAll(/(?<![.!?]\s|^)\b(\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+)*)/gu)) {
-        if (!NOT_NAMES.has(m[1])) names.push(m[1])
-      }
-    }
-  } catch { /* a malformed history adds no names */ }
-  return [agentName.split(/\s+[-–]\s+/)[0], tenantName, ...(configured ?? []), ...names.slice(-15)]
 }
 
 /** The agent's last two lines in the call (from "history"), to recognise its own echo. */
@@ -157,7 +123,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // A names-only hint (never what the agent said: on noise that came back as the transcript).
       const tenant = await prisma.tenant.findUnique({ where: { id: agent.tenantId }, select: { name: true } })
       const vocabulary = callVocabulary(agent.name, tenant?.name, voice.vocabulary, form.get('history'))
-      const heard = await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en', vocabulary })
+      const heard = await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en', vocabulary, provider: voice.sttProvider })
       transcript = heard.text
       confidence = heard.confidence
       hintRetried = heard.hintRetried ?? false

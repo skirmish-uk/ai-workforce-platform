@@ -16,6 +16,8 @@ export const voiceConfigSchema = z
      * speech-to-text as a hint so they are spelled right on poor microphones.
      */
     vocabulary: z.array(z.string().trim().min(1).max(60)).max(40).optional(),
+    /** Speech-to-text for this agent's calls; default SPEECH_STT_PROVIDER. Compare them on the agent page first. */
+    sttProvider: z.enum(['openai', 'deepgram', 'speechmatics']).optional(),
     /** Provider voice: an OpenAI voice name, or a Cartesia voice id. */
     voiceId: z.string().min(1).max(100).optional(),
     /**

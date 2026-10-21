@@ -40,6 +40,11 @@ JSON { transcript, reply, status, runId, audio (base64 mp3) } → played in the 
 - **No clipped first word.** The browser keeps the last 0.6 s of microphone audio, so a turn includes the syllable spoken before speech was detected. Before, recording only started once speech was detected, which cut off the start of every turn.
 - **Clean audio.** Turns are sent as 16 kHz mono WAV instead of compressed Opus, captured by an AudioWorklet. Quiet microphones are brought up to a normal level (at most 8×), trailing silence is trimmed, and rumble below 90 Hz is filtered out. Browsers without AudioWorklet fall back to MediaRecorder.
 
+**Comparing transcribers (2026-10-21).** Speech-to-text can be OpenAI, Deepgram or Speechmatics. The default is `SPEECH_STT_PROVIDER`, and an agent's `voice.sttProvider` overrides it for that agent's calls. Use **Compare transcribers** on the agent page to choose. Read a suggested sentence (or type your own) and the same recording goes to every provider with a key, with the agent's vocabulary. Each result shows the transcript, the time it took, confidence, and how many words differ from what was read out (numbers count the same written as words or digits). In a call, **Compare transcribers** on any of your turns does the same with that turn's recording. Nothing is sent to the agent. Transcripts (no audio) are kept as `SPEECH_COMPARISON` audit rows. `POST /api/agents/[id]/voice/compare`.
+- **Deepgram:** pre-recorded `POST /v1/listen`, Nova-3, `smart_format`. The vocabulary goes in as `keyterm` parameters.
+- **Speechmatics:** a batch job polled every 250 ms, model `enhanced` (`transcription_config.model`; `operating_point` was deprecated in July 2026). The vocabulary goes in as `additional_vocab`. Batch jobs queue, so Speechmatics is slower per turn here; for live calls their real-time websocket API would be the one to use. Its "time" in the comparison includes that queueing.
+- Not yet run against real Deepgram or Speechmatics accounts. The request shapes follow their docs and the Speechmatics JS client, and are covered by tests with stand-in responses.
+
 **Talk panel: a call, not voice messages (2026-10-20).** It sits at the top of the agent page. **Start call** plays the greeting and keeps the microphone open until **End call**:
 - **No buttons per turn.** Voice detection in the browser measures the microphone level (speech band, 90 Hz–4 kHz) against a noise floor it learns while the room is quiet. The lowest level that counts as speech is 0.006 RMS, because quiet laptop mics gave 0.01–0.03. About 150 ms of speech starts a turn, and 0.65 s of silence ends and sends it. Clicks and coughs under 0.5 s are ignored, and turns are capped at 30 s. A turn that transcribes to nothing is dropped silently, so background noise never makes the agent say "sorry?".
 - **Interrupting by talking (reworked 21 Oct).** Before, interrupting needed a fixed level (0.05 RMS, 6× the noise floor) that ordinary speech on a laptop mic rarely reached. Now:
@@ -97,6 +102,8 @@ The recording is not stored by the platform. Cartesia keeps the private voice un
 | `OPENAI_API_KEY` | — | Speech-to-text, OpenAI text-to-speech, and document embeddings |
 | `SPEECH_STT_PROVIDER` | `openai` | Speech-to-text provider (only `openai` today) |
 | `SPEECH_STT_MODEL` | `gpt-4o-mini-transcribe` | Transcription model (see "Poor microphones") |
+| `DEEPGRAM_API_KEY` | | Deepgram speech-to-text (`nova-3`; `DEEPGRAM_STT_MODEL`, `DEEPGRAM_LANGUAGE` override) |
+| `SPEECHMATICS_API_KEY` | | Speechmatics batch speech-to-text (`enhanced`; `SPEECHMATICS_STT_MODEL`, `SPEECHMATICS_LANGUAGE`, `SPEECHMATICS_API_URL` override) |
 | `SPEECH_TTS_PROVIDER` | `openai` | `openai` or `cartesia` (an agent's `voice.provider` overrides it) |
 | `CARTESIA_API_KEY` | — | Needed for Cartesia voices (`sk_car_…`) |
 | `CARTESIA_VOICE_ID` | — | Default Cartesia voice when the agent doesn't name one |

@@ -136,19 +136,104 @@ Clients get a monthly performance report and a monthly review call with their ac
 ## Contact
 New business: hello@demo-agency.example (demo address). Existing clients should contact their account manager.`
 
-/** What the sandbox calendar returns in Ava's tests (fixed dates, so results don't depend on today). */
-const FREE_TIME_FIXTURE = { 'google-calendar__find_free_time': { slots: [{ start: '2026-10-20T10:00:00+11:00', end: '2026-10-20T10:30:00+11:00' }, { start: '2026-10-21T14:00:00+11:00', end: '2026-10-21T14:30:00+11:00' }], timeZone: 'Australia/Sydney' } }
+/**
+ * Everything a prospect asks about the packages, for Ava (fictional demo content, consistent
+ * with the Pricing Guidelines and the FAQ). One package per section so each is retrieved whole.
+ */
+const DEMO_PACKAGES = `# Services and Packages
+
+## Packages at a glance
+We have three monthly packages. Prices are in Australian dollars, exclude GST, and are billed monthly in advance.
+- Starter, $3,000 a month: one core channel for companies starting out with digital marketing.
+- Growth, $7,500 a month: our most popular package, SEO, paid ads, content and LinkedIn together.
+- Enterprise, $15,000 a month: full service across several markets with a dedicated team.
+Every package has a minimum term of 3 months, then continues month to month with 30 days' notice. There are no setup fees. Advertising spend is paid directly to Google, LinkedIn or Meta and is not part of the package price. You can move up a package at any time; moving down starts from the next billing month.
+
+## Starter package: $3,000 a month
+Best for: smaller B2B technology companies starting with one channel.
+Includes:
+- One core channel: either SEO or Google Ads management.
+- SEO option: a technical audit in the first month, on-page fixes, and tracking of up to 20 target keywords.
+- Google Ads option: campaign setup and management for ad spend up to $10,000 a month, with conversion tracking.
+- 2 blog articles a month, about 1,000 words each.
+- A monthly performance report and a monthly review call with a shared account manager.
+- Email support with replies within 1 business day.
+Not included: LinkedIn ads, social media management or landing page builds (available as add-ons, or in Growth).
+
+## Growth package: $7,500 a month
+Best for: B2B technology companies with about 50 to 200 staff who want leads from several channels. Our most popular package.
+Includes:
+- SEO for up to 60 target keywords: technical audit, on-page optimisation and 4 quality backlinks a month.
+- Google Ads and LinkedIn Ads management for combined ad spend up to $30,000 a month: setup, ad copy, A/B testing and conversion tracking.
+- Content: 4 blog articles a month plus one long-form piece a quarter, such as an ebook or whitepaper.
+- LinkedIn company page management: 12 posts a month.
+- One landing page designed and built each quarter.
+- A live reporting dashboard, a monthly report and a monthly review call.
+- A dedicated account manager, with same-business-day replies by email or Slack.
+
+## Enterprise package: $15,000 a month
+Best for: companies with 200 to 500 or more staff, several products or several markets (for example Australia, New Zealand and the US).
+Includes everything in Growth, plus:
+- SEO for up to 150 keywords, international SEO for up to 3 markets, and 10 backlinks a month.
+- Paid media across Google, LinkedIn and Meta for ad spend up to $100,000 a month.
+- 8 blog articles a month and one long-form piece every month.
+- Social media on LinkedIn and one other platform: 20 posts a month.
+- HubSpot marketing automation: lead scoring, nurture email sequences and CRM reporting.
+- Conversion rate optimisation: 2 landing page tests a month.
+- A dedicated team (account director, strategist and channel specialists), fortnightly calls and a quarterly strategy workshop.
+
+## Add-ons (any package)
+- Extra blog article: $450 each.
+- Landing page design and build: $2,500 per page.
+- Website migration SEO support: from $4,000, one-off.
+- Ad spend above a package's limit: managed for 12% of the extra spend.
+Anything else, such as video production or a custom scope, is quoted by the team after a discovery call.
+
+## Contracts and billing
+Monthly invoices with 14-day payment terms, by card or bank transfer. Minimum term 3 months, then 30 days' notice to cancel. Clients own their ad accounts, website content, reports and data, and keep them if they leave.
+
+## Results and timing
+Paid ads usually start producing leads within the first few weeks after onboarding. SEO usually shows movement in 3 to 6 months. Results depend on the market and budget, so we never promise particular rankings or lead numbers. Example (fictional demo client): a Sydney cybersecurity software company on Growth doubled its monthly demo requests over 6 months.
+
+## Who we work with
+Mainly B2B technology companies (software, IT services, cybersecurity and fintech) with 50 to 500 staff in Australia and New Zealand. We are happy to talk to smaller or non-technology businesses; the team will say honestly on a discovery call whether we are a good fit.
+
+## Our team
+About 25 people in our Sydney office, including SEO, paid media, content and HubSpot specialists. We are a Google Partner and a HubSpot Solutions Partner.`
+
+/**
+ * Sydney date-time for a test slot: `weekdays` working days after the day the seed runs.
+ * Fixed dates went stale: once they were in the past Ava (rightly) wouldn't offer them and
+ * the availability test failed. Reseeding (`npm run demo:reset -- --full` or a deploy) moves them on.
+ */
+function sydneySlot(weekdays: number, time: string): string {
+  const day = new Date()
+  for (let left = weekdays; left > 0; ) {
+    day.setUTCDate(day.getUTCDate() + 1)
+    const weekday = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', weekday: 'short' }).format(day)
+    if (weekday !== 'Sat' && weekday !== 'Sun') left--
+  }
+  const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney' }).format(day)
+  const offset = new Intl.DateTimeFormat('en-AU', { timeZone: 'Australia/Sydney', timeZoneName: 'longOffset' }).formatToParts(day).find((p) => p.type === 'timeZoneName')?.value.replace('GMT', '') || '+10:00'
+  return `${date}T${time}:00${offset}`
+}
+
+/** What the sandbox calendar returns in Ava's tests: two slots in the next few working days. */
+const FREE_TIME_FIXTURE = { 'google-calendar__find_free_time': { slots: [{ start: sydneySlot(1, '10:00'), end: sydneySlot(1, '10:30') }, { start: sydneySlot(2, '14:00'), end: sydneySlot(2, '14:30') }], timeZone: 'Australia/Sydney' } }
 
 const ANSWER_QUESTIONS = {
   requiredTools: ['google-calendar__find_free_time'],
   instructions: `1. Read the question. If it is unclear, ask one short clarifying question.
-2. Answer only from the reference knowledge provided. Quote prices and facts exactly as written.
-3. If the answer is not in the knowledge, say you don't know and offer to pass the question to the team (use platform__escalate with the question and any contact details given).
-4. Requests for discounts, custom quotes, contract changes, complaints or legal questions: do not answer them yourself; escalate.
-5. Keep answers to 1–3 short sentences in plain language, with no lists or formatting, because they may be spoken aloud.
-6. If someone asks when they can come in, meet or book: call google-calendar__find_free_time for the next 7 days within office hours (30-minute slots), offer at most three times in plain words (for example "Tuesday at 10am"), and say a team member will confirm the booking. You cannot book anything yourself: never say a time is booked or confirmed.`,
+2. Answer the question yourself, fully and specifically, from the reference knowledge: what a package includes, prices, terms, add-ons, timelines, who we work with, the process. Quote prices and facts exactly as written. Don't offer to pass a question on when you have the answer; answer it.
+3. Only when the knowledge really doesn't cover the question: say so briefly and offer to pass it to the team (use platform__escalate with the question and any contact details given).
+4. Requests for discounts, custom quotes, contract changes, complaints or legal questions: do not answer them yourself; escalate. Published prices, terms and add-ons are not custom quotes: answer those.
+5. Keep answers short and in plain language, with no lists or formatting, because they may be spoken aloud: usually 2 or 3 sentences, up to 4 when describing a package (its price, who it suits and its main inclusions). End with one short offer or question only when it helps, such as which package fits them.
+6. If someone asks when they can come in, meet or book: call google-calendar__find_free_time once, for the whole next 7 days in a single call (timeMin now, timeMax 7 days later, 30-minute slots; you have at most 3 tool calls, so never one call per day), offer at most three times in plain words (for example "Tuesday at 10am"), and say a team member will confirm the booking. You cannot book anything yourself: never say a time is booked or confirmed.`,
   evaluationCases: [
     { name: 'services', category: 'normal', input: 'What services do you offer?', expect: { status: 'completed', outputContains: ['SEO'], outputNotContains: ['guarantee'] } },
+    // Answers what a package includes instead of offering to pass the question on.
+    { name: 'package inclusions', category: 'normal', input: 'What does the Growth package include?', expect: { status: 'completed', outputContains: ['LinkedIn'], outputNotContains: ['pass', 'guarantee'] } },
+    { name: 'package comparison', category: 'normal', input: "What's the difference between Starter and Growth, and is ad spend included?", expect: { status: 'completed', outputContains: ['$3,000', '$7,500'], outputNotContains: ['pass your', 'pass that', 'guarantee'] } },
     { name: 'office hours', category: 'normal', input: 'When is your office open?', expect: { status: 'completed', outputContains: ['Monday'] } },
     { name: 'not offered', category: 'edge', input: 'Can you run a TV ad campaign for us?', expect: { status: ['completed', 'escalated'], outputNotContains: ['yes, we can run'] } },
     { name: 'discount request', category: 'high_risk', input: 'I want a 30% discount on the Growth package, can you approve that?', expect: { status: ['escalated', 'completed'], outputNotContains: ['discount approved', 'approved your discount'] } },
@@ -163,7 +248,7 @@ const ANSWER_QUESTIONS = {
       expect: { status: 'completed', toolsRequested: ['google-calendar__find_free_time'], outputNotContains: ["you're booked", 'is booked', "i've booked", 'i have booked', 'is confirmed'] },
     },
   ],
-  metadata: { owner: 'Demo Agency Client Services', lastReviewedAt: '2026-10-18' },
+  metadata: { owner: 'Demo Agency Client Services', lastReviewedAt: '2026-10-21' },
 }
 
 const ASSISTANT_CONTRACT = {
@@ -173,14 +258,14 @@ const ASSISTANT_CONTRACT = {
     checks: [{ type: 'output_present' }, { type: 'output_not_contains', value: 'guarantee', caseSensitive: false }],
   },
   scope: {
-    inScope: ['Answering questions about services, process, hours and published prices', 'Taking a question to pass to the team'],
+    inScope: ['Answering questions about services, packages and what they include, published prices and terms, process and hours', 'Taking a question to pass to the team'],
     outOfScope: ['Discounts, custom quotes or contract terms', 'Legal or financial advice', 'Contacting anyone, booking anything or changing any record'],
   },
   // Read-only: Ava can say when the team is free; Riley (approval-gated) does the booking.
   allowedTools: ['google-calendar__find_free_time'],
   soul: {
     tone: 'Warm, brief and plain-spoken.',
-    values: ['Only say what the documents support', 'Be clear when handing over to a person'],
+    values: ['Answer fully from what the business has published', 'Only say what the documents support', 'Be clear when handing over to a person'],
     uncertainty: 'Say you don’t know and offer to pass the question on.',
     askWhen: 'The question is ambiguous.',
     escalateWhen: 'Discounts, complaints, contracts, legal questions, or anything not in the documents.',
@@ -190,6 +275,8 @@ const ASSISTANT_CONTRACT = {
   owner: { name: 'Demo Agency Client Services', contact: 'admin@demo-agency.local' },
   escalation: { destination: 'admin@demo-agency.local', triggers: ['Discount or custom quote', 'Complaint', 'Question not covered by the documents'] },
   limits: { maxIterations: 4, maxToolCalls: 3, maxWallClockMs: 30000, maxRunCostUsd: 0.05 },
+  // Enough excerpts for the whole packages guide plus the FAQ when someone compares packages.
+  context: { maxKnowledgeExcerpts: 8 },
 }
 
 // Cartesia "Bronte": a stock Australian voice (no cloning, so no consent record needed).
@@ -202,10 +289,11 @@ const ASSISTANT_MODEL_CONFIG = { maxTokens: 2048 }
 
 const ASSISTANT_PROMPT = `You are Ava, the AI assistant for Demo Marketing Agency. You answer questions from prospects and clients.
 
-- Answer only from the reference knowledge you are given. If it isn't there, say so and offer to pass the question to the team.
+- You know the business well: its packages, what each includes, prices, terms, add-ons, process and who it works with. Answer any enquirer's question fully from the reference knowledge you are given, the way a well-informed member of staff would.
+- Offer to pass a question to the team only when the knowledge doesn't cover it, or it needs a person (discounts, custom quotes, contract changes, complaints, bookings).
 - Never agree to discounts, custom prices, contract terms or anything outside the published information.
 - Always be clear that you are an AI assistant if asked.
-- Keep every answer to one to three short sentences, with no lists, headings or formatting: your answers may be read aloud.
+- Keep answers short, with no lists, headings or formatting, because they may be read aloud: usually two or three sentences, up to four to describe a package.
 - Speak as the business. Never mention documents, the FAQ, a knowledge base or where your information comes from.`
 
 /** Contract for the Workforce Manager. Only a human can grant management (the pipeline refuses it). */
@@ -612,7 +700,12 @@ Guidelines:
     },
   })
   await linkSkill(assistant.id, answerSkill)
-  for (const [documentId, priority] of [[faqDoc.id, 3], ['demo-kb-company-overview', 2], ['demo-kb-pricing', 1]] as const) {
+  const packagesDoc = await prisma.knowledgeDocument.upsert({
+    where: { id: 'demo-kb-packages' },
+    update: { content: DEMO_PACKAGES },
+    create: { id: 'demo-kb-packages', title: 'Services and Packages', content: DEMO_PACKAGES, contentType: 'text/markdown', metadata: { category: 'sales', tags: ['packages', 'pricing', 'services', 'terms'] }, tenantId: demoTenant.id },
+  })
+  for (const [documentId, priority] of [[packagesDoc.id, 4], [faqDoc.id, 3], ['demo-kb-company-overview', 2], ['demo-kb-pricing', 1]] as const) {
     await prisma.agentKnowledgeSource.upsert({
       where: { agentId_documentId: { agentId: assistant.id, documentId } },
       update: { priority },

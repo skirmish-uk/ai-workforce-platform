@@ -5,10 +5,11 @@ import { prisma } from '@ai-workforce/db'
 import { safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
 import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
-import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, SPEECH_PCM_RATE, hedged, notEnglishSpeech, soundsLikeEcho, streamSpeech, transcribeAudio } from '@ai-workforce/llm'
+import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, SPEECH_PCM_RATE, hedged, notEnglishSpeech, soundsLikeEcho, streamSpeech, transcribeAudio, ttsProvider } from '@ai-workforce/llm'
 import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
 import { callVocabulary, loadAgent } from './shared'
-import { cachedSpeech } from './speech-cache'
+import { cachedSpeech, type ReserveSpeech } from './speech-cache'
+import { VoiceLimitError, callBlockedBy, reserveSpeech, voiceUsage } from './tts-budget'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -53,10 +54,15 @@ function recordTurn(agent: { id: string; tenantId: string }, userId: string, dat
 
 type Voice = ReturnType<typeof readVoiceConfig>['voice']
 
+/** Reserves this tenant's speech against the monthly voice limits (tts-budget.ts). */
+function reserverFor(tenantId: string, settings: unknown, voice: Voice): ReserveSpeech {
+  return (characters) => reserveSpeech(tenantId, settings, characters, voice.provider)
+}
+
 /** A fixed line, spoken whole (from the cache after the first time). The text still shows when speech fails. */
-async function speakLine(text: string, voice: Voice) {
+async function speakLine(text: string, voice: Voice, reserve: ReserveSpeech) {
   try {
-    const { pcm, words, characters } = await cachedSpeech(text, { voiceId: voice.voiceId, provider: voice.provider })
+    const { pcm, words, characters } = await cachedSpeech(text, { voiceId: voice.voiceId, provider: voice.provider }, reserve)
     return { speech: { pcm, words }, characters }
   } catch (error) {
     return { speech: null, ttsError: safeErrorMessage(error), characters: 0 }
@@ -83,8 +89,27 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params
   const loaded = await loadAgent(id, session)
   if (loaded.error) return loaded.error
-  const greeting = loaded.voice.greeting ?? defaultGreeting(loaded.agent.name)
-  const [spoken, ...fillers] = await Promise.all([speakLine(greeting, loaded.voice), ...FILLERS.map((f) => speakLine(f, loaded.voice))])
+  const { agent, voice } = loaded
+  const tenant = await prisma.tenant.findUnique({ where: { id: agent.tenantId }, select: { settings: true } })
+  // A call can't start once this month's voice limit is used up (the agent would be silent).
+  try {
+    if ((voice.provider ?? ttsProvider()) === 'cartesia') {
+      const usage = await voiceUsage(agent.tenantId, tenant?.settings)
+      const over = callBlockedBy(usage)
+      if (over) return NextResponse.json({ error: `${new VoiceLimitError(over).message}. Typed tasks still work; voice comes back next month, or an admin can raise the limit.`, limit: over }, { status: 429 })
+    }
+  } catch (error) {
+    console.error('Voice usage check failed:', safeErrorMessage(error))
+  }
+  const reserve = reserverFor(agent.tenantId, tenant?.settings, voice)
+  const greeting = voice.greeting ?? defaultGreeting(agent.name)
+  const [spoken, ...fillers] = await Promise.all([speakLine(greeting, voice, reserve), ...FILLERS.map((f) => speakLine(f, voice, reserve))])
+  // What starting the call cost (greeting and acknowledgements are cached, so usually nothing):
+  // counted with the turns when rebuilding the monthly usage.
+  const ttsCharacters = [spoken, ...fillers].reduce((sum, s) => sum + s.characters, 0)
+  void prisma.auditLog
+    .create({ data: { action: 'VOICE_CALL_STARTED', entityType: 'Agent', entityId: agent.id, tenantId: agent.tenantId, userId: session.user.id, newData: { ttsCharacters, ttsProvider: voice.provider ?? ttsProvider() } } })
+    .catch((error) => console.error('Failed to record call start:', safeErrorMessage(error)))
   return NextResponse.json({
     greeting,
     rate: SPEECH_PCM_RATE,
@@ -113,6 +138,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (loaded.error) return loaded.error
     const { agent, voice } = loaded
 
+    const tenantRow = await prisma.tenant.findUnique({ where: { id: agent.tenantId }, select: { name: true, settings: true } })
+    const reserve = reserverFor(agent.tenantId, tenantRow?.settings, voice)
     const form = await request.formData()
     const callId = form.get('conversationId')
     const file = form.get('audio')
@@ -129,7 +156,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let hintRetried = false
     try {
       // A names-only hint (never what the agent said: on noise that came back as the transcript).
-      const tenant = await prisma.tenant.findUnique({ where: { id: agent.tenantId }, select: { name: true } })
+      const tenant = tenantRow
       const vocabulary = callVocabulary(agent.name, tenant?.name, voice.vocabulary, form.get('history'))
       const heard = await hedged(
         () => transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en', vocabulary, provider: voice.sttProvider }),
@@ -161,7 +188,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // Garbled audio comes back as confident-looking words in a random language; don't act on it.
       const reply = transcript ? 'Sorry, I didn’t catch that clearly. Could you say it again, a little closer to the microphone?' : 'Sorry, I didn’t catch that. Could you say it again?'
       // The browser drops a turn with no speech, so don't spend time or money speaking it.
-      const spoken = status === 'no_speech' ? { speech: null, characters: 0 } : await speakLine(reply, voice)
+      const spoken = status === 'no_speech' ? { speech: null, characters: 0 } : await speakLine(reply, voice, reserve)
       timings.totalMs = Date.now() - started
       recordTurn(agent, session.user.id, { runId: null, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: spoken.characters, timings })
       return NextResponse.json({ transcript, confidence, reply, status, runId: null, timings, rate: SPEECH_PCM_RATE, ...spoken })
@@ -215,18 +242,28 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           void (async () => {
             try {
               if (fixed) {
-                const line = await cachedSpeech(text, { voiceId: voice.voiceId, provider: voice.provider })
+                const line = await cachedSpeech(text, { voiceId: voice.voiceId, provider: voice.provider }, reserve)
                 characters += line.characters
                 push({ type: 'pcm', seq: n, data: line.pcm })
                 if (line.words) push({ type: 'words', seq: n, ...line.words })
                 return
               }
               const stream = streamSpeech(text, { voice: voice.voiceId, provider: voice.provider })
+              // Within this month's voice limit, or this sentence is shown, not spoken.
+              const giveBack = await reserve(stream.characters)
               characters += stream.characters
+              let received = false
               ttsModel = stream.model
-              for await (const event of stream.events) {
-                if (event.type === 'pcm') push({ type: 'pcm', seq: n, data: event.data.toString('base64') })
-                else push({ type: 'words', seq: n, words: event.words, start: event.start, end: event.end })
+              try {
+                for await (const event of stream.events) {
+                  received = true
+                  if (event.type === 'pcm') push({ type: 'pcm', seq: n, data: event.data.toString('base64') })
+                  else push({ type: 'words', seq: n, words: event.words, start: event.start, end: event.end })
+                }
+              } catch (e) {
+                // Nothing came back, so nothing was billed: give the characters back.
+                if (!received) { characters -= stream.characters; await giveBack() }
+                throw e
               }
             } catch (e) {
               // The text answer is still useful when speech fails; the page shows it and says why.

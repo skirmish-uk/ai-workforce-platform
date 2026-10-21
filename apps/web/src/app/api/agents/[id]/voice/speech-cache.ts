@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { safeErrorMessage } from '@ai-workforce/domain'
-import { CARTESIA_TTS_MODEL, CARTESIA_VOLUME, OPENAI_TTS_MODEL, SPEECH_PCM_RATE, streamSpeech, ttsProvider, type TtsProvider } from '@ai-workforce/llm'
+import { CARTESIA_TTS_MODEL, CARTESIA_VOLUME, OPENAI_TTS_MODEL, SPEECH_PCM_RATE, streamSpeech, toSpeakableText, ttsProvider, type TtsProvider } from '@ai-workforce/llm'
 import { getRedisConnection } from '@ai-workforce/queue'
 
 /** A whole clip: PCM (SPEECH_PCM_RATE, base64) and, from Cartesia, when each word is spoken. */
@@ -39,11 +39,15 @@ export async function collectSpeech(text: string, voice: Voice): Promise<SpokenC
   return { pcm: Buffer.concat(audio).toString('base64'), words: words.words.length ? words : undefined, characters: stream.characters, model: stream.model }
 }
 
+/** Reserves characters against the monthly voice limit before speech is made (tts-budget.ts). */
+export type ReserveSpeech = (characters: number) => Promise<() => Promise<void>>
+
 /**
  * A fixed line's audio, from the cache when it has been said before in this voice.
- * `characters` is 0 for a cache hit (nothing was billed). Redis being down only skips the cache.
+ * `characters` is 0 for a cache hit (nothing was billed, nothing reserved). Redis being down only
+ * skips the cache.
  */
-export async function cachedSpeech(text: string, voice: Voice): Promise<SpokenClip & { characters: number; cached: boolean }> {
+export async function cachedSpeech(text: string, voice: Voice, reserve?: ReserveSpeech): Promise<SpokenClip & { characters: number; cached: boolean }> {
   let key: string | null = null
   try {
     key = cacheKey(text, voice)
@@ -55,7 +59,14 @@ export async function cachedSpeech(text: string, voice: Voice): Promise<SpokenCl
   } catch (error) {
     console.error('Speech cache read failed:', safeErrorMessage(error))
   }
-  const spoken = await collectSpeech(text, voice)
+  const giveBack = reserve ? await reserve(toSpeakableText(text).length) : null
+  let spoken: Awaited<ReturnType<typeof collectSpeech>>
+  try {
+    spoken = await collectSpeech(text, voice)
+  } catch (error) {
+    await giveBack?.()
+    throw error
+  }
   if (key && spoken.pcm) {
     const clip: SpokenClip = { pcm: spoken.pcm, words: spoken.words }
     void getRedisConnection().set(key, JSON.stringify(clip), 'EX', CACHE_DAYS * 86_400).catch((error: unknown) => console.error('Speech cache write failed:', safeErrorMessage(error)))

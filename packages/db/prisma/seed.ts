@@ -680,9 +680,10 @@ Guidelines:
       tenantId: demoTenant.id,
     },
   })
-  // A voice someone cloned in the dashboard (with their consent record) survives reseeding.
-  const existingVoice = ((await prisma.agent.findUnique({ where: { id: 'demo-assistant-1' }, select: { config: true } }))?.config as { voice?: { clonedVoice?: unknown } } | null)?.voice
-  const assistantVoice = existingVoice?.clonedVoice ? { vocabulary: ASSISTANT_VOCABULARY, ...existingVoice } : ASSISTANT_VOICE
+  // Voices someone cloned in the dashboard (with their consent records) survive reseeding, in use
+  // or only saved: dropping them would leave their copies at Cartesia with nothing pointing to them.
+  const existingVoice = ((await prisma.agent.findUnique({ where: { id: 'demo-assistant-1' }, select: { config: true } }))?.config as { voice?: { clonedVoice?: unknown; voices?: unknown[] } } | null)?.voice
+  const assistantVoice = existingVoice?.clonedVoice || existingVoice?.voices?.length ? { vocabulary: ASSISTANT_VOCABULARY, ...existingVoice } : ASSISTANT_VOICE
   const assistant = await prisma.agent.upsert({
     where: { id: 'demo-assistant-1' },
     update: (await seedOwned('demo-assistant-1'))

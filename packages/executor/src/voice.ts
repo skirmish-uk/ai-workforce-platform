@@ -1,6 +1,18 @@
 import { z } from 'zod'
 import type { RunAgentResult } from './agent'
 
+/** Who agreed to their voice being cloned, and when. */
+const consentSchema = z
+  .object({
+    consentFrom: z.string().min(2).max(200),
+    consentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
+    consentReference: z.string().max(300).optional(),
+  })
+  .strict()
+
+/** Cloned voices an agent keeps to switch between (each a private copy at Cartesia). */
+export const MAX_SAVED_VOICES = 8
+
 /**
  * Voice settings for an agent, in Agent.config.voice (outside the contract: they change
  * how the agent sounds, not what it is allowed to do). See docs/VOICE.md.
@@ -24,15 +36,14 @@ export const voiceConfigSchema = z
      * Required when voiceId is a cloned voice: who consented to their voice being
      * cloned and used by this agent, and when. Cloning without consent is not supported.
      */
-    clonedVoice: z
-      .object({
-        consentFrom: z.string().min(2).max(200),
-        consentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'YYYY-MM-DD'),
-        consentReference: z.string().max(300).optional(),
-      })
-      .strict()
-      .optional(),
-    /** The voice in use before a cloned voice replaced it, restored when the clone is removed. */
+    clonedVoice: consentSchema.optional(),
+    /**
+     * Every cloned voice recorded for this agent, each with its consent record, so the agent can
+     * switch between them (and back to a stock voice) without recording again. The one in use is
+     * voiceId (with its consent copied into clonedVoice).
+     */
+    voices: z.array(consentSchema.extend({ voiceId: z.string().min(1).max(100) }).strict()).max(MAX_SAVED_VOICES).optional(),
+    /** The stock voice in use before a cloned voice replaced it, restored when switching back to it. */
     previous: z
       .object({ provider: z.enum(['openai', 'cartesia']).optional(), voiceId: z.string().min(1).max(100).optional() })
       .strict()
@@ -49,6 +60,17 @@ export const voiceConfigSchema = z
   })
 
 export type VoiceConfig = z.infer<typeof voiceConfigSchema>
+export type SavedVoice = NonNullable<VoiceConfig['voices']>[number]
+
+/**
+ * The agent's cloned voices. A voice cloned before there was a list (only `clonedVoice` set) is
+ * included, so it isn't lost when another is added.
+ */
+export function savedVoices(voice: VoiceConfig): SavedVoice[] {
+  const list = [...(voice.voices ?? [])]
+  if (voice.clonedVoice && voice.voiceId && !list.some((v) => v.voiceId === voice.voiceId)) list.unshift({ voiceId: voice.voiceId, ...voice.clonedVoice })
+  return list
+}
 
 export function readVoiceConfig(config: unknown): { voice: VoiceConfig; error?: string } {
   const raw = config && typeof config === 'object' ? (config as Record<string, unknown>).voice : undefined
@@ -119,7 +141,7 @@ export function validateNewAgentVoice(config: unknown): string | null {
   if (raw === undefined) return null
   const parsed = voiceConfigSchema.safeParse(raw)
   if (!parsed.success) return parsed.error.issues.map((i) => `voice.${i.path.join('.')}: ${i.message}`).join('; ')
-  if (parsed.data.clonedVoice || parsed.data.previous) return 'A cloned voice is added after the agent is created, with the speaker’s recorded consent (Use your own voice)'
+  if (parsed.data.clonedVoice || parsed.data.previous || parsed.data.voices?.length) return 'A cloned voice is added after the agent is created, with the speaker’s recorded consent (Use your own voice)'
   if (parsed.data.provider === 'cartesia' && parsed.data.voiceId && !STOCK_VOICES.some((v) => v.id === parsed.data.voiceId)) {
     return 'Choose one of the stock voices, or add your own voice after creating the agent'
   }

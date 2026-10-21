@@ -1,18 +1,29 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { CheckCircle2, Loader2, Mic, Play, Trash2, Wand2 } from 'lucide-react'
+import { Check, CheckCircle2, Loader2, Mic, Play, Trash2, Wand2 } from 'lucide-react'
 import { VoiceRecorder, cloneForm, type CloneSetup, type VoiceTake } from '../voice-recorder'
+
+interface SavedVoice { voiceId: string; consentFrom: string; consentDate: string; inUse: boolean }
 
 interface CloneStatus extends CloneSetup {
   voice: { provider: string | null; voiceId: string | null; clonedVoice: { consentFrom: string; consentDate: string } | null }
+  saved: SavedVoice[]
+  stock: { provider: string | null; voiceId: string | null; name: string | null; inUse: boolean }
+  maxVoices: number
+  /** This month's voice usage against its limits (0 = no limit); null if it couldn't be read. */
+  usage: { tenant: { used: number; limit: number }; clones: { used: number; limit: number } } | null
 }
+
+/** About 780 characters of Cartesia speech make a minute. */
+const CHARS_PER_MINUTE = 780
 
 type Step = 'idle' | 'recording' | 'uploading' | 'done'
 
 /**
- * "Use your own voice": the speaker reads a short script (starting with a spoken consent
- * statement), and Cartesia makes a private copy of the voice for this agent. Admins only.
+ * The agent's voices: its stock voice and any recorded ones ("Use your own voice": the speaker
+ * reads a short script starting with a spoken consent statement, and Cartesia makes a private
+ * copy). Recording another adds it; switch between them, or remove one. Admins only.
  */
 export function VoiceClone({ agentId, agentName }: { agentId: string; agentName: string }) {
   const first = agentName.split(/\s+[-–]\s+|\s+/)[0]
@@ -20,7 +31,10 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
   const [step, setStep] = useState<Step>('idle')
   const [take, setTake] = useState<VoiceTake | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+  /** The voice being switched to or removed (its id, or "stock"). */
+  const [busy, setBusy] = useState<string | null>(null)
+  /** A saved voice waiting for "Remove for good?" to be confirmed. */
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const sample = useRef<HTMLAudioElement | null>(null)
 
   const refresh = useCallback(async () => {
@@ -62,11 +76,11 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
     }
   }
 
-  const remove = async () => {
-    setBusy(true)
+  const remove = async (voiceId: string) => {
+    setBusy(voiceId)
     setError(null)
     try {
-      const res = await fetch(`/api/agents/${agentId}/voice/clone`, { method: 'DELETE' })
+      const res = await fetch(`/api/agents/${agentId}/voice/clone?voiceId=${encodeURIComponent(voiceId)}`, { method: 'DELETE' })
       const body = await res.json()
       if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
       setStep('idle')
@@ -74,9 +88,30 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not remove the voice')
     } finally {
-      setBusy(false)
+      setBusy(null)
+      setConfirmRemove(null)
     }
   }
+
+  const use = async (choice: { voiceId: string } | { stock: true }) => {
+    const key = 'stock' in choice ? 'stock' : choice.voiceId
+    setBusy(key)
+    setError(null)
+    try {
+      const res = await fetch(`/api/agents/${agentId}/voice/clone`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(choice) })
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
+      setStep('idle')
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not switch voice')
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const full = status.saved.length >= status.maxVoices
+  const stockName = status.stock.name ? `${status.stock.name}${status.stock.provider === 'cartesia' ? ' (stock Australian voice)' : ' (stock voice)'}` : 'Stock voice'
 
   return (
     <section aria-label={`${first}'s voice`} className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 space-y-4">
@@ -86,23 +121,68 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
           <p className="text-sm text-neutral-600 dark:text-neutral-300">
             {cloned
               ? <>Using <strong>{cloned.consentFrom}</strong>&apos;s voice (consent recorded {cloned.consentDate}).</>
-              : status.voice.provider === 'cartesia' ? 'Using a stock Australian voice.' : 'Using a stock voice.'}
+              : <>Using {stockName}.</>}
           </p>
         </div>
-        {cloned && status.canChange && (
-          <button onClick={remove} disabled={busy} className="inline-flex items-center gap-2 rounded-lg border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-60">
-            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}Remove this voice
-          </button>
-        )}
       </div>
+
+      {(status.saved.length > 0 || status.canChange) && (
+        <ul className="divide-y divide-neutral-200 dark:divide-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-800" aria-label="Voices">
+          {[{ key: 'stock', label: stockName, detail: 'Comes with the platform', inUse: status.stock.inUse, saved: null as SavedVoice | null },
+            ...status.saved.map((v) => ({ key: v.voiceId, label: `${v.consentFrom}'s voice`, detail: `Recorded with consent ${v.consentDate}`, inUse: v.inUse, saved: v }))].map((row) => (
+            <li key={row.key} className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-neutral-900 dark:text-neutral-100 truncate">{row.label}</p>
+                <p className="text-xs text-neutral-500">{row.detail}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {row.inUse ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-50 dark:bg-green-900/30 px-2.5 py-1 text-xs font-medium text-green-800 dark:text-green-300"><Check className="w-3.5 h-3.5" />In use</span>
+                ) : status.canChange && (
+                  <button onClick={() => use(row.saved ? { voiceId: row.saved.voiceId } : { stock: true })} disabled={busy !== null} className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 dark:border-neutral-600 px-3 py-1.5 text-sm text-neutral-700 dark:text-neutral-200 hover:bg-neutral-50 dark:hover:bg-neutral-800 disabled:opacity-60">
+                    {busy === row.key && <Loader2 className="w-4 h-4 animate-spin" />}Use this voice
+                  </button>
+                )}
+                {row.saved && status.canChange && (confirmRemove === row.key ? (
+                  <span className="inline-flex flex-wrap items-center gap-2 text-sm">
+                    <span className="text-neutral-600 dark:text-neutral-300">Delete it for good?</span>
+                    <button onClick={() => remove(row.key)} disabled={busy !== null} className="inline-flex items-center gap-1 rounded-lg bg-red-600 hover:bg-red-700 text-white px-2.5 py-1 text-sm disabled:opacity-60">
+                      {busy === row.key && <Loader2 className="w-3.5 h-3.5 animate-spin" />}Delete
+                    </button>
+                    <button onClick={() => setConfirmRemove(null)} className="text-neutral-500 underline">Keep</button>
+                  </span>
+                ) : (
+                  <button onClick={() => setConfirmRemove(row.key)} disabled={busy !== null} aria-label={`Remove ${row.label}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-neutral-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-60">
+                    <Trash2 className="w-4 h-4" />Remove
+                  </button>
+                ))}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {status.usage && status.canChange && status.voice.provider === 'cartesia' && (
+        <p className="text-xs text-neutral-500 dark:text-neutral-400 tabular-nums">
+          This month: {status.usage.tenant.used.toLocaleString()}
+          {status.usage.tenant.limit > 0 && <> of {status.usage.tenant.limit.toLocaleString()}</>} characters of speech
+          {status.usage.tenant.limit > 0 && <> (about {Math.round(status.usage.tenant.used / CHARS_PER_MINUTE)} of {Math.round(status.usage.tenant.limit / CHARS_PER_MINUTE)} minutes)</>}
+          {status.usage.clones.limit > 0 && <> · {status.usage.clones.used} of {status.usage.clones.limit} voices recorded</>}
+          {status.usage.tenant.limit > 0 && status.usage.tenant.used > status.usage.tenant.limit - 300 && <span className="text-amber-700 dark:text-amber-400"> · limit reached: calls are off until next month</span>}
+        </p>
+      )}
 
       {!status.available && <p className="text-sm text-neutral-500">Using your own voice needs a Cartesia account connected on the server (CARTESIA_API_KEY).</p>}
       {status.available && !status.canChange && <p className="text-sm text-neutral-500">An admin can give {first} a recorded voice.</p>}
 
-      {status.available && status.canChange && step === 'idle' && (
-        <button onClick={() => setStep('recording')} className="inline-flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 text-sm font-medium">
-          <Mic className="w-4 h-4" />{cloned ? 'Record a different voice' : 'Use your own voice'}
-        </button>
+      {status.available && status.canChange && step !== 'recording' && step !== 'uploading' && (
+        full
+          ? <p className="text-sm text-neutral-500">{status.maxVoices} voices are saved, the most an agent can keep. Remove one to record another.</p>
+          : (
+            <button onClick={() => { setStep('recording'); setTake(null) }} className="inline-flex items-center gap-2 rounded-lg bg-primary-600 hover:bg-primary-700 text-white px-4 py-2 text-sm font-medium">
+              <Mic className="w-4 h-4" />{status.saved.length ? 'Record another voice' : 'Use your own voice'}
+            </button>
+          )
       )}
 
       {(step === 'recording' || step === 'uploading') && (
@@ -120,7 +200,7 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
       {step === 'done' && cloned && (
         <div className="flex flex-wrap items-center gap-3 text-sm text-neutral-700 dark:text-neutral-200">
           <CheckCircle2 className="w-5 h-5 text-green-600" aria-hidden="true" />
-          <span>{first} now speaks with {cloned.consentFrom}&apos;s voice. Start a conversation above to hear it.</span>
+          <span>{first} now speaks with {cloned.consentFrom}&apos;s voice, and it&apos;s saved with the others. Start a conversation above to hear it.</span>
           {sample.current && (
             <button onClick={() => { sample.current!.currentTime = 0; void sample.current!.play() }} className="inline-flex items-center gap-1 underline">
               <Play className="w-3.5 h-3.5" />Play the greeting again

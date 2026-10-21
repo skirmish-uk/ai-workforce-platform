@@ -3,9 +3,10 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { canAccessTenant, canApprove, hasPermission, safeErrorMessage } from '@ai-workforce/domain'
-import { cloneScript, readVoiceConfig, voiceConfigSchema, defaultGreeting, type VoiceConfig } from '@ai-workforce/executor'
+import { MAX_SAVED_VOICES, STOCK_VOICES, cloneScript, readVoiceConfig, savedVoices, voiceConfigSchema, defaultGreeting, type VoiceConfig } from '@ai-workforce/executor'
 import { CLONE_MAX_BYTES, CLONE_MAX_SECONDS, CLONE_MIN_SECONDS, cloneCartesiaVoice, deleteCartesiaVoice, synthesizeSpeech, wavDurationSeconds } from '@ai-workforce/llm'
 import type { Prisma, UserRole } from '@prisma/client'
+import { clonesThisMonth, reserveSpeech, voiceLimits, voiceUsage } from '../tts-budget'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -14,11 +15,14 @@ export const runtime = 'nodejs'
  * "Use your own voice" (docs/VOICE.md): record the speaker reading a short script that starts
  * with a spoken consent statement, and Cartesia makes a private copy of the voice for this
  * agent. Admins only: a cloned voice is a person's likeness. The recording is sent to Cartesia
- * and not stored here; the agent records who consented, when, and who uploaded it.
+ * and not stored here; the agent records who consented, when, and who uploaded it. An agent keeps
+ * up to MAX_SAVED_VOICES cloned voices (Agent.config.voice.voices) and switches between them.
  *
- * GET    status, the script to read, and whether cloning is available
- * POST   multipart: audio (WAV, 10-120 s), speakerName, consent=yes -> clones and switches
- * DELETE removes the cloned voice: restores the previous voice and deletes the copy at Cartesia
+ * GET    status, the saved voices, the script to read, and whether cloning is available
+ * POST   multipart: audio (WAV, 10-120 s), speakerName, consent=yes -> clones, adds it, switches to it
+ * PUT    JSON { voiceId } (a saved voice) or { stock: true } -> switches the voice in use
+ * DELETE ?voiceId= -> removes that saved voice and deletes the copy at Cartesia (the stock voice
+ *        comes back if it was in use); without voiceId, the voice in use
  */
 
 type Session = { user: { id: string; email?: string | null; role: string; tenantId: string } }
@@ -48,6 +52,18 @@ function today(settings: unknown): string {
   }
 }
 
+/** The stock voice the agent uses, or goes back to from a cloned one. */
+function stockVoice(voice: VoiceConfig): { provider: string | null; voiceId: string | null; name: string | null; inUse: boolean } {
+  const stock = voice.clonedVoice ? voice.previous ?? {} : { provider: voice.provider, voiceId: voice.voiceId }
+  const name = STOCK_VOICES.find((v) => v.id === stock.voiceId)?.name ?? (stock.provider === 'openai' || (!stock.provider && stock.voiceId) ? stock.voiceId ?? null : null)
+  return { provider: stock.provider ?? null, voiceId: stock.voiceId ?? null, name, inUse: !voice.clonedVoice }
+}
+
+/** The stock voice to remember while a cloned one is in use. */
+function stockOf(voice: VoiceConfig): VoiceConfig['previous'] {
+  return voice.clonedVoice ? voice.previous : { provider: voice.provider, voiceId: voice.voiceId }
+}
+
 async function saveVoice(agentId: string, config: Prisma.JsonValue, voice: VoiceConfig) {
   const parsed = voiceConfigSchema.parse(voice)
   const base = config && typeof config === 'object' && !Array.isArray(config) ? (config as Record<string, unknown>) : {}
@@ -60,13 +76,25 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const { id } = await params
   const loaded = await load(id, session, false)
   if (loaded.error) return loaded.error
+  const { voice } = loaded
+  let usage = null
+  try {
+    const [chars, clones] = await Promise.all([voiceUsage(loaded.agent.tenantId, loaded.agent.tenant.settings), clonesThisMonth(loaded.agent.tenantId)])
+    usage = { ...chars, clones: { used: clones, limit: voiceLimits(loaded.agent.tenant.settings).clonesPerMonth } }
+  } catch (error) {
+    console.error('Voice usage unavailable:', safeErrorMessage(error))
+  }
   return NextResponse.json({
+    usage,
     available: Boolean(process.env.CARTESIA_API_KEY),
     canChange: canApprove(loaded.role, 'CUSTOMER_APPROVAL'),
     businessName: loaded.agent.tenant.name,
     minSeconds: CLONE_MIN_SECONDS,
     maxSeconds: CLONE_MAX_SECONDS,
-    voice: { provider: loaded.voice.provider ?? null, voiceId: loaded.voice.voiceId ?? null, clonedVoice: loaded.voice.clonedVoice ?? null },
+    maxVoices: MAX_SAVED_VOICES,
+    voice: { provider: voice.provider ?? null, voiceId: voice.voiceId ?? null, clonedVoice: voice.clonedVoice ?? null },
+    saved: savedVoices(voice).map((v) => ({ voiceId: v.voiceId, consentFrom: v.consentFrom, consentDate: v.consentDate, inUse: Boolean(voice.clonedVoice) && v.voiceId === voice.voiceId })),
+    stock: stockVoice(voice),
     script: cloneScript('{name}', loaded.agent.tenant.name),
   })
 }
@@ -94,6 +122,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (seconds < CLONE_MIN_SECONDS) return NextResponse.json({ error: `The recording is ${Math.round(seconds)} seconds; at least ${CLONE_MIN_SECONDS} are needed. Read the whole script.` }, { status: 400 })
     if (seconds > CLONE_MAX_SECONDS) return NextResponse.json({ error: `Keep the recording under ${CLONE_MAX_SECONDS / 60} minutes` }, { status: 400 })
 
+    const library = savedVoices(voice)
+    const cloneLimit = voiceLimits(agent.tenant.settings).clonesPerMonth
+    if (cloneLimit > 0 && (await clonesThisMonth(agent.tenantId)) >= cloneLimit) {
+      return NextResponse.json({ error: `${cloneLimit} voices have been recorded this month, the monthly limit. Switch between the saved ones, or record more next month.` }, { status: 429 })
+    }
+    if (library.length >= MAX_SAVED_VOICES) return NextResponse.json({ error: `${MAX_SAVED_VOICES} voices are saved already. Remove one before recording another.` }, { status: 409 })
+
     const consentDate = today(agent.tenant.settings)
     const cloned = await cloneCartesiaVoice(audio, {
       mimeType: 'audio/wav',
@@ -101,18 +136,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       description: `Cloned with ${speakerName}'s consent on ${consentDate} for ${agent.tenant.name} (AI Workforce dashboard).`,
     })
 
-    // A clone being replaced keeps the original "previous" voice; the old copy is deleted below.
-    const previous = voice.clonedVoice ? voice.previous : { provider: voice.provider, voiceId: voice.voiceId }
+    // Added to the saved voices and switched to; the voices recorded before are kept.
+    const consent = {
+      consentFrom: speakerName,
+      consentDate,
+      consentReference: `Spoken consent at the start of a ${Math.round(seconds)} s recording made in the dashboard by ${session.user.email ?? session.user.id}`.slice(0, 300),
+    }
     const next: VoiceConfig = {
       ...voice,
       provider: 'cartesia',
       voiceId: cloned.voiceId,
-      clonedVoice: {
-        consentFrom: speakerName,
-        consentDate,
-        consentReference: `Spoken consent at the start of a ${Math.round(seconds)} s recording made in the dashboard by ${session.user.email ?? session.user.id}`.slice(0, 300),
-      },
-      previous,
+      clonedVoice: consent,
+      voices: [...library, { voiceId: cloned.voiceId, ...consent }],
+      previous: stockOf(voice),
     }
     try {
       await saveVoice(agent.id, agent.config, next)
@@ -120,7 +156,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       await deleteCartesiaVoice(cloned.voiceId).catch(() => undefined)
       throw error
     }
-    if (voice.clonedVoice && voice.voiceId) await deleteCartesiaVoice(voice.voiceId).catch((e) => console.error('Could not delete the replaced cloned voice:', safeErrorMessage(e)))
 
     await prisma.auditLog.create({
       data: {
@@ -129,7 +164,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         entityId: agent.id,
         tenantId: agent.tenantId,
         userId: session.user.id,
-        newData: { voiceId: cloned.voiceId, consentFrom: speakerName, consentDate, recordingSeconds: Math.round(seconds), replacedVoiceId: voice.voiceId ?? null },
+        newData: { voiceId: cloned.voiceId, consentFrom: speakerName, consentDate, recordingSeconds: Math.round(seconds), previousVoiceId: voice.voiceId ?? null, savedVoices: library.length + 1 },
       },
     })
 
@@ -137,6 +172,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let sample: { audio: string; mimeType: string } | null = null
     try {
       const greeting = next.greeting ?? defaultGreeting(agent.name)
+      await reserveSpeech(agent.tenantId, agent.tenant.settings, greeting.length, 'cartesia')
       const speech = await synthesizeSpeech(greeting, { provider: 'cartesia', voice: cloned.voiceId })
       sample = { audio: speech.audio.toString('base64'), mimeType: speech.mimeType }
     } catch { /* the voice exists; a sample is a convenience */ }
@@ -148,7 +184,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 }
 
-export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+/** Switches the agent to one of its saved voices, or back to its stock voice. */
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = (await getServerSession(authOptions)) as Session | null
     if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -156,12 +193,51 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
     const loaded = await load(id, session, true)
     if (loaded.error) return loaded.error
     const { agent, voice } = loaded
-    if (!voice.clonedVoice || !voice.voiceId) return NextResponse.json({ error: 'This agent isn’t using a cloned voice' }, { status: 409 })
+    const body = (await request.json().catch(() => ({}))) as { voiceId?: unknown; stock?: unknown }
+    const library = savedVoices(voice)
+    let next: VoiceConfig
+    if (body.stock === true) {
+      if (!voice.clonedVoice) return NextResponse.json({ switched: false, voiceId: voice.voiceId ?? null })
+      next = { ...voice, provider: voice.previous?.provider, voiceId: voice.previous?.voiceId, clonedVoice: undefined, previous: undefined, voices: library }
+    } else {
+      const chosen = library.find((v) => v.voiceId === body.voiceId)
+      if (!chosen) return NextResponse.json({ error: 'Choose one of this agent’s saved voices' }, { status: 400 })
+      const { voiceId, ...consent } = chosen
+      next = { ...voice, provider: 'cartesia', voiceId, clonedVoice: consent, previous: stockOf(voice), voices: library }
+    }
+    await saveVoice(agent.id, agent.config, next)
+    await prisma.auditLog.create({
+      data: { action: 'VOICE_SWITCHED', entityType: 'Agent', entityId: agent.id, tenantId: agent.tenantId, userId: session.user.id, newData: { from: voice.voiceId ?? null, to: next.voiceId ?? null, cloned: Boolean(next.clonedVoice) } },
+    })
+    return NextResponse.json({ switched: true, voiceId: next.voiceId ?? null })
+  } catch (error) {
+    console.error('Switching voice failed:', safeErrorMessage(error))
+    return NextResponse.json({ error: `Could not switch voice: ${safeErrorMessage(error)}` }, { status: 500 })
+  }
+}
 
-    const restored: VoiceConfig = { ...voice, provider: voice.previous?.provider, voiceId: voice.previous?.voiceId, clonedVoice: undefined, previous: undefined }
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const session = (await getServerSession(authOptions)) as Session | null
+    if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const { id } = await params
+    const loaded = await load(id, session, true)
+    if (loaded.error) return loaded.error
+    const { agent, voice } = loaded
+    const library = savedVoices(voice)
+    const target = request.nextUrl.searchParams.get('voiceId') ?? (voice.clonedVoice ? voice.voiceId : null)
+    const removing = library.find((v) => v.voiceId === target)
+    if (!removing) return NextResponse.json({ error: 'That isn’t one of this agent’s saved voices' }, { status: 404 })
+
+    // In use: the stock voice comes back. Either way the other saved voices stay.
+    const inUse = Boolean(voice.clonedVoice) && voice.voiceId === removing.voiceId
+    const rest = library.filter((v) => v.voiceId !== removing.voiceId)
+    const restored: VoiceConfig = inUse
+      ? { ...voice, provider: voice.previous?.provider, voiceId: voice.previous?.voiceId, clonedVoice: undefined, previous: undefined, voices: rest }
+      : { ...voice, voices: rest }
     await saveVoice(agent.id, agent.config, restored)
     let deletedAtCartesia = true
-    await deleteCartesiaVoice(voice.voiceId).catch((e) => {
+    await deleteCartesiaVoice(removing.voiceId).catch((e) => {
       deletedAtCartesia = false
       console.error('Could not delete the cloned voice at Cartesia:', safeErrorMessage(e))
     })
@@ -172,7 +248,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
         entityId: agent.id,
         tenantId: agent.tenantId,
         userId: session.user.id,
-        newData: { voiceId: voice.voiceId, consentFrom: voice.clonedVoice.consentFrom, deletedAtCartesia, restoredVoiceId: restored.voiceId ?? null },
+        newData: { voiceId: removing.voiceId, consentFrom: removing.consentFrom, wasInUse: inUse, deletedAtCartesia, voiceInUse: restored.voiceId ?? null },
       },
     })
     return NextResponse.json({ removed: true, deletedAtCartesia, voice: { provider: restored.provider ?? null, voiceId: restored.voiceId ?? null } })

@@ -120,9 +120,22 @@ On the agent page, under the Talk panel, **Use your own voice** (admins only; ne
 3. Listen back, then **Create voice**. The browser converts the recording to 16-bit mono WAV (24 kHz) so every browser's format works and the server can check the length (10 s to 2 min). `POST /api/agents/[id]/voice/clone` sends it to Cartesia's instant clone (`POST /voices/clone`, private).
 4. The server switches the agent to the new voice (`voice.provider: cartesia`, `voice.voiceId`) and stores the consent record (`voice.clonedVoice`: name, date in the tenant's time zone, and who uploaded it). It remembers the previous voice (`voice.previous`), audits `VOICE_CLONED` and plays a sample greeting.
 
-**Remove this voice** (`DELETE …/voice/clone`) restores the previous voice, deletes the copy at Cartesia and audits `VOICE_CLONE_REMOVED`. Recording a new voice replaces the old copy, which is deleted at Cartesia too.
+**Several voices (22 Oct).** An agent keeps up to 8 recorded voices (`voice.voices`, each with its own consent record); recording another adds it and switches to it, instead of replacing (and deleting) the one before. The voice card lists the stock voice and each saved voice: **Use this voice** switches (`PUT …/voice/clone` with `{ voiceId }` or `{ stock: true }`, audited `VOICE_SWITCHED`), **Remove** asks "Delete it for good?" and then deletes that one at Cartesia (`DELETE …/voice/clone?voiceId=`, audited `VOICE_CLONE_REMOVED`); removing the voice in use brings the stock voice back. A voice cloned before the list existed (only `voice.clonedVoice` set) appears in it and is kept when another is added (`savedVoices()`).
 
-The recording is not stored by the platform. Cartesia keeps the private voice until it is removed. Reseeding keeps a cloned voice (the seed doesn't overwrite a voice that has a consent record). Instant cloning needs a paid Cartesia plan (Pro or above).
+The recording is not stored by the platform. Cartesia keeps each private voice until it is removed. Reseeding keeps the voices, in use or only saved (the seed doesn't overwrite a voice config that has consent records; dropping them would orphan the copies at Cartesia). Instant cloning needs a paid Cartesia plan (Pro or above).
+
+## 2b. Monthly voice limits (22 Oct)
+
+Cartesia bills by the character (1 credit each, about 780 a minute of speech; Pro is $5 for 100,000 a month, Startup $49 for 1.25 million). So a leaked login or a runaway page can't run up the bill, speech is capped per calendar month (UTC), in `apps/web/src/app/api/agents/[id]/voice/tts-budget.ts`:
+- **Whole platform:** `CARTESIA_MONTHLY_CHARACTER_LIMIT`, default 100,000; `0` turns it off.
+- **Each business:** `Tenant.settings.voiceLimits.monthlyCharacters`, default 50,000 (about an hour); `0` turns it off.
+- **Voices recorded:** `Tenant.settings.voiceLimits.clonesPerMonth`, default 10 (stops record-delete-record churn; counted from `VOICE_CLONED` rows).
+
+Characters are reserved in Redis before each sentence is synthesised and given back if it fails or would go over, so concurrent calls can't race past a cap. Cached lines (greeting, acknowledgements) cost nothing and aren't counted. If a counter is missing it is rebuilt from this month's `VOICE_TURN` and `VOICE_CALL_STARTED` rows (the call start now records what its greeting cost). OpenAI voices aren't counted here.
+
+When a limit is reached: a new call doesn't start (with under 300 characters left) and says why, typed tasks still work; a call in progress carries on with the rest of the answer as text and the note "Speech unavailable: This month's voice limit … has been reached". The voice card shows admins this month's use ("This month: 20,083 of 50,000 characters of speech (about 26 of 64 minutes) · 1 of 10 voices recorded"); the platform total isn't shown to tenants.
+
+Each environment counts in its own Redis, so the caps don't add up across environments sharing one Cartesia key (local development and the demo do): set each environment's platform cap so their sum fits the plan. Tested 22 Oct against local Redis and Postgres (reservations, refusals given back, 0 = no cap, the platform cap across tenants, a counter rebuilt from the audit rows) and in a call: with 300 characters left the opening sentences were spoken and the rest shown with the note, usage stopping at 92,127 of 92,153; with fewer left, starting a call was refused.
 
 ## 3. Configuration
 

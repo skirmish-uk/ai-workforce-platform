@@ -19,5 +19,5 @@
     "db:migrate": {},
     "db:studio": {}
   },
-  "globalEnv": ["DATABASE_URL", "NEXTAUTH_SECRET", "REDIS_URL"]
+  "globalEnv": ["DATABASE_URL", "NEXTAUTH_SECRET", "REDIS_URL", "TEST_DATABASE_URL"]
 }

@@ -150,6 +150,12 @@ export class SpeechDetector {
     return recent.every((f) => f.p >= THRESHOLD && f.rms >= minLevel && f.endAt - FRAME_MS >= since)
   }
 
+  /** Probably speech in the last ~0.1 s (any recent frame at 0.5 or more), however loud. */
+  speechLately(): boolean {
+    const recent = this.history.slice(-MIN_FRAMES)
+    return recent.length > 0 && performance.now() - recent[recent.length - 1].endAt <= FRESH_MS && recent.some((f) => f.p >= 0.5)
+  }
+
   /**
    * No speech at all lately: the last QUIET_FRAMES frames, all captured after `since`, were
    * below QUIET_THRESHOLD. Lets the agent carry on promptly after a noise.

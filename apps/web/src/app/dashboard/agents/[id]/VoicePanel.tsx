@@ -126,6 +126,21 @@ const HOLD_TICKS = 2
 const HOLD_SETTLE_TICKS = 3
 const CONFIRM_TICKS = 2
 const HOLD_MAX_TICKS = 9
+/**
+ * After a pause that wasn't the caller, no new pause for this long: on laptop speakers the
+ * agent's own echo set off pause after pause (hundreds in one answer, heard as the voice cutting
+ * in and out) before the echo estimate caught up.
+ */
+const HOLD_COOLDOWN_MS = 1000
+/**
+ * After a pause for a noise: long enough that a long clatter doesn't stop and start the agent
+ * several times a second, short enough not to miss the caller speaking just after it (1 s did).
+ */
+const NOISE_COOLDOWN_MS = 300
+/** A pause set off by the agent's own echo raises the echo estimate this much past what set it off. */
+const ECHO_MARGIN = 1.3
+/** Per tick: an echo estimate nothing has topped up halves in about 1.7 s (a headset soon reaches ~0). */
+const ECHO_DECAY = 0.98
 /** Quietest level counted as speech: low for quiet laptop and webcam mics (speech measured at 0.01–0.03 RMS). */
 const MIN_SPEECH_LEVEL = 0.006
 /** Silence that ends the caller's turn. */
@@ -250,7 +265,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const turnsRef = useRef<Turn[]>([])
   /** Groups this call's turns into one conversation in the agent's history; a cleared conversation starts a new one. */
   const conversationId = useRef<string>(crypto.randomUUID())
-  const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [] as number[], suspectRatio: 0, suspectVoiced: false, voiceHeard: false, heldAt: 0 })
+  const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [] as number[], suspectRatio: 0, voiceHeard: false, heldAt: 0, holdAgainAt: 0, suspectSpeech: false })
 
   const setPhaseBoth = (p: Phase) => { phaseRef.current = p; setPhase(p) }
   useEffect(() => { turnsRef.current = turns }, [turns])
@@ -717,25 +732,33 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
           bargeIn()
           beginUtterance(true)
         } else if (v.holdTicks >= HOLD_MAX_TICKS || (!v.voiceHeard && detector.current?.noVoice(settledAt))) {
-          // The agent's own echo, louder than estimated: learn that, so it isn't mistaken again.
-          // Only when what set it off sounded like a voice (the echo is one); a clatter or a
-          // rustle teaches nothing about the echo, and would make interrupting harder.
-          // Nor when a voice was heard while it was turned down (its echo is too quiet for that by
-          // then): that was the caller, just not loud enough.
-          if (v.suspectVoiced && !v.voiceHeard) v.echoCoupling = Math.min(1, Math.max(v.echoCoupling, v.suspectRatio))
+          // Not the caller. If what set it off was speech and stopped when the agent paused, it was
+          // the agent's own echo, louder than estimated: learn that (with a margin), so it doesn't
+          // set off the next pause. A clack or a clatter (not speech; it may stop by itself too)
+          // says nothing about the echo, and learning from it made interrupting take ~3 s.
+          const ownEcho = v.suspectSpeech && !v.loudTicks && !v.voiceHeard
+          if (ownEcho) v.echoCoupling = Math.min(1, Math.max(v.echoCoupling, v.suspectRatio * ECHO_MARGIN))
+          v.holdAgainAt = performance.now() + (ownEcho ? HOLD_COOLDOWN_MS : NOISE_COOLDOWN_MS)
           hold(false)
           v.loudTicks = 0
         }
       } else if (p === 'speaking') {
         const suspect = rms > Math.max(base, echo * SUSPECT_OVER_ECHO)
-        if (!suspect && v.playerLevel > 0.01) v.echoCoupling = Math.min(1, v.echoCoupling * 0.9 + (rms / v.playerLevel) * 0.1)
+        // Follows the echo's peaks, letting go slowly: an average dropped below the next loud
+        // syllable's echo within a second, which set off another pause. Raised only by what
+        // sounds like speech (the echo is the agent's voice): a clatter just under the pause
+        // level ratcheted it up tick by tick, and interrupting then took ~3 s.
+        if (!suspect && v.playerLevel > 0.01) {
+          const echoLike = detector.current ? detector.current.speechLately() : true
+          v.echoCoupling = Math.min(1, Math.max(echoLike ? rms / v.playerLevel : 0, v.echoCoupling * ECHO_DECAY))
+        }
         // From the first time the caller seemed to talk, even if that check was dropped and retried.
         if (suspect && !v.loudTicks && Date.now() - v.suspectAt > BARGE_IN_PRE_ROLL_MS) v.suspectAt = Date.now()
-        if (suspect && !v.loudTicks) { v.suspectRatio = 0; v.suspectVoiced = false }
+        if (suspect && !v.loudTicks) { v.suspectRatio = 0; v.suspectSpeech = false }
+        if (suspect && (detector.current ? detector.current.speechLately() : true)) v.suspectSpeech = true
         if (suspect && v.playerLevel > 0.01) v.suspectRatio = Math.max(v.suspectRatio, rms / v.playerLevel)
-        if (suspect && heardVoice(0, Math.max(base, echo * SUSPECT_OVER_ECHO))) v.suspectVoiced = true
         v.loudTicks = suspect ? v.loudTicks + 1 : 0
-        if (v.loudTicks >= HOLD_TICKS) {
+        if (v.loudTicks >= HOLD_TICKS && performance.now() >= v.holdAgainAt) {
           // A voice still has to be heard while it's paused (see above), so a noise only pauses it.
           v.loudTicks = 0
           v.voiceHeard = false
@@ -893,7 +916,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       micAnalyser.current.fftSize = 1024
       micAnalyser.current.smoothingTimeConstant = 0.6
       speechBand.connect(micAnalyser.current) // detection only; never to the speakers
-      vad.current = { floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [], suspectRatio: 0, suspectVoiced: false, voiceHeard: false, heldAt: 0 }
+      vad.current = { floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [], suspectRatio: 0, voiceHeard: false, heldAt: 0, holdAgainAt: 0, suspectSpeech: false }
       try {
         if (!workletLoaded.current) {
           const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'application/javascript' }))

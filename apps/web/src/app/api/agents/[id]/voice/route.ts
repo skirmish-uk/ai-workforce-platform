@@ -14,12 +14,6 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 /**
- * Answers are heard, not read: a full package description typed was about 100 words (35 s
- * spoken). On a call the agent gives the main points and offers the rest.
- */
-const SPOKEN_LENGTH = '(Spoken answer: two or three short sentences with the main points, about 60 words at most; offer more detail instead of listing everything.)'
-
-/**
  * A call is a conversation: each turn's run gets the recent exchanges (sent by the browser as
  * form field "history": [{who: 'caller'|'agent', text}]) so "what about Saturdays?" makes sense.
  * Bounded: the last 8 exchanges, 400 characters each.
@@ -34,8 +28,10 @@ function withConversation(transcript: string, rawHistory: FormDataEntryValue | n
     .filter((h) => (h.who === 'caller' || h.who === 'agent') && typeof h.text === 'string' && h.text.trim())
     .slice(-8)
     .map((h) => `${h.who === 'caller' ? 'Caller' : first}: ${String(h.text).replace(/\s+/g, ' ').trim().slice(0, 400)}`)
-  if (!lines.length) return `${transcript}\n\n${SPOKEN_LENGTH}`
-  return `This is a live voice call. The conversation so far, most recent last:\n${lines.join('\n')}\n\nThe caller now says: "${transcript}"\n\nReply to what the caller just said, in the context of the call. Don't greet them again. ${SPOKEN_LENGTH}`
+  // How to talk on a call (length, tone, wrapping up) is in the agent's prompt for voice turns
+  // (VOICE_STYLE); here only what has been said.
+  if (!lines.length) return transcript
+  return `The call so far, most recent last:\n${lines.join('\n')}\n\nThe caller just said: "${transcript}"`
 }
 
 /** The agent's last two lines in the call (from "history"), to recognise its own echo. */
@@ -329,14 +325,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         // streaming), or how the turn ended when it wasn't a plain answer.
         if (status === 'timeout') say('That’s taking longer than usual. I’ve noted your question and the team will follow up.', true)
         else if (!result || status === 'failed') say(spokenReply({ status: 'failed', output: null }), true)
-        else if (status === 'completed' || status === 'partial') { if (!spokenText) say(spokenReply(result)) }
-        else say(spokenReply(result))
+        else if (status === 'completed' || status === 'partial') { if (!spokenText) say(spokenReply(result), result.endCall) }
+        // A hand-off the agent already explained in its own words isn't repeated with a stock line.
+        else if (status === 'escalated') { if (!spokenText) say(spokenReply(result), true) }
+        // Approvals always get the stock line: it never claims a gated action was done. Stock
+        // lines are cached; clarifying questions are the agent's own words, so they aren't.
+        else say(spokenReply(result), status !== 'needs_clarification')
 
         await ordered
         lap('speakMs')
         timings.totalMs = Date.now() - started
-        send({ type: 'done', status, runId, reply: spokenText, timings })
-        recordTurn(agent, session.user.id, { runId, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: characters, ttsModel, ttsError, timings })
+        // endCall: the agent said goodbye; the page hangs up about a second after it finishes speaking.
+        send({ type: 'done', status, runId, reply: spokenText, endCall: result?.endCall === true, timings })
+        recordTurn(agent, session.user.id, { runId, status, endCall: result?.endCall === true || undefined, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: characters, ttsModel, ttsError, timings })
         if (!closed) controller.close()
       },
     })

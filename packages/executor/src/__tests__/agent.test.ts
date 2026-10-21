@@ -525,3 +525,35 @@ describe('default permission level (no AgentPermission row)', () => {
     assert.ok(!llm2.calls[0].params.tools!.some((t) => t.name === CRM_SEARCH), 'an explicitly prohibited read is not offered')
   })
 })
+
+describe('voice calls', () => {
+  test('a voice turn gets the call style and can end the call after a goodbye; other runs get neither', async () => {
+    const f = await fixture()
+    const llm = scriptedLLM([toolUse([{ name: 'platform__end_call', input: {} }], 'Thanks for calling, have a lovely day!')])
+    const result = await runAgent(f.agentId, 'No, that’s everything, thanks.', { deps: deps(llm), trigger: 'voice' })
+    assert.equal(result.status, 'completed', result.error)
+    assert.equal(result.endCall, true)
+    assert.equal(result.output, 'Thanks for calling, have a lovely day!')
+    assert.ok(llm.calls[0].params.tools!.some((t) => t.name === 'platform__end_call'))
+    const blocks = llm.calls[0].params.system as LLMSystemBlock[]
+    // Cached with the stable prompt, before the per-request block (current time), which stays last.
+    const style = blocks.findIndex((b) => b.text.includes('## On a live call'))
+    assert.ok(style > 0 && blocks[style].cache && style === blocks.length - 2)
+    const [row] = await auditRows(f.tenantId, 'AGENT_RUN_COMPLETED')
+    assert.equal((row.newData as { endCall?: boolean }).endCall, true)
+
+    const typed = scriptedLLM([text('Our hours are 9 to 5.')])
+    const answer = await runAgent(f.agentId, 'What are your hours?', { deps: deps(typed) })
+    assert.equal(answer.endCall, undefined)
+    assert.ok(!typed.calls[0].params.tools!.some((t) => t.name === 'platform__end_call'))
+    assert.ok(!systemText(typed.calls[0].params.system)!.includes('## On a live call'))
+  })
+
+  test('ending the call with no goodbye written still says one', async () => {
+    const f = await fixture()
+    const llm = scriptedLLM([toolUse([{ name: 'platform__end_call', input: {} }])])
+    const result = await runAgent(f.agentId, 'Bye!', { deps: deps(llm), trigger: 'voice' })
+    assert.equal(result.endCall, true)
+    assert.match(result.output ?? '', /Thanks for calling/)
+  })
+})

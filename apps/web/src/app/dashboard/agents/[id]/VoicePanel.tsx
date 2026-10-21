@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { Loader2, Mic, MicOff, PhoneCall, PhoneOff, Play, Volume2 } from 'lucide-react'
 import { WAV_RATE, encodeWav } from './voice-audio'
+import { SpeechDetector, loadSpeechModel } from './speech-detector'
 import { ComparisonResults, TranscriberCompare, compareRecording, type Comparison } from './TranscriberCompare'
 
 interface Turn {
@@ -106,22 +107,37 @@ const TICK_MS = 50
 /** Consecutive loud ticks before speech counts (150 ms). */
 const START_TICKS = 3
 /**
- * Interrupting the agent: after DUCK_TICKS loud ticks its voice is turned down to DUCK_LEVEL.
- * Its echo drops with it and a person talking doesn't, so CONFIRM_TICKS still-loud ticks
- * after DUCK_SETTLE_TICKS stop it (about 0.3 s in all). Otherwise it is back to full volume
- * within DUCK_MAX_TICKS (a brief dip).
+ * Interrupting the agent: after HOLD_TICKS loud ticks it pauses mid-word (held, not muted, so
+ * nothing is lost) and the page listens with no echo of it in the microphone. A voice (loud, and
+ * speech to the detector) for CONFIRM_TICKS after HOLD_SETTLE_TICKS stops it: the caller is
+ * interrupting. A noise lets it carry on from where it paused, as soon as the detector has heard
+ * a few frames of no speech (about a quarter of a second), at most after HOLD_MAX_TICKS.
+ *
+ * Pausing, not turning it down: the detector hears the agent's own voice as speech however
+ * quiet (at a tenth it still scored 0.99), and that carried into the frames of a pot clattering
+ * over it, which then passed as the caller.
  */
-const DUCK_TICKS = 2
-const DUCK_LEVEL = 0.25
-const DUCK_SETTLE_TICKS = 2
+const HOLD_TICKS = 2
+/**
+ * Paused, the end of the agent's voice still reaches the microphone for a moment (speaker delay,
+ * the room's reverb); the detector starts afresh after that, or its memory of that last bit of
+ * speech carried into a clatter and let it through.
+ */
+const HOLD_SETTLE_TICKS = 3
 const CONFIRM_TICKS = 2
-const DUCK_MAX_TICKS = 7
+const HOLD_MAX_TICKS = 9
 /** Quietest level counted as speech: low for quiet laptop and webcam mics (speech measured at 0.01–0.03 RMS). */
 const MIN_SPEECH_LEVEL = 0.006
 /** Silence that ends the caller's turn. */
 const END_SILENCE_MS = 650
-/** No answer audio this long after the caller stops: say a short acknowledgement. */
-const FILLER_AFTER_MS = 600
+/**
+ * No answer audio this long after the caller stops: say a short acknowledgement. Not on two
+ * turns in a row: with answers starting ~2 s after the caller stops, an "Mm-hm." before every
+ * one sounded mechanical.
+ */
+const FILLER_AFTER_MS = 1000
+/** After the agent's goodbye has finished playing, the call ends this much later (unless the caller speaks). */
+const END_CALL_AFTER_MS = 1000
 const MIN_UTTERANCE_MS = 500
 const MAX_UTTERANCE_MS = 30_000
 /** Audio kept from just before speech was detected, so a turn's first syllable isn't cut off. */
@@ -211,6 +227,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const playerAnalyser = useRef<AnalyserNode | null>(null)
   /** The caller's microphone: voice detection and the waveform while listening. */
   const micAnalyser = useRef<AnalyserNode | null>(null)
+  /** Voice or noise? (speech-detector.ts). Null until loaded, or if this browser can't run it. */
+  const detector = useRef<SpeechDetector | null>(null)
   const stream = useRef<MediaStream | null>(null)
   /** Fallback when the browser has no AudioWorklet: records from the moment speech is detected. */
   const recorder = useRef<MediaRecorder | null>(null)
@@ -232,7 +250,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const turnsRef = useRef<Turn[]>([])
   /** Groups this call's turns into one conversation in the agent's history; a cleared conversation starts a new one. */
   const conversationId = useRef<string>(crypto.randomUUID())
-  const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, ducked: false, duckTicks: 0, suspectAt: 0, played: [] as number[], suspectRatio: 0 })
+  const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [] as number[], suspectRatio: 0, suspectVoiced: false, voiceHeard: false, heldAt: 0 })
 
   const setPhaseBoth = (p: Phase) => { phaseRef.current = p; setPhase(p) }
   useEffect(() => { turnsRef.current = turns }, [turns])
@@ -345,25 +363,62 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
 
   // ---- agent speech: streamed PCM scheduled back to back through the player chain (compressor →
   // volume → analyser), so playback starts with the first chunk of each sentence.
-  const sources = useRef<AudioBufferSourceNode[]>([])
-  /** AudioContext time the last scheduled audio ends. */
+  /** What is scheduled to play, each buffer with the AudioContext time it starts. */
+  const sources = useRef<Array<{ node: AudioBufferSourceNode; buffer: AudioBuffer; startAt: number }>>([])
+  /** AudioContext time the last scheduled audio ends (on the timeline as if never paused). */
   const playEnd = useRef(0)
-  const isPlaying = () => Boolean(ctx.current && ctx.current.currentTime < playEnd.current)
-  const schedule = (buffer: AudioBuffer): number => {
-    const context = audioContext()
-    const node = context.createBufferSource()
+  /** Paused while checking whether the caller is talking over it: when, and what was left to play. */
+  const paused = useRef<{ at: number; queue: Array<{ buffer: AudioBuffer; startAt: number; offset: number }> } | null>(null)
+  const isPlaying = () => Boolean(paused.current) || Boolean(ctx.current && ctx.current.currentTime < playEnd.current)
+  const startSource = (buffer: AudioBuffer, startAt: number, offset = 0) => {
+    const node = audioContext().createBufferSource()
     node.buffer = buffer
     node.connect(playerInput.current ?? playerAnalyser.current!)
-    const startAt = Math.max(context.currentTime + (isPlaying() ? 0 : PLAYBACK_LEAD_S), playEnd.current)
-    node.start(startAt)
+    node.start(startAt + offset, offset)
+    const entry = { node, buffer, startAt }
+    sources.current.push(entry)
+    node.onended = () => { sources.current = sources.current.filter((s) => s !== entry) }
+  }
+  const schedule = (buffer: AudioBuffer): number => {
+    const context = audioContext()
+    const now = paused.current ? paused.current.at : context.currentTime
+    const startAt = Math.max(now + (isPlaying() ? 0 : PLAYBACK_LEAD_S), playEnd.current)
     playEnd.current = startAt + buffer.duration
-    sources.current.push(node)
-    node.onended = () => { sources.current = sources.current.filter((s) => s !== node) }
+    if (paused.current) paused.current.queue.push({ buffer, startAt, offset: 0 })
+    else startSource(buffer, startAt)
     return startAt
   }
-  const stopPlayback = () => {
-    for (const node of sources.current) { try { node.stop() } catch { /* not started */ } }
+  /** Stops the agent mid-word, keeping the rest to carry on from (resumePlayback). */
+  const pausePlayback = () => {
+    const context = ctx.current
+    if (paused.current || !context) return
+    const at = context.currentTime
+    const queue = sources.current
+      .filter((s) => s.startAt + s.buffer.duration > at)
+      .map((s) => ({ buffer: s.buffer, startAt: s.startAt, offset: Math.max(0, at - s.startAt) }))
+    for (const s of sources.current) { s.node.onended = null; try { s.node.stop() } catch { /* not started */ } }
     sources.current = []
+    paused.current = { at, queue }
+  }
+  /** Carries on from exactly where it paused; the words being typed out move with it. */
+  const resumePlayback = () => {
+    const p = paused.current
+    const context = ctx.current
+    if (!p || !context) return
+    paused.current = null
+    const delta = context.currentTime + 0.02 - p.at
+    for (const q of p.queue) startSource(q.buffer, q.startAt + delta, q.offset)
+    playEnd.current += delta
+    for (const span of live.current?.spans ?? []) {
+      if (span.start === null || span.end <= p.at) continue
+      span.start += delta
+      span.end += delta
+    }
+  }
+  const stopPlayback = () => {
+    for (const s of sources.current) { s.node.onended = null; try { s.node.stop() } catch { /* not started */ } }
+    sources.current = []
+    paused.current = null
     playEnd.current = 0
     player.current?.pause()
     player.current = null
@@ -397,6 +452,11 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   /** "Mm-hm." / "Okay." in the agent's voice, played when an answer is slow to start. */
   const fillers = useRef<AudioBuffer[]>([])
   const lastFiller = useRef(-1)
+  const fillerLastTurn = useRef(false)
+  /** The agent said goodbye (platform__end_call): hang up once it has finished speaking. */
+  const endAfterSpeech = useRef(false)
+  const endTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [endedByAgent, setEndedByAgent] = useState(false)
 
   /** The turn whose words are being typed out as they are said. */
   const live = useRef<{ turn: number; spans: Span[]; words: number; done: boolean; shown: number } | null>(null)
@@ -455,7 +515,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const reveal = () => {
     const l = live.current
     const context = ctx.current
-    if (!l || !context) return
+    if (!l || !context || paused.current) return
     const t = context.currentTime
     let shown = 0
     for (const span of l.spans) {
@@ -482,7 +542,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     }
     const last = l.spans[l.spans.length - 1]
     if (l.done && l.spans.every((s) => s.complete) && (!last || (last.start !== null && t >= last.end))) return settleLive(false)
-    if (shown !== l.shown) {
+    // Never backwards (a sentence resumed after a pause restarts its clock from where it was).
+    if (shown > l.shown) {
       l.shown = shown
       patchTurn(l.turn, { shown })
     }
@@ -500,6 +561,9 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   // ---- one utterance: start recording when speech begins, stop after a pause
   const beginUtterance = (interrupting = false) => {
     if (!stream.current) return
+    // Still talking after the goodbye ("oh, one more thing"): stay on the call.
+    endAfterSpeech.current = false
+    if (endTimer.current) { clearTimeout(endTimer.current); endTimer.current = null }
     interruptedTurn.current = interrupting
     // Talking again before the answer has finished arriving: the caller has moved on.
     cancelAnswer()
@@ -553,18 +617,23 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     }
   }
 
-  /** Turns the agent's voice down while checking whether the caller is talking over it. */
-  const duck = (down: boolean) => {
-    vad.current.ducked = down
-    vad.current.duckTicks = 0
-    const gain = playerGain.current
-    if (gain && ctx.current) gain.gain.setTargetAtTime(down ? volumeRef.current * DUCK_LEVEL : volumeRef.current, ctx.current.currentTime, 0.015)
+  /**
+   * Pauses the agent while checking whether the caller is talking over it, or lets it carry on.
+   */
+  const hold = (on: boolean) => {
+    vad.current.held = on
+    vad.current.holdTicks = 0
+    if (on) {
+      pausePlayback()
+    } else {
+      resumePlayback()
+    }
   }
 
   /** Speaking over the agent: stop it mid-sentence and listen. */
   const bargeIn = () => {
-    duck(false) // full volume again for the next answer
-    cancelAnswer()
+    vad.current.held = false
+    cancelAnswer() // drops what was paused too
     setTurns((prev) => {
       const next = [...prev]
       const last = next[next.length - 1]
@@ -572,6 +641,15 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       return next
     })
   }
+
+  /**
+   * Someone is speaking (not a noise in the room, nor the agent's own voice from the speakers):
+   * speech at least `minLevel` loud, heard since `since` (performance.now()). Without the
+   * detector (still loading, or an old browser) loudness alone decides, as before.
+   */
+  const heardVoice = (since = 0, minLevel = 0) => (detector.current ? detector.current.voice(since, minLevel) : true)
+  // Fetch the detector's model while the page is open, so it's ready when a call starts.
+  useEffect(() => { void loadSpeechModel() }, [])
 
   // ---- the detection loop: level against an adaptive noise floor
   const tick = () => {
@@ -581,6 +659,17 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     const playing = isPlaying()
     if (playing && (phaseRef.current === 'thinking' || phaseRef.current === 'starting' || phaseRef.current === 'listening')) setPhaseBoth('speaking')
     else if (!playing && answerDone.current && (phaseRef.current === 'speaking' || phaseRef.current === 'thinking' || phaseRef.current === 'starting')) setPhaseBoth('listening')
+    // Goodbye said and finished: hang up a moment later, unless the caller starts talking again.
+    if (endAfterSpeech.current && !playing && answerDone.current && phaseRef.current === 'listening' && !endTimer.current) {
+      endTimer.current = setTimeout(() => {
+        endTimer.current = null
+        if (!endAfterSpeech.current || phaseRef.current !== 'listening') return
+        const turnId = activeTurn.current
+        setTurns((prev) => prev.map((t) => (t.who === 'agent' && t.id === turnId ? { ...t, note: t.note ?? 'Ended the call' } : t)))
+        setEndedByAgent(true)
+        stopEverything()
+      }, END_CALL_AFTER_MS)
+    }
     const p = phaseRef.current
     if (mutedRef.current) {
       if (p === 'hearing') {
@@ -593,8 +682,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     }
     const rms = levelOf(analyser)
     const v = vad.current
-    // An answer that ended (or was replaced) while turned down plays the next one at full volume.
-    if (v.ducked && p !== 'speaking') duck(false)
+    // Nothing to hold any more (the answer was replaced, or the call moved on).
+    if (v.held && p !== 'speaking') hold(false)
 
     if (p === 'listening' || p === 'speaking' || p === 'thinking') {
       // What the agent is playing, held briefly because its echo reaches the mic a little later.
@@ -611,19 +700,30 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       // Learn the room's background level while it's quiet.
       if (p === 'listening' && v.playerLevel < 0.005 && rms < v.floor * 1.6) v.floor = Math.max(0.002, v.floor * 0.95 + rms * 0.05)
       const base = Math.max(MIN_SPEECH_LEVEL, v.floor * 3)
-      const speech = rms > Math.max(base, echo * SPEECH_OVER_ECHO)
+      const speechLevel = Math.max(base, echo * SPEECH_OVER_ECHO)
+      const speech = rms > speechLevel
 
-      if (p === 'speaking' && v.ducked) {
-        v.duckTicks++
-        if (v.duckTicks > DUCK_SETTLE_TICKS) v.loudTicks = speech ? v.loudTicks + 1 : 0
-        if (v.loudTicks >= CONFIRM_TICKS) {
+      if (p === 'speaking' && v.held) {
+        v.holdTicks++
+        // Loud enough to be the caller, and a voice (not a noise in the room) heard since the
+        // agent paused, once its own voice has dropped out of the microphone.
+        const settledAt = v.heldAt + HOLD_SETTLE_TICKS * TICK_MS
+        // Its voice has cleared the room: the detector starts afresh, hearing only the room.
+        if (v.holdTicks === HOLD_SETTLE_TICKS) detector.current?.reset()
+        if (v.holdTicks > HOLD_SETTLE_TICKS && speech) v.loudTicks++
+        if (v.holdTicks > HOLD_SETTLE_TICKS && heardVoice(settledAt, speechLevel)) v.voiceHeard = true
+        if (v.loudTicks >= CONFIRM_TICKS && v.voiceHeard) {
           v.loudTicks = 0
           bargeIn()
           beginUtterance(true)
-        } else if (v.duckTicks >= DUCK_MAX_TICKS) {
-          // It was the agent's own echo, louder than estimated: learn that, so it isn't mistaken again.
-          v.echoCoupling = Math.min(1, Math.max(v.echoCoupling, v.suspectRatio))
-          duck(false)
+        } else if (v.holdTicks >= HOLD_MAX_TICKS || (!v.voiceHeard && detector.current?.noVoice(settledAt))) {
+          // The agent's own echo, louder than estimated: learn that, so it isn't mistaken again.
+          // Only when what set it off sounded like a voice (the echo is one); a clatter or a
+          // rustle teaches nothing about the echo, and would make interrupting harder.
+          // Nor when a voice was heard while it was turned down (its echo is too quiet for that by
+          // then): that was the caller, just not loud enough.
+          if (v.suspectVoiced && !v.voiceHeard) v.echoCoupling = Math.min(1, Math.max(v.echoCoupling, v.suspectRatio))
+          hold(false)
           v.loudTicks = 0
         }
       } else if (p === 'speaking') {
@@ -631,16 +731,25 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         if (!suspect && v.playerLevel > 0.01) v.echoCoupling = Math.min(1, v.echoCoupling * 0.9 + (rms / v.playerLevel) * 0.1)
         // From the first time the caller seemed to talk, even if that check was dropped and retried.
         if (suspect && !v.loudTicks && Date.now() - v.suspectAt > BARGE_IN_PRE_ROLL_MS) v.suspectAt = Date.now()
-        if (suspect && !v.loudTicks) v.suspectRatio = 0
+        if (suspect && !v.loudTicks) { v.suspectRatio = 0; v.suspectVoiced = false }
         if (suspect && v.playerLevel > 0.01) v.suspectRatio = Math.max(v.suspectRatio, rms / v.playerLevel)
+        if (suspect && heardVoice(0, Math.max(base, echo * SUSPECT_OVER_ECHO))) v.suspectVoiced = true
         v.loudTicks = suspect ? v.loudTicks + 1 : 0
-        if (v.loudTicks >= DUCK_TICKS) {
+        if (v.loudTicks >= HOLD_TICKS) {
+          // A voice still has to be heard while it's paused (see above), so a noise only pauses it.
           v.loudTicks = 0
-          duck(true)
+          v.voiceHeard = false
+          v.heldAt = performance.now()
+          // No echo to expect while paused: the last 200 ms at full volume made a short first
+          // word ("Sorry, …") too quiet to count, so it took the next one.
+          v.played = []
+          hold(true)
         }
       } else {
+        // A turn starts on a voice: loud for START_TICKS and the detector hearing speech. A noise
+        // (a container, cutlery, a bag) doesn't; the pre-roll keeps the first syllable.
         v.loudTicks = speech ? v.loudTicks + 1 : 0
-        if (v.loudTicks >= START_TICKS) {
+        if (v.loudTicks >= START_TICKS && heardVoice(0, speechLevel)) {
           v.loudTicks = 0
           beginUtterance()
         }
@@ -670,8 +779,11 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     const turn = ++activeTurn.current
     answerDone.current = false
     // If the answer is slow to start, acknowledge, the way a person says "mm-hm" on a call.
+    const fillerAllowed = !fillerLastTurn.current
+    fillerLastTurn.current = false
     setTimeout(() => {
-      if (turn !== activeTurn.current || isPlaying() || live.current?.spans.some((s) => s.start !== null) || phaseRef.current !== 'thinking' || !fillers.current.length) return
+      if (!fillerAllowed || turn !== activeTurn.current || isPlaying() || live.current?.spans.some((s) => s.start !== null) || phaseRef.current !== 'thinking' || !fillers.current.length) return
+      fillerLastTurn.current = true
       let pick = Math.floor(Math.random() * fillers.current.length)
       if (pick === lastFiller.current) pick = (pick + 1) % fillers.current.length
       lastFiller.current = pick
@@ -713,7 +825,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
           const line = pending.slice(0, newline).trim()
           pending = pending.slice(newline + 1)
           if (!line) continue
-          const event = JSON.parse(line) as { type: string; transcript?: string; runId?: string | null; rate?: number; text?: string; data?: string; ttsError?: string; status?: string } & Partial<WordTimes>
+          const event = JSON.parse(line) as { type: string; transcript?: string; runId?: string | null; rate?: number; text?: string; data?: string; ttsError?: string; status?: string; endCall?: boolean } & Partial<WordTimes>
           if (event.type === 'heard') {
             if (event.rate) rate.current = event.rate
             // A turn already talked over (the caller started again) is shown, not typed out.
@@ -735,6 +847,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
             if (event.ttsError) update((t) => ({ ...t, note: `Speech unavailable: ${event.ttsError}` }))
           } else if (event.type === 'done') {
             update((t) => ({ ...t, status: event.status, runId: event.runId ?? t.runId, text: t.text || '(no answer)' }))
+            if (event.endCall && turn === activeTurn.current) endAfterSpeech.current = true
           }
         }
       }
@@ -751,6 +864,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   // ---- call control
   const startCall = async () => {
     setError(null)
+    setEndedByAgent(false)
     audioContext() // created inside the click, so the browser lets it play sound
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setError('This browser cannot record audio. Try a current Chrome, Edge, Firefox or Safari.')
@@ -779,7 +893,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       micAnalyser.current.fftSize = 1024
       micAnalyser.current.smoothingTimeConstant = 0.6
       speechBand.connect(micAnalyser.current) // detection only; never to the speakers
-      vad.current = { floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, ducked: false, duckTicks: 0, suspectAt: 0, played: [], suspectRatio: 0 }
+      vad.current = { floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [], suspectRatio: 0, suspectVoiced: false, voiceHeard: false, heldAt: 0 }
       try {
         if (!workletLoaded.current) {
           const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'application/javascript' }))
@@ -790,6 +904,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         const node = new AudioWorkletNode(context, 'voice-capture')
         const keepBlocks = Math.ceil(((BARGE_IN_PRE_ROLL_MS / 1000) * context.sampleRate) / 2048)
         node.port.onmessage = (e: MessageEvent<Float32Array>) => {
+          detector.current?.push(e.data, context.sampleRate)
           if (captured.current) {
             captured.current.push(e.data)
           } else {
@@ -803,6 +918,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         silent.gain.value = 0
         node.connect(silent).connect(context.destination)
         capture.current = { node, rate: context.sampleRate }
+        // Fed by the capture above, so only with it. Doesn't hold up the call while it loads.
+        void SpeechDetector.create().then((d) => { if (capture.current?.node === node) detector.current = d })
       } catch {
         capture.current = null // older browser: MediaRecorder from the moment speech is detected
       }
@@ -832,6 +949,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   }
 
   const stopEverything = () => {
+    endAfterSpeech.current = false
+    if (endTimer.current) { clearTimeout(endTimer.current); endTimer.current = null }
     inCallRef.current = false
     setInCall(false)
     if (vadTimer.current) clearInterval(vadTimer.current)
@@ -840,6 +959,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     recorder.current = null
     capture.current?.node.disconnect()
     capture.current = null
+    detector.current = null
     captured.current = null
     preRoll.current = []
     stream.current?.getTracks().forEach((t) => t.stop())
@@ -882,6 +1002,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       : phase === 'hearing' ? 'You’re speaking…'
       : phase === 'thinking' ? `${first} is thinking…`
       : phase === 'speaking' ? `${first} is speaking. Talk to interrupt.`
+      : endedByAgent ? `${first} ended the call. Call again any time.`
       : `Call ${first}: talk naturally, no buttons. A headset works best.`
 
   return (

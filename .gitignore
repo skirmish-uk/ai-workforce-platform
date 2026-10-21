@@ -50,3 +50,6 @@ ai-workforce-platform-demo.tar.gz
 /graft/
 
 backups/
+
+# ONNX Runtime files copied from node_modules by apps/web/scripts/copy-vad-runtime.mjs
+apps/web/public/vad/ort*

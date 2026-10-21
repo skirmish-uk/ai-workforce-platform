@@ -28,7 +28,8 @@ FROM deps AS build
 COPY . .
 RUN npx prisma generate --schema packages/db/prisma/schema.prisma
 # No database or secrets at build time; NEXTAUTH_URL etc. are read at runtime.
-RUN cd apps/web && npx next build
+# The voice detector's WebAssembly runtime is served from public/vad/ (apps/web/scripts/copy-vad-runtime.mjs).
+RUN cd apps/web && node scripts/copy-vad-runtime.mjs && npx next build
 
 FROM base AS runtime
 ENV NODE_ENV=production

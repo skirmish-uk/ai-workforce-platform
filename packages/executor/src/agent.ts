@@ -189,6 +189,8 @@ export interface RunAgentResult {
   qualitySignals: QualitySignal[]
   approvalId?: string
   pendingTool?: { toolName: string; input: unknown }
+  /** Voice: the agent ended the call (platform__end_call) after saying goodbye. */
+  endCall?: boolean
   error?: string
 }
 
@@ -218,6 +220,34 @@ const ESCALATE_TOOL: LLMTool = {
     required: ['reason'],
   },
 }
+
+/**
+ * Voice calls only: ends the call once the caller is done. The goodbye is the text written with
+ * the call, spoken before the page hangs up (about a second after it finishes).
+ */
+const END_CALL_TOOL: LLMTool = {
+  name: 'platform__end_call',
+  description:
+    'End the phone call. Only once the caller has said they have everything they need, or said goodbye, and nothing they asked is still open. Write a short, warm goodbye in the same reply; the call ends after it is spoken. Ends the run.',
+  inputSchema: { type: 'object', properties: {}, required: [] },
+}
+
+/**
+ * How to talk on a call (every voice turn, after the agent's own instructions). Written after
+ * listening to Ava's first calls on 21 Oct: every answer ended with "Would you like more detail
+ * on…?", repeated "in Australian dollars, excluding GST" each time, and a plain "No." got a
+ * three-sentence recap. Stable text, so it is cached with the rest of the prompt.
+ */
+export const VOICE_STYLE = `## On a live call
+You're talking with someone on the phone, not writing to them. Sound like a friendly, switched-on member of staff who knows the business well.
+- Answer what they asked straight away, in plain spoken English with contractions. Usually one to three short sentences; say more only when they ask for detail, and then give the detail rather than a summary.
+- Don't end every reply with a question or an offer. Most of the time just answer and stop; they'll ask if they want more. When a follow-up question genuinely helps, keep it short and vary how you put it.
+- Don't repeat what you've already said on this call (prices, "excluding GST", who you work with) unless they ask again.
+- React to what they say when it's natural ("Oh, a startup, nice.", "Got it.", "Sure."), and don't start replies the same way each time. Don't greet them again.
+- If they ask you to repeat something, say it again more simply, not word for word. If they ask for more detail than you have, say so plainly and offer to pass it to the team.
+- Short replies like "no", "okay" or "that's fine" just need a short reply. Don't recap.
+- Say numbers, prices and times the way people say them aloud. No lists, headings, symbols or links.
+- Wrapping up: when their questions seem dealt with (they say thanks, "that's great", "that's all"), you can check once, lightly, whether there's anything else. Once they say they're done or say goodbye, say a short, warm goodbye in one sentence and call ${END_CALL_TOOL.name}. Don't ask "anything else?" again after they've said no.`
 
 interface Specialist {
   id: string
@@ -353,6 +383,7 @@ class AgentRun {
   private stage?: AutonomyStage
   private budgetUsd = Infinity
   private finished?: RunAgentResult
+  private endCall = false
 
   constructor(
     private readonly agent: Agent & { tenant: { settings: unknown } },
@@ -553,6 +584,7 @@ class AgentRun {
         ...workforceTools.map((t) => `${t.name} — platform self-management tool`),
         'platform__request_clarification — ask for missing information (ends the run)',
         'platform__escalate — hand off to a human (ends the run)',
+        ...(this.trigger === 'voice' ? [`${END_CALL_TOOL.name} — end the phone call after saying goodbye (ends the run)`] : []),
       ],
     })
     this.contextWarnings = context.warnings
@@ -565,6 +597,7 @@ class AgentRun {
       ...toolRegistry.toLLMTools(Array.from(registered.values())),
       CLARIFY_TOOL,
       ESCALATE_TOOL,
+      ...(this.trigger === 'voice' ? [END_CALL_TOOL] : []),
       ...(specialists.size ? [delegateTool(Array.from(specialists.values()))] : []),
       ...workforceTools,
     ]
@@ -574,7 +607,12 @@ class AgentRun {
     this.note(
       `plan: tools=[${Array.from(registered.keys()).join(', ')}] dod=[${checks}] limits={iterations:${this.maxIterations()},toolCalls:${limits.maxToolCalls},wallClockMs:${limits.maxWallClockMs}}`
     )
-    return { registered, llmTools, systemPrompt: context.systemPrompt, systemBlocks: context.systemBlocks, specialists, workforce: new Set(workforceTools.map((t) => t.name)) }
+    // Voice turns: how to talk on a call, cached just before the per-request block (time of day).
+    const systemBlocks = this.trigger === 'voice'
+      ? [...context.systemBlocks.slice(0, -1), { text: VOICE_STYLE, cache: true }, ...context.systemBlocks.slice(-1)]
+      : context.systemBlocks
+    const systemPrompt = this.trigger === 'voice' ? systemBlocks.map((b) => b.text).join('\n\n') : context.systemPrompt
+    return { registered, llmTools, systemPrompt, systemBlocks, specialists, workforce: new Set(workforceTools.map((t) => t.name)) }
   }
 
   private maxIterations(): number {
@@ -675,6 +713,11 @@ class AgentRun {
             clarificationQuestions: questions.length ? questions : ['The agent needs more information to continue.'],
             output: response.content,
           })
+        }
+        if (call.name === END_CALL_TOOL.name && this.trigger === 'voice') {
+          // The goodbye is this reply's text; checked like any answer.
+          this.endCall = true
+          return this.assess(response.content?.trim() ? response.content : 'Thanks for calling. Have a great day!')
         }
         if (call.name === ESCALATE_TOOL.name) {
           const reason = typeof call.input.reason === 'string' && call.input.reason.trim() ? call.input.reason : 'Agent requested human help'
@@ -990,6 +1033,7 @@ class AgentRun {
       reasoning: this.reasoning,
       approvalId: extra.approvalId,
       pendingTool: extra.pendingTool,
+      endCall: this.endCall || undefined,
       error: extra.error ? redactString(extra.error, 1000) : undefined,
     }
     this.finished = result
@@ -1020,6 +1064,7 @@ class AgentRun {
         approvalId: result.approvalId,
         clarificationQuestions: result.clarificationQuestions,
         escalation: result.escalation,
+        endCall: result.endCall,
         childRuns: this.childRuns,
         contextWarnings: this.contextWarnings,
         injectionSignals: this.injectionSignals,

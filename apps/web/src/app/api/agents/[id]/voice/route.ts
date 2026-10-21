@@ -5,9 +5,10 @@ import { prisma } from '@ai-workforce/db'
 import { safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
 import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
-import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, notEnglishSpeech, soundsLikeEcho, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
+import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, SPEECH_PCM_RATE, hedged, notEnglishSpeech, soundsLikeEcho, streamSpeech, transcribeAudio } from '@ai-workforce/llm'
 import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
 import { callVocabulary, loadAgent } from './shared'
+import { cachedSpeech } from './speech-cache'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -54,13 +55,15 @@ function recordTurn(agent: { id: string; tenantId: string }, userId: string, dat
     .catch((error) => console.error('Failed to record voice turn:', safeErrorMessage(error)))
 }
 
-async function speak(text: string, voice: ReturnType<typeof readVoiceConfig>['voice']) {
+type Voice = ReturnType<typeof readVoiceConfig>['voice']
+
+/** A fixed line, spoken whole (from the cache after the first time). The text still shows when speech fails. */
+async function speakLine(text: string, voice: Voice) {
   try {
-    const speech = await synthesizeSpeech(text, { voice: voice.voiceId, provider: voice.provider })
-    return { audio: speech.audio.toString('base64'), mimeType: speech.mimeType, ttsModel: speech.model, characters: speech.characters }
+    const { pcm, words, characters } = await cachedSpeech(text, { voiceId: voice.voiceId, provider: voice.provider })
+    return { speech: { pcm, words }, characters }
   } catch (error) {
-    // The text answer is still useful when speech fails; the page shows it and says why.
-    return { audio: null, mimeType: null, ttsError: safeErrorMessage(error), characters: 0 }
+    return { speech: null, ttsError: safeErrorMessage(error), characters: 0 }
   }
 }
 
@@ -68,8 +71,15 @@ async function speak(text: string, voice: ReturnType<typeof readVoiceConfig>['vo
 const FILLERS = ['Mm-hm.', 'Okay.', 'Right.', 'Sure.']
 
 /**
+ * A second transcription request when the first hasn't answered by then (see hedged()):
+ * the usual 0.55–1 s answer is untouched, the occasional 2 s one is cut to about 1.6 s.
+ */
+const TRANSCRIBE_HEDGE_MS = 1000
+
+/**
  * GET /api/agents/[id]/voice — whether voice is on, the spoken greeting (text + audio), and the
- * agent's acknowledgement clips ("Mm-hm.", "Okay."…) in its own voice, made once per call.
+ * agent's acknowledgement clips ("Mm-hm.", "Okay."…) in its own voice. Audio is raw PCM at
+ * `rate` (base64), cached after the first call (speech-cache.ts).
  */
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions)
@@ -78,11 +88,13 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   const loaded = await loadAgent(id, session)
   if (loaded.error) return loaded.error
   const greeting = loaded.voice.greeting ?? defaultGreeting(loaded.agent.name)
-  const [spoken, ...fillers] = await Promise.all([speak(greeting, loaded.voice), ...FILLERS.map((f) => speak(f, loaded.voice))])
+  const [spoken, ...fillers] = await Promise.all([speakLine(greeting, loaded.voice), ...FILLERS.map((f) => speakLine(f, loaded.voice))])
   return NextResponse.json({
     greeting,
-    ...spoken,
-    fillers: fillers.filter((f) => f.audio).map((f) => ({ audio: f.audio, mimeType: f.mimeType })),
+    rate: SPEECH_PCM_RATE,
+    speech: spoken.speech,
+    ttsError: spoken.ttsError,
+    fillers: fillers.flatMap((f) => (f.speech ? [{ pcm: f.speech.pcm }] : [])),
   })
 }
 
@@ -123,7 +135,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // A names-only hint (never what the agent said: on noise that came back as the transcript).
       const tenant = await prisma.tenant.findUnique({ where: { id: agent.tenantId }, select: { name: true } })
       const vocabulary = callVocabulary(agent.name, tenant?.name, voice.vocabulary, form.get('history'))
-      const heard = await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en', vocabulary, provider: voice.sttProvider })
+      const heard = await hedged(
+        () => transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en', vocabulary, provider: voice.sttProvider }),
+        TRANSCRIBE_HEDGE_MS,
+        () => { timings.transcribeHedged = 1 }
+      )
       transcript = heard.text
       confidence = heard.confidence
       hintRetried = heard.hintRetried ?? false
@@ -140,7 +156,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (ignored) {
       timings.totalMs = Date.now() - started
       recordTurn(agent, session.user.id, { runId: null, status: 'no_speech', ignored, transcript, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: 0, timings })
-      return NextResponse.json({ transcript, confidence, reply: '', status: 'no_speech', ignored, runId: null, timings, audio: null, mimeType: null })
+      return NextResponse.json({ transcript, confidence, reply: '', status: 'no_speech', ignored, runId: null, timings, speech: null })
     }
 
     // Nothing usable was heard: answer at once, without running the agent.
@@ -149,10 +165,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // Garbled audio comes back as confident-looking words in a random language; don't act on it.
       const reply = transcript ? 'Sorry, I didn’t catch that clearly. Could you say it again, a little closer to the microphone?' : 'Sorry, I didn’t catch that. Could you say it again?'
       // The browser drops a turn with no speech, so don't spend time or money speaking it.
-      const speech = status === 'no_speech' ? { audio: null, mimeType: null, characters: 0 } : await speak(reply, voice)
+      const spoken = status === 'no_speech' ? { speech: null, characters: 0 } : await speakLine(reply, voice)
       timings.totalMs = Date.now() - started
-      recordTurn(agent, session.user.id, { runId: null, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: speech.characters, timings })
-      return NextResponse.json({ transcript, confidence, reply, status, runId: null, timings, ...speech })
+      recordTurn(agent, session.user.id, { runId: null, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: spoken.characters, timings })
+      return NextResponse.json({ transcript, confidence, reply, status, runId: null, timings, rate: SPEECH_PCM_RATE, ...spoken })
     }
 
     // Streamed answer (NDJSON): what was heard, then each sentence's audio as soon as it's
@@ -170,8 +186,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     const body = new ReadableStream<Uint8Array>({
       async start(controller) {
-        const send = (event: Record<string, unknown>) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`))
-        send({ type: 'heard', transcript, confidence, runId })
+        let closed = false
+        const send = (event: Record<string, unknown>) => {
+          if (closed) return
+          try { controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`)) } catch { closed = true /* the caller hung up */ }
+        }
+        send({ type: 'heard', transcript, confidence, runId, rate: SPEECH_PCM_RATE })
 
         let spokenText = ''
         let seq = 0
@@ -179,20 +199,60 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         let ttsModel: string | null = null
         let ttsError: string | null = null
         let ordered: Promise<void> = Promise.resolve()
-        const say = (sentence: string) => {
+        /**
+         * Speaks one sentence: say → pcm… (+ words, when each is spoken) → said. Every sentence
+         * starts synthesising at once, but they are sent in order, each one's audio streamed
+         * as it arrives, so playback starts ~0.1 s after the sentence instead of ~0.6 s.
+         * Fixed lines (`fixed`) come whole from the cache.
+         */
+        const say = (sentence: string, fixed = false) => {
           const text = sentence.trim()
           // Spoken before the run's result checks: never say a phrase the agent's checks forbid.
           if (!text || forbidden.some((f) => text.toLowerCase().includes(f))) return
           spokenText = spokenText ? `${spokenText} ${text}` : text
           const n = seq++
-          const pending = speak(text, voice) // starts now; sentences are synthesised in parallel
+          const buffered: Record<string, unknown>[] = []
+          let finished = false
+          let error: string | undefined
+          const waiting: { wake: (() => void) | null } = { wake: null }
+          const push = (event: Record<string, unknown>) => { buffered.push(event); waiting.wake?.() }
+          void (async () => {
+            try {
+              if (fixed) {
+                const line = await cachedSpeech(text, { voiceId: voice.voiceId, provider: voice.provider })
+                characters += line.characters
+                push({ type: 'pcm', seq: n, data: line.pcm })
+                if (line.words) push({ type: 'words', seq: n, ...line.words })
+                return
+              }
+              const stream = streamSpeech(text, { voice: voice.voiceId, provider: voice.provider })
+              characters += stream.characters
+              ttsModel = stream.model
+              for await (const event of stream.events) {
+                if (event.type === 'pcm') push({ type: 'pcm', seq: n, data: event.data.toString('base64') })
+                else push({ type: 'words', seq: n, words: event.words, start: event.start, end: event.end })
+              }
+            } catch (e) {
+              // The text answer is still useful when speech fails; the page shows it and says why.
+              error = safeErrorMessage(e)
+              ttsError = error
+            } finally {
+              finished = true
+              waiting.wake?.()
+            }
+          })()
           ordered = ordered.then(async () => {
-            const speech = await pending
-            characters += speech.characters
-            ttsModel = speech.ttsModel ?? ttsModel
-            ttsError = speech.ttsError ?? ttsError
-            if (timings.firstAudioMs === undefined && speech.audio) timings.firstAudioMs = Date.now() - started
-            send({ type: 'audio', seq: n, text, audio: speech.audio, mimeType: speech.mimeType, ttsError: speech.ttsError })
+            send({ type: 'say', seq: n, text })
+            for (;;) {
+              for (const event of buffered.splice(0)) {
+                if (timings.firstAudioMs === undefined && event.type === 'pcm') timings.firstAudioMs = Date.now() - started
+                send(event)
+              }
+              if (finished) break
+              await new Promise<void>((resolve) => { waiting.wake = resolve })
+              waiting.wake = null
+            }
+            send({ type: 'said', seq: n, ttsError: error })
           })
         }
 
@@ -267,8 +327,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
         // What still needs saying: the full answer if nothing streamed (e.g. a provider without
         // streaming), or how the turn ended when it wasn't a plain answer.
-        if (status === 'timeout') say('That’s taking longer than usual. I’ve noted your question and the team will follow up.')
-        else if (!result || status === 'failed') say(spokenReply({ status: 'failed', output: null }))
+        if (status === 'timeout') say('That’s taking longer than usual. I’ve noted your question and the team will follow up.', true)
+        else if (!result || status === 'failed') say(spokenReply({ status: 'failed', output: null }), true)
         else if (status === 'completed' || status === 'partial') { if (!spokenText) say(spokenReply(result)) }
         else say(spokenReply(result))
 
@@ -277,7 +337,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         timings.totalMs = Date.now() - started
         send({ type: 'done', status, runId, reply: spokenText, timings })
         recordTurn(agent, session.user.id, { runId, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: characters, ttsModel, ttsError, timings })
-        controller.close()
+        if (!closed) controller.close()
       },
     })
     return new Response(body, {

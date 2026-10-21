@@ -428,6 +428,9 @@ function ConversationView({ conversation, agentId, agentName, openRun, onToggleR
   )
 }
 
+/** How often the conversation list checks for new conversations while the page is visible. */
+const CONVERSATIONS_REFRESH_MS = 10_000
+
 export default function AgentPage() {
   const { id } = useParams<{ id: string }>()
   const [agent, setAgent] = useState<AgentDetail | null>(null)
@@ -470,11 +473,16 @@ export default function AgentPage() {
   }
 
   /** Loads the conversation list; `select` picks a conversation by id, or the one holding a run id. */
+  const lastList = useRef('')
   const loadConversations = useCallback(async (select?: { runId?: string; conversationId?: string }) => {
     const res = await fetch(`/api/agents/${id}/runs?view=conversations&limit=25`)
     if (!res.ok) return
     const body = await res.json()
     let rows: Conversation[] = body.data ?? []
+    // A background refresh that found nothing new changes nothing on screen.
+    const fingerprint = JSON.stringify(rows)
+    if (!select && fingerprint === lastList.current) return
+    lastList.current = fingerprint
     let runId = select?.runId
     // A run asked for by id (a link, or "See how it answered") may be older than the list.
     // One someone removed from the list stays out of it, even when the address still names it.
@@ -523,6 +531,14 @@ export default function AgentPage() {
     loadConversations(fromUrl ? { runId: fromUrl } : undefined)
     return () => { if (pollRef.current) clearTimeout(pollRef.current) }
   }, [id, loadConversations])
+
+  // The list keeps itself current (calls, scheduled runs, other tabs) while the page is in view.
+  useEffect(() => {
+    const refresh = () => { if (document.visibilityState === 'visible') void loadConversations() }
+    const timer = setInterval(refresh, CONVERSATIONS_REFRESH_MS)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', refresh) }
+  }, [loadConversations])
 
   const poll = useCallback((jobId: string, conversationId: string, message: string) => {
     pollRef.current = setTimeout(async () => {
@@ -606,7 +622,7 @@ export default function AgentPage() {
       </header>
 
       {/* Voice agents: the conversation sits at the top, so replies never need scrolling to. */}
-      {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} onShowRun={showRun} />}
+      {agent?.config?.voice?.enabled && <VoicePanel agentId={id} agentName={agent.name} onShowRun={showRun} onTurnDone={() => void loadConversations()} />}
       {agent?.config?.voice?.enabled && <VoiceClone agentId={id} agentName={agent.name} />}
 
       {agent && (

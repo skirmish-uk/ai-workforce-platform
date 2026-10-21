@@ -23,14 +23,16 @@ POST /api/agents/{id}/voice   (multipart "audio", ≤10 MB; "history": the call 
                            attached documents.
   4. spoken reply          spokenReply(): the answer; or "passed to the team" for approvals and
                            escalations. It never says a gated action was done.
-  5. text-to-speech        OpenAI gpt-4o-mini-tts (default) or Cartesia Sonic
+  5. text-to-speech        OpenAI gpt-4o-mini-tts (default) or Cartesia Sonic, streamed as
+                           24 kHz 16-bit PCM (streamSpeech); Cartesia also says when each word is spoken
   6. VOICE_TURN audit row  audio bytes, characters spoken, models, duration: the usage data
                            per-minute pricing will be based on
   ▼
-JSON { transcript, reply, status, runId, audio (base64 mp3) } → played in the browser
+NDJSON stream: heard → per sentence: say → pcm… (+ words) → said → done
+  → scheduled back to back with Web Audio; the words type out as they are said
 ```
 
-`GET /api/agents/{id}/voice` returns the greeting (text and audio) to start a conversation.
+`GET /api/agents/{id}/voice` returns the greeting (text and audio) and the acknowledgement clips to start a conversation. A turn with nothing usable heard is answered with plain JSON (`speech: { pcm, words }`) instead of a stream.
 
 **Garbled audio protection (2026-10-13).** Transcripts now carry a confidence score (mean token probability, `include: ['logprobs']`). Below `MIN_TRANSCRIPT_CONFIDENCE` (0.5) the turn is answered "Sorry, I didn't catch that clearly" and is **not** sent to the agent (status `unclear`). Calibration with real calls: clear speech 0.97–0.99, heavily distorted but correct 0.82, unintelligible audio that came back as foreign-sounding gibberish 0.23; silence and noise come back empty. A transcription prompt quoting what the agent last said is deliberately not used: on silence it made the model invent whole sentences at high confidence.
 
@@ -67,6 +69,15 @@ JSON { transcript, reply, status, runId, audio (base64 mp3) } → played in the 
   - an acknowledgement in the agent's voice ("Mm-hm.", "Okay.") plays if nothing has started 0.6 s after the caller stops.
 
   Measured on the live site, the first answer audio arrives 2.3–3.9 s after upload (one outlier at 6 s). What remains is speech-to-text (0.55–2 s) and the model's first words (1.2–5 s), both outside our control. Every turn's breakdown is returned as `timings` and kept on its `VOICE_TURN` row. Sub-second, phone-grade turn-taking needs streaming speech recognition and synthesis end to end (§5).
+
+- **Streamed speech and words typed as they're said (21 Oct).** Where the time went, from 21 VOICE_TURN rows and their runs on the live site: speech-to-text 0.55–2.3 s; the run's own work before the model about 20 ms; the model's first words 1.3–1.8 s; and 0.4–0.7 s between the first words and the first audio. Changes:
+  - **Speech streams.** Each sentence goes to Cartesia's `/tts/sse` (or OpenAI with `response_format: "pcm"`) and its audio is forwarded to the browser chunk by chunk (`say` → `pcm`… → `said`). Measured from here: first audio 0.10–0.18 s after the request, against 0.5–0.7 s for a whole sentence. The browser schedules the chunks back to back with Web Audio (60 ms lead before a sentence starts), through the same compressor, volume and waveform as before.
+  - **Words in step with the voice.** Cartesia returns when each word is spoken (`add_timestamps`), so the agent's bubble types each word out as it is said. A word count that differs from the text ("$7,500" spoken as four words) is spread evenly; OpenAI voices and missing timings are paced by length. When the caller talks over the agent, the bubble keeps the words that were said and shows the rest dimmed ("Not said"). "Play again" replays the turn's audio.
+  - **A slow transcription is asked twice.** About one turn in five took 1.7–2.3 s to transcribe for no reason in the audio. If the first request hasn't answered after 1 s, the same request goes again and the first answer wins (`hedged()`, `VOICE_TURN.timings.transcribeHedged`). That costs one extra transcription on those turns (about $0.0002).
+  - **Whole documents on calls, cached.** Voice turns skip search and use the agent's attached documents, but each was cut to its first 1,500 characters, so Ava only saw a third of the packages guide on calls. They now get whole documents up to 16,000 characters in all, as their own cached prompt block (they only change when edited). Ava's voice turns read 5,219 of about 5,550 prompt tokens from cache, up from 2,937 of 4,900.
+  - **Fixed lines are cached.** The greeting, "Mm-hm."/"Okay."/"Right."/"Sure." and the fallback lines are the same on every call, so their audio is kept in Redis (`voice-tts:<sha256 of provider, model, voice, text>`, 30 days, renewed when used): about 50 KB per second of speech, around 0.5 MB per agent voice. Starting a call went from ~1.8 s to 70–185 ms locally after the first one. Answers are not cached: they depend on the call so far, live calendar availability and the time of day, and a word-for-word repeat of a spoken question is rare, so a cache would seldom hit and could give a stale or wrong answer when it did.
+  - Tested 21 Oct in headless Firefox with a scripted microphone (`Hi, what does the Growth package include?`): the greeting and the answer typed out word by word with the voice, first answer audio 2.0–2.5 s after upload locally, talking over the answer froze the text at the last word said, and the call appeared in the conversation list without a reload.
+  - **Known weakness.** Interrupting with a short word then a pause ("Sorry, — actually…") can take 2–3 s: the pause makes the first word look like echo, so the echo estimate is raised and the next words have to be louder. Fixes trade this against the agent's voice dipping repeatedly on laptop speakers, so it is left as it is until it can be tuned on a real microphone.
 
 ## 2. Turning voice on for an agent
 
@@ -139,7 +150,8 @@ This is scheduled after the first pilot (see the launch plan).
 
 | File | Role |
 |---|---|
-| `packages/llm/src/speech.ts` | `transcribeAudio`, `synthesizeSpeech`, `toSpeakableText`; OpenAI and Cartesia providers |
+| `packages/llm/src/speech.ts` | `transcribeAudio`, `hedged`, `streamSpeech` (PCM + word timings), `synthesizeSpeech`, `toSpeakableText`; OpenAI, Cartesia, Deepgram, Speechmatics |
+| `apps/web/src/app/api/agents/[id]/voice/speech-cache.ts` | Cached audio for fixed lines (greeting, acknowledgements) in Redis |
 | `packages/executor/src/voice.ts` | `voiceConfigSchema`, `readVoiceConfig`, `spokenReply`, `defaultGreeting` |
 | `packages/queue/src/queues.ts` | `waitForAgentRun()`: the route waits for the worker's result |
 | `apps/web/src/app/api/agents/[id]/voice/route.ts` | Greeting (GET) and voice turn (POST) |

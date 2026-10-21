@@ -395,6 +395,159 @@ export async function synthesizeSpeech(
   return { audio: Buffer.from(await response.arrayBuffer()), mimeType: 'audio/mpeg', provider, model: OPENAI_TTS_MODEL, voice, characters: speakable.length }
 }
 
+/**
+ * Runs a request and, if it hasn't answered within `afterMs`, the same request again; the
+ * first answer wins. Transcribing one utterance usually takes 0.55–1 s, but about one in five
+ * took 1.7–2.3 s (live, 21 Oct) for no reason in the audio: a second try cuts that tail.
+ * Fails only when every attempt has failed. `onHedge` says a second attempt was started.
+ */
+export function hedged<T>(run: () => Promise<T>, afterMs: number, onHedge?: () => void): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    let started = 0
+    let failures = 0
+    const attempt = () => {
+      started++
+      run().then(
+        (value) => { if (!settled) { settled = true; resolve(value) } },
+        (error) => { if (++failures === started && !settled) { settled = true; reject(error) } }
+      )
+    }
+    attempt()
+    setTimeout(() => { if (!settled) { onHedge?.(); attempt() } }, afterMs)
+  })
+}
+
+/** Streamed speech is raw 16-bit little-endian mono PCM at this rate (both providers' native streaming format). */
+export const SPEECH_PCM_RATE = 24_000
+
+export type SpeechStreamEvent =
+  | { type: 'pcm'; data: Buffer }
+  /** When each word is spoken, in seconds from the start of the clip (Cartesia only). */
+  | { type: 'words'; words: string[]; start: number[]; end: number[] }
+
+export interface SpeechStream {
+  provider: TtsProvider
+  model: string
+  voice: string
+  characters: number
+  /** Audio as it is generated (the first chunk ~0.1 s after the request, against ~0.6 s for a whole sentence). */
+  events: AsyncGenerator<SpeechStreamEvent>
+}
+
+/** Yields whole 16-bit samples: a network chunk can end halfway through one. */
+async function* wholeSamples(chunks: AsyncIterable<Buffer>): AsyncGenerator<Buffer> {
+  let carry: Buffer | null = null
+  for await (const chunk of chunks) {
+    const data: Buffer = carry ? Buffer.concat([carry, chunk]) : chunk
+    const even = data.length - (data.length % 2)
+    carry = even < data.length ? data.subarray(even) : null
+    if (even) yield data.subarray(0, even)
+  }
+}
+
+async function* bodyChunks(body: ReadableStream<Uint8Array> | null): AsyncGenerator<Buffer> {
+  if (!body) return
+  const reader = body.getReader()
+  try {
+    for (;;) {
+      const { value, done } = await reader.read()
+      if (done) return
+      if (value?.length) yield Buffer.from(value)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+/** Cartesia /tts/sse: `data: {json}` frames of type chunk (base64 audio), timestamps, done or error. */
+async function* cartesiaEvents(body: ReadableStream<Uint8Array> | null): AsyncGenerator<SpeechStreamEvent> {
+  const decoder = new TextDecoder()
+  let pending = ''
+  let carry: Buffer | null = null
+  for await (const chunk of bodyChunks(body)) {
+    pending += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, '\n')
+    let end: number
+    while ((end = pending.indexOf('\n\n')) >= 0) {
+      const frame = pending.slice(0, end)
+      pending = pending.slice(end + 2)
+      const data = frame.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('')
+      if (!data) continue
+      const event = JSON.parse(data) as { type?: string; data?: string; word_timestamps?: { words: string[]; start: number[]; end: number[] }; message?: string; title?: string }
+      if (event.type === 'chunk' && event.data) {
+        // Whole 16-bit samples only: keep a stray last byte for the next chunk.
+        const audio: Buffer = carry ? Buffer.concat([carry, Buffer.from(event.data, 'base64')]) : Buffer.from(event.data, 'base64')
+        const even = audio.length - (audio.length % 2)
+        carry = even < audio.length ? audio.subarray(even) : null
+        if (even) yield { type: 'pcm', data: audio.subarray(0, even) }
+      } else if (event.type === 'timestamps' && event.word_timestamps) {
+        yield { type: 'words', words: event.word_timestamps.words, start: event.word_timestamps.start, end: event.word_timestamps.end }
+      } else if (event.type === 'error') {
+        throw new Error(`Cartesia text-to-speech failed: ${event.message ?? event.title ?? 'stream error'}`)
+      } else if (event.type === 'done') {
+        return
+      }
+    }
+  }
+}
+
+/**
+ * Speaks text as a stream of PCM chunks (SPEECH_PCM_RATE), so playback can start as soon as
+ * the first ~0.1 s is generated. Cartesia also reports when each word is spoken, which the
+ * call page uses to show the words as they are said.
+ */
+export function streamSpeech(
+  text: string,
+  options: { voice?: string; provider?: TtsProvider; instructions?: string; signal?: AbortSignal } = {},
+  deps: SpeechDeps = {}
+): SpeechStream {
+  const env = deps.env ?? process.env
+  const speakable = toSpeakableText(text)
+  if (!speakable) throw new Error('Nothing to say')
+  const provider = options.provider ?? ttsProvider(env)
+
+  if (provider === 'cartesia') {
+    const apiKey = env.CARTESIA_API_KEY
+    if (!apiKey) throw new LLMConfigError('CARTESIA_API_KEY is not configured. Set it in .env or use SPEECH_TTS_PROVIDER=openai.')
+    const voice = options.voice ?? env.CARTESIA_VOICE_ID
+    if (!voice) throw new LLMConfigError('No Cartesia voice id: set the agent\'s voice.voiceId or CARTESIA_VOICE_ID.')
+    const events = (async function* () {
+      const response = await (deps.fetch ?? fetch)('https://api.cartesia.ai/tts/sse', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}`, 'Cartesia-Version': CARTESIA_API_VERSION, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model_id: CARTESIA_TTS_MODEL,
+          transcript: speakable,
+          voice: { id: voice },
+          language: 'en',
+          add_timestamps: true,
+          generation_config: { volume: CARTESIA_VOLUME },
+          output_format: { container: 'raw', encoding: 'pcm_s16le', sample_rate: SPEECH_PCM_RATE },
+        }),
+        signal: options.signal,
+      })
+      if (!response.ok) {
+        const detail = (await response.text().catch(() => '')).slice(0, 300)
+        throw new Error(`Cartesia text-to-speech failed (${response.status})${detail ? `: ${detail}` : ''}`)
+      }
+      yield* cartesiaEvents(response.body)
+    })()
+    return { provider, model: CARTESIA_TTS_MODEL, voice, characters: speakable.length, events }
+  }
+
+  const voice = options.voice ?? OPENAI_DEFAULT_VOICE
+  const client = openaiClient(deps)
+  const events = (async function* () {
+    // "pcm" is 24 kHz 16-bit little-endian mono, streamed as it is generated.
+    const response = await client.audio.speech.create(
+      { model: OPENAI_TTS_MODEL, voice, input: speakable, response_format: 'pcm', ...(options.instructions ? { instructions: options.instructions } : {}) },
+      { signal: options.signal }
+    )
+    for await (const data of wholeSamples(bodyChunks(response.body))) yield { type: 'pcm' as const, data }
+  })()
+  return { provider, model: OPENAI_TTS_MODEL, voice, characters: speakable.length, events }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Voice cloning (Cartesia instant clone). Used by the dashboard's "Use your own voice": the
 // caller must already hold the speaker's consent (Agent.config.voice.clonedVoice records it).

@@ -95,6 +95,12 @@ function isStale(updatedAt: Date, staleAfterDays: number | undefined, now = Date
 }
 
 /**
+ * Characters of attached documents given to a run that doesn't search (no query, e.g. voice
+ * turns, or no embeddings): about 4,000 tokens, read from the prompt cache after the first run.
+ */
+const ATTACHED_KNOWLEDGE_CHARS = 16_000
+
+/**
  * Prefers semantic search scoped to the current query (Phase 4 RAG); falls
  * back to the agent's highest-priority attached documents when there's no
  * query yet, or when OPENAI_API_KEY / embeddings aren't configured. Both paths
@@ -134,16 +140,24 @@ async function loadKnowledgeContext(
   const sources = await prisma.agentKnowledgeSource.findMany({
     where: { agentId, document: { tenantId } },
     include: { document: true },
-    orderBy: { priority: 'desc' },
+    orderBy: [{ priority: 'desc' }, { documentId: 'asc' }],
     take: limit,
   })
-  return sources.map((s) => ({
-    documentId: s.document.id,
-    title: s.document.title,
-    content: s.document.content.slice(0, 1500),
-    updatedAt: s.document.updatedAt.toISOString(),
-    stale: isStale(s.document.updatedAt, staleAfterDays),
-  }))
+  // Whole documents, highest priority first, until the budget runs out (it used to be the
+  // first 1,500 characters of each: on calls Ava only saw a third of the packages guide).
+  let budget = ATTACHED_KNOWLEDGE_CHARS
+  return sources.flatMap((s) => {
+    if (budget <= 0) return []
+    const content = s.document.content.slice(0, budget)
+    budget -= content.length
+    return [{
+      documentId: s.document.id,
+      title: s.document.title,
+      content,
+      updatedAt: s.document.updatedAt.toISOString(),
+      stale: isStale(s.document.updatedAt, staleAfterDays),
+    }]
+  })
 }
 
 function bullet(items: string[]): string {
@@ -233,19 +247,24 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
     agent.systemPrompt?.trim() ? `## Agent instructions\n${agent.systemPrompt.trim()}` : null,
     skills.length ? `## Playbooks\n${skills.map(formatSkillSection).join('\n\n')}` : null,
   ]
+  const knowledgeText = knowledgeBlocks.length
+    ? `## Reference knowledge\nRetrieved for this request. Cite the document title when you rely on it.\n\n${knowledgeBlocks.join('\n\n')}`
+    : null
+  // The agent's attached documents (no search) are the same on every run until they're edited:
+  // cached as their own block, so a voice turn reads ~4,900 prompt tokens from cache, not ~2,900.
+  const knowledgeIsFixed = knowledgeUsed.length > 0 && knowledgeUsed.every((k) => k.score === undefined)
   // Specific to this request (and fixed for the whole run, since context is built once per run).
   const perRequest = [
-    knowledgeBlocks.length
-      ? `## Reference knowledge\nRetrieved for this request. Cite the document title when you rely on it.\n\n${knowledgeBlocks.join('\n\n')}`
-      : null,
+    knowledgeIsFixed ? null : knowledgeText,
     `## Current date and time\n${clock.text}. Interpret relative dates ("tomorrow", "next week") from this.`,
   ]
   const stableText = stable.filter(Boolean).join('\n\n')
   const perRequestText = perRequest.filter(Boolean).join('\n\n')
+  const fixedKnowledge = knowledgeIsFixed && knowledgeText ? [{ text: knowledgeText, cache: true }] : []
 
   return {
-    systemPrompt: `${stableText}\n\n${perRequestText}`,
-    systemBlocks: [{ text: stableText, cache: true }, { text: perRequestText }],
+    systemPrompt: [stableText, ...fixedKnowledge.map((b) => b.text), perRequestText].join('\n\n'),
+    systemBlocks: [{ text: stableText, cache: true }, ...fixedKnowledge, { text: perRequestText }],
     skills,
     requiredTools,
     knowledgeUsed,

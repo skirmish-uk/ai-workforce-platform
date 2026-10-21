@@ -6,19 +6,17 @@ import { Loader2, Mic, MicOff, PhoneCall, PhoneOff, Play, Volume2 } from 'lucide
 import { WAV_RATE, encodeWav } from './voice-audio'
 import { ComparisonResults, TranscriberCompare, compareRecording, type Comparison } from './TranscriberCompare'
 
-interface Clip { audio: string; mimeType: string }
-
 interface Turn {
-  /** Agent turns of a streamed answer: which turn the incoming sentences belong to. */
+  /** Agent turns: which answer incoming sentences belong to (and its audio, for "Play again"). */
   id?: number
-  /** A streamed answer's sentences, in order ("Play again" plays them all). */
-  clips?: Clip[]
   who: 'you' | 'agent'
   text: string
+  /** Words of `text` said so far, while the agent is saying it (undefined: all of it). */
+  shown?: number
+  /** Stopped part-way (talked over, or the call ended): the words after `shown` were never said. */
+  cut?: boolean
   runId?: string | null
   status?: string
-  audio?: string | null
-  mimeType?: string | null
   /** Your own recording, kept in this tab only so you can hear what was sent. */
   recordingUrl?: string
   note?: string
@@ -27,6 +25,11 @@ interface Turn {
   comparing?: boolean
 }
 
+/** Word timings from the text-to-speech service: seconds from the start of the sentence. */
+interface WordTimes { words: string[]; start: number[]; end: number[] }
+/** A whole clip of speech: 16-bit PCM (base64) at the response's `rate`. */
+interface SpokenClip { pcm: string; words?: WordTimes }
+
 interface VoiceResponse {
   transcript?: string
   confidence?: number | null
@@ -34,10 +37,53 @@ interface VoiceResponse {
   greeting?: string
   status?: string
   runId?: string | null
-  audio?: string | null
-  mimeType?: string | null
+  rate?: number
+  speech?: SpokenClip | null
   ttsError?: string
   error?: string
+}
+
+/**
+ * One sentence of an answer being said, for typing its words out in step with the voice.
+ * `start`/`end` are AudioContext times of its scheduled audio.
+ */
+interface Span {
+  /** Index of its first word in the turn's text. */
+  from: number
+  count: number
+  chars: number
+  /** Where each word starts as a share of the sentence, by length (when there are no timings). */
+  share: number[]
+  /** When each word is spoken, from the service (seconds into the sentence). */
+  times: number[]
+  start: number | null
+  end: number
+  complete: boolean
+}
+
+const splitWords = (text: string) => text.split(/\s+/).filter(Boolean)
+
+/** Each word's starting point as a share of the sentence: by characters, with a pause after punctuation. */
+function wordShares(words: string[]): number[] {
+  const weights = words.map((w) => w.length + 1 + (/[,;:]$/.test(w) ? 3 : /[.!?…]$/.test(w) ? 5 : 0))
+  const total = weights.reduce((a, b) => a + b, 0) || 1
+  let at = 0
+  return weights.map((w) => { const share = at / total; at += w; return share })
+}
+
+/** Speech is roughly this many characters a second, to pace words while a sentence's length isn't known yet. */
+const CHARS_PER_SECOND = 15
+/** Buffer before the first chunk of a sentence plays, so chunks arriving a little late don't leave gaps. */
+const PLAYBACK_LEAD_S = 0.06
+
+function pcmToBuffer(context: AudioContext, base64: string, rate: number): AudioBuffer | null {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+  const samples = new Int16Array(bytes.buffer, 0, Math.floor(bytes.length / 2))
+  if (!samples.length) return null
+  const buffer = context.createBuffer(1, samples.length, rate)
+  const channel = buffer.getChannelData(0)
+  for (let i = 0; i < samples.length; i++) channel[i] = samples[i] / 32768
+  return buffer
 }
 
 /**
@@ -145,7 +191,7 @@ function recorderMimeType(): string | undefined {
  * agent is speaking interrupts it. Each turn is a normal agent run that also gets the
  * conversation so far.
  */
-export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string; agentName: string; onShowRun?: (runId: string) => void }) {
+export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agentId: string; agentName: string; onShowRun?: (runId: string) => void; onTurnDone?: () => void }) {
   const first = agentName.split(/\s+[-–]\s+|\s+/)[0]
   const [turns, setTurns] = useState<Turn[]>([])
   const [phase, setPhase] = useState<Phase>('idle')
@@ -254,6 +300,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     const data = new Uint8Array(512)
     const draw = (t: number) => {
       frame = requestAnimationFrame(draw)
+      revealRef.current()
       const c = canvas.current
       if (!c) return
       const dpr = window.devicePixelRatio || 1
@@ -263,7 +310,8 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
       g.setTransform(dpr, 0, 0, dpr, 0, 0)
       g.clearRect(0, 0, w, h)
       const style = getComputedStyle(c)
-      const p = phaseRef.current
+      const agentTalking = isPlaying()
+      const p = agentTalking ? 'speaking' : phaseRef.current
       const source = p === 'speaking' ? playerAnalyser.current : p === 'hearing' || p === 'listening' ? micAnalyser.current : null
       g.fillStyle = p === 'hearing' || p === 'listening' ? style.getPropertyValue('--wave-you') : style.getPropertyValue('--wave-agent')
       const bars = Math.max(24, Math.floor(w / 7))
@@ -295,65 +343,158 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     return () => cancelAnimationFrame(frame)
   }, [])
 
-  // ---- agent speech, routed through the analyser so the waveform follows it
-  const play = (audio?: string | null, mimeType?: string | null, src?: string, onDone?: () => void) => {
-    const url = src ?? (audio && mimeType ? `data:${mimeType};base64,${audio}` : null)
-    if (!url) {
-      if (onDone) onDone()
-      else if (inCallRef.current) setPhaseBoth('listening')
-      return
-    }
-    player.current?.pause()
-    const el = new Audio(url)
-    player.current = el
+  // ---- agent speech: streamed PCM scheduled back to back through the player chain (compressor →
+  // volume → analyser), so playback starts with the first chunk of each sentence.
+  const sources = useRef<AudioBufferSourceNode[]>([])
+  /** AudioContext time the last scheduled audio ends. */
+  const playEnd = useRef(0)
+  const isPlaying = () => Boolean(ctx.current && ctx.current.currentTime < playEnd.current)
+  const schedule = (buffer: AudioBuffer): number => {
     const context = audioContext()
-    try { context.createMediaElementSource(el).connect(playerInput.current ?? playerAnalyser.current!) } catch { /* already connected */ }
-    const done = () => {
-      if (player.current !== el) return
-      if (onDone) return onDone()
-      if (phaseRef.current === 'speaking' || phaseRef.current === 'starting') setPhaseBoth(inCallRef.current ? 'listening' : 'idle')
-    }
-    el.onplay = () => { if (phaseRef.current !== 'hearing') setPhaseBoth('speaking') }
-    el.onended = done
-    el.onerror = done
-    el.play().catch(done)
+    const node = context.createBufferSource()
+    node.buffer = buffer
+    node.connect(playerInput.current ?? playerAnalyser.current!)
+    const startAt = Math.max(context.currentTime + (isPlaying() ? 0 : PLAYBACK_LEAD_S), playEnd.current)
+    node.start(startAt)
+    playEnd.current = startAt + buffer.duration
+    sources.current.push(node)
+    node.onended = () => { sources.current = sources.current.filter((s) => s !== node) }
+    return startAt
+  }
+  const stopPlayback = () => {
+    for (const node of sources.current) { try { node.stop() } catch { /* not started */ } }
+    sources.current = []
+    playEnd.current = 0
+    player.current?.pause()
+    player.current = null
   }
 
-  const playClips = (clips: Clip[]) => {
-    const [first, ...rest] = clips
-    if (!first) return
-    play(first.audio, first.mimeType, undefined, rest.length ? () => playClips(rest) : undefined)
+  /** Your own recording ("Play my recording"), through the same chain so the waveform follows it. */
+  const playRecording = (src: string) => {
+    stopPlayback()
+    const el = new Audio(src)
+    player.current = el
+    try { audioContext().createMediaElementSource(el).connect(playerInput.current ?? playerAnalyser.current!) } catch { /* already connected */ }
+    void el.play().catch(() => undefined)
+  }
+
+  /** Each agent turn's audio, for "Play again" (this tab only). */
+  const turnAudio = useRef(new Map<number, AudioBuffer[]>())
+  const replay = (turnId: number) => {
+    const buffers = turnAudio.current.get(turnId)
+    if (!buffers?.length) return
+    stopPlayback()
+    buffers.forEach((b) => schedule(b))
   }
 
   /**
-   * The answer being streamed in: sentences queue here and play back to back. Bumping
-   * activeTurn (when the caller talks over it, or starts talking while it is still coming in)
-   * stops the rest of that answer from playing; its text still fills in.
+   * The answer being streamed in. Bumping activeTurn (when the caller talks over it, or starts
+   * talking while it is still coming in) stops the rest of it from playing; its text still fills in.
    */
   const activeTurn = useRef(0)
-  const clipQueue = useRef<Clip[]>([])
-  const clipPlaying = useRef(false)
   const answerDone = useRef(true)
+  const rate = useRef(24_000)
   /** "Mm-hm." / "Okay." in the agent's voice, played when an answer is slow to start. */
-  const fillers = useRef<Clip[]>([])
+  const fillers = useRef<AudioBuffer[]>([])
   const lastFiller = useRef(-1)
-  const pumpClips = (turn: number) => {
-    if (turn !== activeTurn.current || clipPlaying.current) return
-    const clip = clipQueue.current.shift()
-    if (!clip) {
-      if (answerDone.current && inCallRef.current && (phaseRef.current === 'speaking' || phaseRef.current === 'thinking')) setPhaseBoth('listening')
-      return
-    }
-    clipPlaying.current = true
-    play(clip.audio, clip.mimeType, undefined, () => {
-      clipPlaying.current = false
-      pumpClips(turn)
-    })
+
+  /** The turn whose words are being typed out as they are said. */
+  const live = useRef<{ turn: number; spans: Span[]; words: number; done: boolean; shown: number } | null>(null)
+  const patchTurn = (id: number, patch: Partial<Turn>) => setTurns((prev) => prev.map((t) => (t.who === 'agent' && t.id === id ? { ...t, ...patch } : t)))
+  /** Stops typing out the live turn: all of it was said, or (cut) only what's shown so far. */
+  const settleLive = (cut: boolean) => {
+    const l = live.current
+    if (!l) return
+    live.current = null
+    patchTurn(l.turn, cut && (l.shown < l.words || !l.done) ? { shown: l.shown, cut: true } : { shown: undefined })
   }
+  const startLive = (turn: number) => {
+    settleLive(true)
+    live.current = { turn, spans: [], words: 0, done: false, shown: 0 }
+  }
+  const liveSay = (turn: number, text: string) => {
+    const l = live.current
+    if (l?.turn !== turn) return
+    const words = splitWords(text)
+    l.spans.push({ from: l.words, count: words.length, chars: text.length, share: wordShares(words), times: [], start: null, end: 0, complete: false })
+    l.words += words.length
+  }
+  const livePcm = (turn: number, base64: string) => {
+    const buffer = ctx.current ? pcmToBuffer(ctx.current, base64, rate.current) : null
+    if (!buffer) return
+    turnAudio.current.set(turn, [...(turnAudio.current.get(turn) ?? []), buffer])
+    const l = live.current
+    if (l?.turn !== turn || turn !== activeTurn.current || !inCallRef.current) return
+    const span = l.spans[l.spans.length - 1]
+    const startAt = schedule(buffer)
+    if (span && span.start === null) span.start = startAt
+    if (span) span.end = startAt + buffer.duration
+  }
+  const liveWords = (turn: number, times: WordTimes) => {
+    const span = live.current?.turn === turn ? live.current.spans[live.current.spans.length - 1] : undefined
+    span?.times.push(...times.start)
+  }
+  const liveSaid = (turn: number) => {
+    const span = live.current?.turn === turn ? live.current.spans[live.current.spans.length - 1] : undefined
+    if (!span) return
+    span.complete = true
+    // No audio (speech failed): its words appear when it would have been its turn to be said.
+    if (span.start === null) span.start = span.end = Math.max(ctx.current?.currentTime ?? 0, playEnd.current)
+  }
+  /** A whole clip (greeting, "didn't catch that") as one sentence of a new live turn. */
+  const sayClip = (turn: number, text: string, clip: SpokenClip | null | undefined) => {
+    startLive(turn)
+    liveSay(turn, text)
+    if (clip?.pcm) livePcm(turn, clip.pcm)
+    if (clip?.words) liveWords(turn, clip.words)
+    liveSaid(turn)
+    if (live.current) live.current.done = true
+  }
+
+  /** Every frame: how many of the live turn's words have been said, from the scheduled audio. */
+  const reveal = () => {
+    const l = live.current
+    const context = ctx.current
+    if (!l || !context) return
+    const t = context.currentTime
+    let shown = 0
+    for (const span of l.spans) {
+      if (span.start === null || t < span.start) break
+      const elapsed = t - span.start
+      let said: number
+      if (span.complete && t >= span.end) said = span.count
+      else if (span.times.length >= span.count || (!span.complete && span.times.length)) {
+        // The service's own timings (a word count that differs from ours, e.g. "$7,500", is spread evenly).
+        const n = span.times.length
+        said = 0
+        for (let i = 0; i < span.count; i++) {
+          const at = span.times[n >= span.count ? Math.floor((i * n) / span.count) : i]
+          if (at === undefined || at > elapsed) break
+          said = i + 1
+        }
+      } else {
+        const duration = span.complete ? span.end - span.start : Math.max(span.end - span.start, span.chars / CHARS_PER_SECOND)
+        const fraction = duration > 0 ? elapsed / duration : 1
+        said = span.share.filter((s) => s <= fraction).length
+      }
+      shown = span.from + said
+      if (said < span.count) break
+    }
+    const last = l.spans[l.spans.length - 1]
+    if (l.done && l.spans.every((s) => s.complete) && (!last || (last.start !== null && t >= last.end))) return settleLive(false)
+    if (shown !== l.shown) {
+      l.shown = shown
+      patchTurn(l.turn, { shown })
+    }
+  }
+  const revealRef = useRef(reveal)
+  revealRef.current = reveal
+
   const cancelAnswer = () => {
     activeTurn.current++
-    clipQueue.current = []
-    clipPlaying.current = false
+    answerDone.current = true // the rest of the old answer won't be played
+    stopPlayback()
+    settleLive(true)
   }
 
   // ---- one utterance: start recording when speech begins, stop after a pause
@@ -424,8 +565,6 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   const bargeIn = () => {
     duck(false) // full volume again for the next answer
     cancelAnswer()
-    player.current?.pause()
-    player.current = null
     setTurns((prev) => {
       const next = [...prev]
       const last = next[next.length - 1]
@@ -438,6 +577,10 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   const tick = () => {
     const analyser = micAnalyser.current
     if (!inCallRef.current || !analyser) return
+    // Speaking while its audio plays; listening once it has finished and nothing more is coming.
+    const playing = isPlaying()
+    if (playing && (phaseRef.current === 'thinking' || phaseRef.current === 'starting' || phaseRef.current === 'listening')) setPhaseBoth('speaking')
+    else if (!playing && answerDone.current && (phaseRef.current === 'speaking' || phaseRef.current === 'thinking' || phaseRef.current === 'starting')) setPhaseBoth('listening')
     const p = phaseRef.current
     if (mutedRef.current) {
       if (p === 'hearing') {
@@ -525,17 +668,14 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     form.append('conversationId', conversationId.current)
     if (interruptedTurn.current) form.append('interrupted', '1')
     const turn = ++activeTurn.current
-    clipQueue.current = []
-    clipPlaying.current = false
     answerDone.current = false
     // If the answer is slow to start, acknowledge, the way a person says "mm-hm" on a call.
     setTimeout(() => {
-      if (turn !== activeTurn.current || clipPlaying.current || clipQueue.current.length || phaseRef.current !== 'thinking' || !fillers.current.length) return
+      if (turn !== activeTurn.current || isPlaying() || live.current?.spans.some((s) => s.start !== null) || phaseRef.current !== 'thinking' || !fillers.current.length) return
       let pick = Math.floor(Math.random() * fillers.current.length)
       if (pick === lastFiller.current) pick = (pick + 1) % fillers.current.length
       lastFiller.current = pick
-      clipQueue.current.push(fillers.current[pick])
-      pumpClips(turn)
+      schedule(fillers.current[pick])
     }, FILLER_AFTER_MS)
     try {
       const res = await fetch(`/api/agents/${agentId}/voice`, { method: 'POST', body: form })
@@ -547,22 +687,19 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
         // Nothing usable was heard: a plain JSON reply.
         const body: VoiceResponse = await res.json()
         answerDone.current = true
-        if (!inCallRef.current) return
-        if (body.status === 'no_speech') {
-          // Don't make the agent say "sorry?" to background noise.
-          if (phaseRef.current === 'thinking') setPhaseBoth('listening')
-          return
-        }
+        if (!inCallRef.current || turn !== activeTurn.current) return
+        if (body.status === 'no_speech') return // don't make the agent say "sorry?" to background noise
+        if (body.rate) rate.current = body.rate
         setTurns((prev) => [
           ...prev,
           { who: 'you', text: body.transcript || '(nothing heard)', recordingUrl, note: 'Not understood clearly, so it wasn’t sent to the agent.' },
-          { who: 'agent', text: body.reply ?? '', status: body.status, audio: body.audio, mimeType: body.mimeType },
+          { who: 'agent', id: turn, text: body.reply ?? '', shown: 0, status: body.status },
         ])
-        if (phaseRef.current === 'thinking') play(body.audio, body.mimeType)
+        sayClip(turn, body.reply ?? '', body.speech)
         return
       }
 
-      // Streamed answer: heard → audio (one event per sentence) → done.
+      // Streamed answer: heard → for each sentence, say → pcm… (and words) → said → done.
       const update = (fn: (t: Turn) => Turn) => setTurns((prev) => prev.map((t) => (t.who === 'agent' && t.id === turn ? fn(t) : t)))
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
@@ -576,33 +713,38 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
           const line = pending.slice(0, newline).trim()
           pending = pending.slice(newline + 1)
           if (!line) continue
-          const event = JSON.parse(line) as { type: string; transcript?: string; runId?: string | null; text?: string; audio?: string | null; mimeType?: string | null; ttsError?: string; status?: string }
+          const event = JSON.parse(line) as { type: string; transcript?: string; runId?: string | null; rate?: number; text?: string; data?: string; ttsError?: string; status?: string } & Partial<WordTimes>
           if (event.type === 'heard') {
+            if (event.rate) rate.current = event.rate
+            // A turn already talked over (the caller started again) is shown, not typed out.
+            if (turn === activeTurn.current) startLive(turn)
             setTurns((prev) => [
               ...prev,
               { who: 'you', text: event.transcript || '(nothing heard)', recordingUrl },
-              { who: 'agent', id: turn, text: '', runId: event.runId ?? null, clips: [] },
+              { who: 'agent', id: turn, text: '', shown: turn === activeTurn.current ? 0 : undefined, cut: turn !== activeTurn.current || undefined, runId: event.runId ?? null },
             ])
-          } else if (event.type === 'audio') {
-            const clip = event.audio && event.mimeType ? { audio: event.audio, mimeType: event.mimeType } : null
-            update((t) => ({ ...t, text: t.text ? `${t.text} ${event.text ?? ''}` : event.text ?? '', clips: clip ? [...(t.clips ?? []), clip] : t.clips, note: event.ttsError ? `Speech unavailable: ${event.ttsError}` : t.note }))
-            if (clip && turn === activeTurn.current && inCallRef.current) {
-              clipQueue.current.push(clip)
-              pumpClips(turn)
-            }
+          } else if (event.type === 'say') {
+            liveSay(turn, event.text ?? '')
+            update((t) => ({ ...t, text: t.text ? `${t.text} ${event.text ?? ''}` : event.text ?? '' }))
+          } else if (event.type === 'pcm' && event.data) {
+            livePcm(turn, event.data)
+          } else if (event.type === 'words' && event.start) {
+            liveWords(turn, { words: event.words ?? [], start: event.start, end: event.end ?? [] })
+          } else if (event.type === 'said') {
+            liveSaid(turn)
+            if (event.ttsError) update((t) => ({ ...t, note: `Speech unavailable: ${event.ttsError}` }))
           } else if (event.type === 'done') {
             update((t) => ({ ...t, status: event.status, runId: event.runId ?? t.runId, text: t.text || '(no answer)' }))
           }
         }
       }
-      if (turn === activeTurn.current) {
-        answerDone.current = true
-        pumpClips(turn) // nothing left to play: back to listening
-      }
+      if (live.current?.turn === turn) live.current.done = true
+      if (turn === activeTurn.current) answerDone.current = true
+      onTurnDone?.()
     } catch (e) {
-      answerDone.current = true
+      if (live.current?.turn === turn) live.current.done = true
+      if (turn === activeTurn.current) answerDone.current = true
       setError(e instanceof Error ? e.message : 'Something went wrong')
-      if (inCallRef.current && turn === activeTurn.current) setPhaseBoth('listening')
     }
   }
 
@@ -666,15 +808,18 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
       }
 
       const res = await fetch(`/api/agents/${agentId}/voice`)
-      const body: VoiceResponse & { fillers?: Clip[] } = await res.json()
+      const body: VoiceResponse & { fillers?: Array<{ pcm: string }> } = await res.json()
       if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
-      fillers.current = body.fillers ?? []
+      if (body.rate) rate.current = body.rate
+      fillers.current = (body.fillers ?? []).flatMap((f) => pcmToBuffer(context, f.pcm, rate.current) ?? [])
       inCallRef.current = true
       setInCall(true)
       setMuted(false)
-      setTurns((prev) => [...prev, { who: 'agent', text: body.greeting ?? '', audio: body.audio, mimeType: body.mimeType, note: body.ttsError ? `Speech unavailable: ${body.ttsError}` : undefined }])
+      answerDone.current = true
+      const turn = ++activeTurn.current
+      setTurns((prev) => [...prev, { who: 'agent', id: turn, text: body.greeting ?? '', shown: 0, note: body.ttsError ? `Speech unavailable: ${body.ttsError}` : undefined }])
+      sayClip(turn, body.greeting ?? '', body.speech)
       vadTimer.current = setInterval(tick, TICK_MS)
-      play(body.audio, body.mimeType)
     } catch (e) {
       const name = e instanceof DOMException ? e.name : ''
       setError(
@@ -699,8 +844,8 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     preRoll.current = []
     stream.current?.getTracks().forEach((t) => t.stop())
     stream.current = null
-    player.current?.pause()
-    player.current = null
+    cancelAnswer()
+    answerDone.current = true
     setPhaseBoth('idle')
   }
 
@@ -804,7 +949,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
 
       {current.length > 0 && (
         <div className="space-y-2">
-          {current.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onPlayClips={playClips} onShowRun={onShowRun} onCompare={compareTurn} />)}
+          {current.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlayRecording={playRecording} onReplay={replay} canReplay={(id) => turnAudio.current.has(id)} onShowRun={onShowRun} onCompare={compareTurn} />)}
         </div>
       )}
 
@@ -820,7 +965,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
         <details className="group">
           <summary className="cursor-pointer text-xs text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300">Earlier in this conversation ({earlier.length})</summary>
           <div className="mt-2 space-y-2 max-h-72 overflow-auto pr-1">
-            {earlier.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlay={play} onPlayClips={playClips} onShowRun={onShowRun} onCompare={compareTurn} muted />)}
+            {earlier.map((t, i) => <Bubble key={i} turn={t} agentId={agentId} onPlayRecording={playRecording} onReplay={replay} canReplay={(id) => turnAudio.current.has(id)} onShowRun={onShowRun} onCompare={compareTurn} muted />)}
           </div>
         </details>
       )}
@@ -830,20 +975,33 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   )
 }
 
-function Bubble({ turn, agentId, onPlay, onPlayClips, onShowRun, onCompare, muted }: { turn: Turn; agentId: string; onPlay: (audio?: string | null, mime?: string | null, src?: string) => void; onPlayClips?: (clips: Clip[]) => void; onShowRun?: (runId: string) => void; onCompare?: (turn: Turn) => void; muted?: boolean }) {
+function Bubble({ turn, agentId, onPlayRecording, onReplay, canReplay, onShowRun, onCompare, muted }: { turn: Turn; agentId: string; onPlayRecording: (src: string) => void; onReplay: (turnId: number) => void; canReplay: (turnId: number) => boolean; onShowRun?: (runId: string) => void; onCompare?: (turn: Turn) => void; muted?: boolean }) {
   const you = turn.who === 'you'
+  // While it is being said: the words said so far; after it was cut off, the rest dimmed.
+  const words = turn.shown === undefined ? null : splitWords(turn.text)
+  const typing = words !== null && !turn.cut
   return (
     <div className={`flex flex-col ${you ? 'items-end' : 'items-start'} gap-2`}>
       <div className={`max-w-[85%] rounded-2xl px-4 py-2 text-sm ${you ? 'bg-primary-600 text-white' : 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-neutral-100 border border-neutral-200 dark:border-neutral-700'} ${muted ? 'opacity-80' : ''}`}>
-        <p className="whitespace-pre-wrap break-words">{turn.text}</p>
+        {words === null ? (
+          <p className="whitespace-pre-wrap break-words">{turn.text}</p>
+        ) : (
+          <p className="whitespace-pre-wrap break-words">
+            {words.slice(0, turn.shown).join(' ')}
+            {typing && <span className="ml-0.5 inline-block w-1.5 h-3.5 align-[-2px] rounded-sm bg-current opacity-50 motion-safe:animate-pulse" aria-hidden="true" />}
+            {turn.cut && turn.shown! < words.length && (
+              <span className="text-neutral-400 dark:text-neutral-500" title="Not said: the answer was stopped here">{turn.shown ? ' ' : ''}{words.slice(turn.shown).join(' ')}</span>
+            )}
+          </p>
+        )}
         <p className={`mt-1 flex flex-wrap items-center gap-3 text-xs ${you ? 'text-primary-100' : 'text-neutral-500 dark:text-neutral-400'}`}>
-          {you && turn.recordingUrl && <button onClick={() => onPlay(null, null, turn.recordingUrl)} className="inline-flex items-center gap-1 underline"><Play className="w-3 h-3" />Play my recording</button>}
+          {you && turn.recordingUrl && <button onClick={() => onPlayRecording(turn.recordingUrl!)} className="inline-flex items-center gap-1 underline"><Play className="w-3 h-3" />Play my recording</button>}
           {you && turn.recordingUrl && onCompare && !turn.comparison && (
             <button onClick={() => onCompare(turn)} disabled={turn.comparing} className="inline-flex items-center gap-1 underline disabled:no-underline">
               {turn.comparing && <Loader2 className="w-3 h-3 animate-spin" />}{turn.comparing ? 'Comparing…' : 'Compare transcribers'}
             </button>
           )}
-          {!you && (turn.clips?.length || turn.audio) ? <button onClick={() => (turn.clips?.length ? onPlayClips?.(turn.clips) : onPlay(turn.audio, turn.mimeType))} className="inline-flex items-center gap-1 underline"><Volume2 className="w-3 h-3" />Play again</button> : null}
+          {!you && !typing && turn.id !== undefined && canReplay(turn.id) ? <button onClick={() => onReplay(turn.id!)} className="inline-flex items-center gap-1 underline"><Volume2 className="w-3 h-3" />Play again</button> : null}
           {!you && turn.runId && (onShowRun
             ? <button onClick={() => onShowRun(turn.runId!)} className="underline">See how it answered</button>
             : <Link href={`/dashboard/agents/${agentId}?run=${encodeURIComponent(turn.runId)}`} className="underline">See how it answered</Link>)}

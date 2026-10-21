@@ -5,6 +5,9 @@ import {
   MAX_AUDIO_BYTES,
   MAX_TTS_CHARS,
   synthesizeSpeech,
+  streamSpeech,
+  hedged,
+  SPEECH_PCM_RATE,
   toSpeakableText,
   transcribeAudio,
   sttProvider,
@@ -227,4 +230,72 @@ test('WAV duration comes from the header', () => {
   wav.write('data', 36, 'ascii'); wav.writeUInt32LE(samples * 2, 40)
   assert.equal(wavDurationSeconds(wav), 12)
   assert.equal(wavDurationSeconds(Buffer.from('not a wav file at all, definitely longer than 44 bytes....')), null)
+})
+
+/** A response body that arrives in the given pieces (to split SSE frames and samples mid-way). */
+function pieces(...parts: string[]): ReadableStream<Uint8Array> {
+  return new ReadableStream({ start(c) { for (const p of parts) c.enqueue(new TextEncoder().encode(p)); c.close() } })
+}
+
+test('Cartesia streamed speech: PCM in whole samples and word timings, across split frames', async () => {
+  const requests: Array<{ url: string; init: RequestInit }> = []
+  // Three audio bytes then one: the stray byte must wait for the next chunk.
+  const a = Buffer.from([1, 2, 3]).toString('base64')
+  const b = Buffer.from([4]).toString('base64')
+  const frames = [
+    `data: {"type":"chunk","done":false,"data":"${a}","status_code":206}\n\n`,
+    `data: {"type":"timestamps","done":false,"word_timestamps":{"words":["Hello","there."],"start":[0.1,0.4],"end":[0.35,0.8]},"status_code":206}\r\n\r\n`,
+    `data: {"type":"chunk","done":false,"data":"${b}","status_code":206}\n\n`,
+    'data: {"type":"done","done":true,"status_code":200}\n\n',
+  ].join('')
+  const fetchStub = (async (url: string, init: RequestInit) => {
+    requests.push({ url, init })
+    return new Response(pieces(frames.slice(0, 50), frames.slice(50, 200), frames.slice(200)), { status: 200 })
+  }) as unknown as typeof fetch
+  const stream = streamSpeech('Hello there.', {}, { fetch: fetchStub, env: { SPEECH_TTS_PROVIDER: 'cartesia', CARTESIA_API_KEY: 'sk_car_test', CARTESIA_VOICE_ID: 'voice-123' } })
+  const events = []
+  for await (const e of stream.events) events.push(e)
+  assert.equal(requests[0].url, 'https://api.cartesia.ai/tts/sse')
+  const body = JSON.parse(String(requests[0].init.body))
+  assert.equal(body.add_timestamps, true)
+  assert.deepEqual(body.output_format, { container: 'raw', encoding: 'pcm_s16le', sample_rate: SPEECH_PCM_RATE })
+  assert.deepEqual(events, [
+    { type: 'pcm', data: Buffer.from([1, 2]) },
+    { type: 'words', words: ['Hello', 'there.'], start: [0.1, 0.4], end: [0.35, 0.8] },
+    { type: 'pcm', data: Buffer.from([3, 4]) },
+  ])
+  assert.equal(stream.characters, 'Hello there.'.length)
+
+  const erroring = (async () => new Response(pieces('data: {"type":"error","done":true,"status_code":400,"title":"Bad","message":"voice not found"}\n\n'), { status: 200 })) as unknown as typeof fetch
+  await assert.rejects(streamSpeech('Hi', {}, { fetch: erroring, env: { SPEECH_TTS_PROVIDER: 'cartesia', CARTESIA_API_KEY: 'k', CARTESIA_VOICE_ID: 'v' } }).events.next(), /voice not found/)
+  assert.throws(() => streamSpeech('Hi', { provider: 'cartesia' }, { env: { CARTESIA_VOICE_ID: 'v' } }), /CARTESIA_API_KEY/)
+})
+
+test('OpenAI streamed speech asks for PCM and yields whole samples', async () => {
+  let params: Record<string, unknown> = {}
+  const openai = { audio: { speech: { create: async (p: Record<string, unknown>) => { params = p; return new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([1, 2, 3])); c.enqueue(new Uint8Array([4, 5])); c.close() } })) } } } } as never
+  const events = []
+  for await (const e of streamSpeech('Hello.', { voice: 'sage' }, { openai, env: {} }).events) events.push(e)
+  assert.equal(params.response_format, 'pcm')
+  assert.deepEqual(events, [{ type: 'pcm', data: Buffer.from([1, 2]) }, { type: 'pcm', data: Buffer.from([3, 4]) }])
+})
+
+test('hedged: a slow request is tried again and the first answer wins', async () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  // Fast first answer: no second attempt.
+  let calls = 0
+  assert.equal(await hedged(async () => { calls++; await wait(5); return 'a' }, 50), 'a')
+  await wait(60)
+  assert.equal(calls, 1)
+  // Slow first answer: the second attempt answers first.
+  calls = 0
+  let hedgedFlag = false
+  const slowThenFast = async () => { calls++; await wait(calls === 1 ? 200 : 5); return calls === 1 ? 'slow' : 'fast' }
+  assert.equal(await hedged(slowThenFast, 20, () => { hedgedFlag = true }), 'fast')
+  assert.equal(hedgedFlag, true)
+  // Fails only when every attempt has failed; one failure waits for the other attempt.
+  calls = 0
+  const firstFails = async () => { calls++; const n = calls; await wait(n === 1 ? 40 : 5); if (n === 1) throw new Error('first'); return 'second' }
+  assert.equal(await hedged(firstFails, 20), 'second')
+  await assert.rejects(hedged(async () => { throw new Error('down') }, 20), /down/)
 })

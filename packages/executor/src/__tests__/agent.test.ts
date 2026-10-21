@@ -261,18 +261,31 @@ describe('untrusted content and secrets', () => {
     const result = await runAgent(f.agentId, 'pricing?', { deps: deps(llm) })
     const system = systemText(llm.calls[0].params.system)!
     assert.match(system, new RegExp(`<untrusted_data source="knowledge:${doc.id}" flagged=`))
-    // Prompt caching: the cached block is the agent's stable prefix; retrieved knowledge and the
-    // current time come after it, so a different request doesn't invalidate the cache.
-    const [stable, perRequest] = llm.calls[0].params.system as LLMSystemBlock[]
+    // Prompt caching: the cached block is the agent's stable prefix; the attached documents (no
+    // search here: no embeddings) are the same every run, so they are cached as their own block;
+    // the current time comes last, so it doesn't invalidate either.
+    const [stable, knowledge, perRequest] = llm.calls[0].params.system as LLMSystemBlock[]
     assert.equal(stable.cache, true)
     assert.ok(stable.text.includes('<platform_policy>') && !stable.text.includes('knowledge:') && !stable.text.includes('Current date'))
-    assert.ok(!perRequest.cache && perRequest.text.includes(`knowledge:${doc.id}`) && perRequest.text.includes('## Current date and time'))
+    assert.ok(knowledge.cache && knowledge.text.includes(`knowledge:${doc.id}`) && !knowledge.text.includes('Current date'))
+    assert.ok(!perRequest.cache && !perRequest.text.includes('knowledge:') && perRequest.text.includes('## Current date and time'))
     assert.equal(llm.calls[0].params.cacheKey, `agent:${f.agentId}`)
     assert.match(system, /STALE/)
     assert.ok(!system.includes('confidential'))
     assert.ok(result.contextWarnings.some((w) => w.includes('stale')))
     assert.ok(result.contextWarnings.some((w) => w.includes('business context')))
     await prisma.tenant.delete({ where: { id: other } })
+  })
+
+  test('attached documents are given whole, not cut to their first 1,500 characters', async () => {
+    const f = await fixture()
+    const content = `${'Growth includes SEO and Google Ads. '.repeat(120)}Enterprise has a dedicated strategist.`
+    const doc = await prisma.knowledgeDocument.create({ data: { title: 'Packages', content, contentType: 'text/plain', tenantId: f.tenantId } })
+    await prisma.agentKnowledgeSource.create({ data: { agentId: f.agentId, documentId: doc.id } })
+    const llm = scriptedLLM([text('ok')])
+    await runAgent(f.agentId, 'what does Enterprise include?', { deps: deps(llm), trigger: 'voice' })
+    assert.ok(content.length > 4000)
+    assert.match(systemText(llm.calls[0].params.system)!, /Enterprise has a dedicated strategist\./)
   })
 })
 

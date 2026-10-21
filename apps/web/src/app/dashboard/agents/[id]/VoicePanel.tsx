@@ -52,15 +52,113 @@ const DEFAULT_VOLUME = 1.6
 
 // Voice activity detection (tuned by ear in a quiet office with a laptop mic and with a headset).
 const TICK_MS = 50
-/** Consecutive loud ticks before speech counts: 150 ms normally, 250 ms to interrupt the agent. */
+/** Consecutive loud ticks before speech counts (150 ms). */
 const START_TICKS = 3
-const BARGE_IN_TICKS = 5
+/**
+ * Interrupting the agent: after DUCK_TICKS loud ticks its voice is turned down to DUCK_LEVEL.
+ * Its echo drops with it and a person talking doesn't, so CONFIRM_TICKS still-loud ticks
+ * after DUCK_SETTLE_TICKS stop it (about 0.3 s in all). Otherwise it is back to full volume
+ * within DUCK_MAX_TICKS (a brief dip).
+ */
+const DUCK_TICKS = 2
+const DUCK_LEVEL = 0.25
+const DUCK_SETTLE_TICKS = 2
+const CONFIRM_TICKS = 2
+const DUCK_MAX_TICKS = 7
+/** Quietest level counted as speech: low for quiet laptop and webcam mics (speech measured at 0.01–0.03 RMS). */
+const MIN_SPEECH_LEVEL = 0.006
 /** Silence that ends the caller's turn. */
 const END_SILENCE_MS = 650
 /** No answer audio this long after the caller stops: say a short acknowledgement. */
 const FILLER_AFTER_MS = 600
 const MIN_UTTERANCE_MS = 500
 const MAX_UTTERANCE_MS = 30_000
+/** Audio kept from just before speech was detected, so a turn's first syllable isn't cut off. */
+const PRE_ROLL_MS = 600
+/**
+ * An interruption keeps the audio from just before the caller was first heard over the agent
+ * (it is confirmed a moment later), up to this much. Not more: before that it is only the
+ * agent's own echo, which got transcribed into the caller's words.
+ */
+const BARGE_IN_PRE_ROLL_MS = 1500
+const BARGE_IN_LEAD_MS = 300
+/** Silence left on the end of a turn; the rest of the END_SILENCE_MS wait is trimmed off. */
+const TAIL_MS = 250
+/** Sample rate sent for transcription: plenty for speech, a third of a 48 kHz upload. */
+const WAV_RATE = 16_000
+/** Quiet microphones are raised to a normal level, by at most this much (more only lifts noise). */
+const MAX_BOOST = 8
+/**
+ * How much of the agent's voice the microphone picks up, as a share of what is played, before
+ * anything is learned on this call: cautious, so the agent's own voice from laptop speakers
+ * doesn't interrupt it. Learned while the agent talks; with a headset it falls close to 0.
+ */
+const INITIAL_ECHO_COUPLING = 0.3
+/** Mic level over the expected echo that might be the caller (turns the agent down to check). */
+const SUSPECT_OVER_ECHO = 1.3
+/** Mic level over the expected echo that counts as the caller talking. */
+const SPEECH_OVER_ECHO = 3
+
+/**
+ * Copies the microphone's samples to the page in blocks, so a turn can include the moments
+ * before speech was detected (MediaRecorder only starts when asked) and be sent as clean WAV.
+ */
+const CAPTURE_WORKLET = `
+class VoiceCapture extends AudioWorkletProcessor {
+  constructor() { super(); this.block = new Float32Array(2048); this.n = 0 }
+  process(inputs) {
+    const channel = inputs[0] && inputs[0][0]
+    if (channel) for (let i = 0; i < channel.length; i++) {
+      this.block[this.n++] = channel[i]
+      if (this.n === this.block.length) { this.port.postMessage(this.block.slice(0)); this.n = 0 }
+    }
+    return true
+  }
+}
+registerProcessor('voice-capture', VoiceCapture)
+`
+
+/**
+ * One turn as 16-bit mono WAV at WAV_RATE: trailing silence trimmed, resampled (block average),
+ * and a quiet microphone brought up to a normal level.
+ */
+function encodeWav(blocks: Float32Array[], rate: number, trimEndMs: number): Blob {
+  const total = blocks.reduce((n, b) => n + b.length, 0)
+  const all = new Float32Array(total)
+  let offset = 0
+  for (const b of blocks) { all.set(b, offset); offset += b.length }
+  const keep = Math.max(0, total - Math.floor((trimEndMs / 1000) * rate))
+  const ratio = rate / WAV_RATE
+  const out = new Float32Array(Math.floor(keep / ratio))
+  let peak = 0
+  for (let i = 0; i < out.length; i++) {
+    const from = Math.floor(i * ratio)
+    const to = Math.min(keep, Math.max(from + 1, Math.floor((i + 1) * ratio)))
+    let sum = 0
+    for (let j = from; j < to; j++) sum += all[j]
+    out[i] = sum / (to - from)
+    peak = Math.max(peak, Math.abs(out[i]))
+  }
+  const gain = peak > 0 ? Math.min(MAX_BOOST, 0.9 / peak) : 1
+  const view = new DataView(new ArrayBuffer(44 + out.length * 2))
+  const text = (at: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(at + i, value.charCodeAt(i)) }
+  text(0, 'RIFF'); view.setUint32(4, 36 + out.length * 2, true); text(8, 'WAVE')
+  text(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true)
+  view.setUint32(24, WAV_RATE, true); view.setUint32(28, WAV_RATE * 2, true); view.setUint16(32, 2, true); view.setUint16(34, 16, true)
+  text(36, 'data'); view.setUint32(40, out.length * 2, true)
+  for (let i = 0; i < out.length; i++) view.setInt16(44 + i * 2, Math.max(-1, Math.min(1, out[i] * gain)) * 0x7fff, true)
+  return new Blob([view.buffer], { type: 'audio/wav' })
+}
+
+/** RMS level of what an analyser is hearing (0 when there is none). */
+function levelOf(analyser: AnalyserNode | null): number {
+  if (!analyser) return 0
+  const buf = new Float32Array(analyser.fftSize)
+  analyser.getFloatTimeDomainData(buf)
+  let sum = 0
+  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i]
+  return Math.sqrt(sum / buf.length)
+}
 
 /** Picks a recording format the browser supports and the transcription API accepts. */
 function recorderMimeType(): string | undefined {
@@ -98,8 +196,16 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   /** The caller's microphone: voice detection and the waveform while listening. */
   const micAnalyser = useRef<AnalyserNode | null>(null)
   const stream = useRef<MediaStream | null>(null)
+  /** Fallback when the browser has no AudioWorklet: records from the moment speech is detected. */
   const recorder = useRef<MediaRecorder | null>(null)
   const chunks = useRef<Blob[]>([])
+  /** Sample capture (CAPTURE_WORKLET): the last PRE_ROLL_MS always, and the turn while one is being recorded. */
+  const capture = useRef<{ node: AudioWorkletNode; rate: number } | null>(null)
+  const workletLoaded = useRef(false)
+  /** The turn being recorded started by talking over the agent (the server checks it isn't the agent's own echo). */
+  const interruptedTurn = useRef(false)
+  const preRoll = useRef<Float32Array[]>([])
+  const captured = useRef<Float32Array[] | null>(null)
   const player = useRef<HTMLAudioElement | null>(null)
   const vadTimer = useRef<ReturnType<typeof setInterval> | null>(null)
   const recordingUrls = useRef<string[]>([])
@@ -110,7 +216,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   const turnsRef = useRef<Turn[]>([])
   /** Groups this call's turns into one conversation in the agent's history; a cleared conversation starts a new one. */
   const conversationId = useRef<string>(crypto.randomUUID())
-  const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0 })
+  const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, ducked: false, duckTicks: 0, suspectAt: 0, played: [] as number[], suspectRatio: 0 })
 
   const setPhaseBoth = (p: Phase) => { phaseRef.current = p; setPhase(p) }
   useEffect(() => { turnsRef.current = turns }, [turns])
@@ -281,10 +387,23 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   }
 
   // ---- one utterance: start recording when speech begins, stop after a pause
-  const beginUtterance = () => {
+  const beginUtterance = (interrupting = false) => {
     if (!stream.current) return
+    interruptedTurn.current = interrupting
     // Talking again before the answer has finished arriving: the caller has moved on.
     cancelAnswer()
+    vad.current.startedAt = Date.now()
+    vad.current.silenceMs = 0
+    vad.current.peak = 0
+    if (capture.current) {
+      const rate = capture.current.rate
+      const ms = interrupting ? Math.min(BARGE_IN_PRE_ROLL_MS, Date.now() - vad.current.suspectAt + BARGE_IN_LEAD_MS) : PRE_ROLL_MS
+      const keep = Math.ceil(((ms / 1000) * rate) / 2048)
+      captured.current = preRoll.current.slice(-keep)
+      preRoll.current = []
+      setPhaseBoth('hearing')
+      return
+    }
     const mimeType = recorderMimeType()
     const rec = new MediaRecorder(stream.current, mimeType ? { mimeType } : undefined)
     chunks.current = []
@@ -308,14 +427,32 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
   }
 
   const endUtterance = () => {
+    if (captured.current && capture.current) {
+      const blocks = captured.current
+      captured.current = null
+      const wav = encodeWav(blocks, capture.current.rate, END_SILENCE_MS - TAIL_MS)
+      // About 0.3 s of sound after trimming: a cough or a click, not a sentence.
+      if (wav.size < 44 + WAV_RATE * 0.6) { if (inCallRef.current) setPhaseBoth('listening'); return }
+      void send(wav)
+      return
+    }
     if (recorder.current?.state === 'recording') {
       setPhaseBoth('thinking')
       recorder.current.stop()
     }
   }
 
+  /** Turns the agent's voice down while checking whether the caller is talking over it. */
+  const duck = (down: boolean) => {
+    vad.current.ducked = down
+    vad.current.duckTicks = 0
+    const gain = playerGain.current
+    if (gain && ctx.current) gain.gain.setTargetAtTime(down ? volumeRef.current * DUCK_LEVEL : volumeRef.current, ctx.current.currentTime, 0.015)
+  }
+
   /** Speaking over the agent: stop it mid-sentence and listen. */
   const bargeIn = () => {
+    duck(false) // full volume again for the next answer
     cancelAnswer()
     player.current?.pause()
     player.current = null
@@ -333,31 +470,71 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     if (!inCallRef.current || !analyser) return
     const p = phaseRef.current
     if (mutedRef.current) {
-      if (p === 'hearing') { recorder.current?.stop(); recorder.current = null; setPhaseBoth('listening') }
+      if (p === 'hearing') {
+        captured.current = null
+        if (recorder.current) { recorder.current.onstop = null; recorder.current.stop(); recorder.current = null }
+        setPhaseBoth('listening')
+      }
+      preRoll.current = []
       return
     }
-    const buf = new Float32Array(analyser.fftSize)
-    analyser.getFloatTimeDomainData(buf)
-    let sum = 0
-    for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i]
-    const rms = Math.sqrt(sum / buf.length)
+    const rms = levelOf(analyser)
     const v = vad.current
+    // An answer that ended (or was replaced) while turned down plays the next one at full volume.
+    if (v.ducked && p !== 'speaking') duck(false)
 
     if (p === 'listening' || p === 'speaking' || p === 'thinking') {
+      // What the agent is playing, held briefly because its echo reaches the mic a little later.
+      // Measured in every phase: a clip starts before the phase says "speaking", and its echo
+      // carries on after it ends (those were heard as the caller saying "Right." or "So...").
+      // The loudest of the last 200 ms: the echo of a loud syllable arrives a moment after it plays.
+      v.played.push(levelOf(playerAnalyser.current))
+      if (v.played.length > 4) v.played.shift()
+      v.playerLevel = Math.max(...v.played, v.playerLevel * 0.6)
+      // The mic also hears the agent from the speakers (less after the browser's echo
+      // cancellation, almost nothing with a headset): compared against that expected echo,
+      // learned on this call, instead of a fixed level that was too high to interrupt.
+      const echo = v.echoCoupling * v.playerLevel
       // Learn the room's background level while it's quiet.
-      if (p === 'listening' && rms < v.floor * 1.6) v.floor = Math.max(0.002, v.floor * 0.95 + rms * 0.05)
-      // Interrupting needs clearly louder, longer speech, so the agent's own voice from the
-      // speakers (mostly removed by echo cancellation) doesn't cut it off.
-      const threshold = p === 'speaking' ? Math.max(0.05, v.floor * 6) : Math.max(0.015, v.floor * 3)
-      v.loudTicks = rms > threshold ? v.loudTicks + 1 : 0
-      if (v.loudTicks >= (p === 'speaking' ? BARGE_IN_TICKS : START_TICKS)) {
-        v.loudTicks = 0
-        if (p === 'speaking') bargeIn()
-        beginUtterance()
+      if (p === 'listening' && v.playerLevel < 0.005 && rms < v.floor * 1.6) v.floor = Math.max(0.002, v.floor * 0.95 + rms * 0.05)
+      const base = Math.max(MIN_SPEECH_LEVEL, v.floor * 3)
+      const speech = rms > Math.max(base, echo * SPEECH_OVER_ECHO)
+
+      if (p === 'speaking' && v.ducked) {
+        v.duckTicks++
+        if (v.duckTicks > DUCK_SETTLE_TICKS) v.loudTicks = speech ? v.loudTicks + 1 : 0
+        if (v.loudTicks >= CONFIRM_TICKS) {
+          v.loudTicks = 0
+          bargeIn()
+          beginUtterance(true)
+        } else if (v.duckTicks >= DUCK_MAX_TICKS) {
+          // It was the agent's own echo, louder than estimated: learn that, so it isn't mistaken again.
+          v.echoCoupling = Math.min(1, Math.max(v.echoCoupling, v.suspectRatio))
+          duck(false)
+          v.loudTicks = 0
+        }
+      } else if (p === 'speaking') {
+        const suspect = rms > Math.max(base, echo * SUSPECT_OVER_ECHO)
+        if (!suspect && v.playerLevel > 0.01) v.echoCoupling = Math.min(1, v.echoCoupling * 0.9 + (rms / v.playerLevel) * 0.1)
+        // From the first time the caller seemed to talk, even if that check was dropped and retried.
+        if (suspect && !v.loudTicks && Date.now() - v.suspectAt > BARGE_IN_PRE_ROLL_MS) v.suspectAt = Date.now()
+        if (suspect && !v.loudTicks) v.suspectRatio = 0
+        if (suspect && v.playerLevel > 0.01) v.suspectRatio = Math.max(v.suspectRatio, rms / v.playerLevel)
+        v.loudTicks = suspect ? v.loudTicks + 1 : 0
+        if (v.loudTicks >= DUCK_TICKS) {
+          v.loudTicks = 0
+          duck(true)
+        }
+      } else {
+        v.loudTicks = speech ? v.loudTicks + 1 : 0
+        if (v.loudTicks >= START_TICKS) {
+          v.loudTicks = 0
+          beginUtterance()
+        }
       }
     } else if (p === 'hearing') {
       v.peak = Math.max(v.peak, rms)
-      v.silenceMs = rms < Math.max(0.012, v.floor * 2.2) ? v.silenceMs + TICK_MS : 0
+      v.silenceMs = rms < Math.max(MIN_SPEECH_LEVEL * 0.8, v.floor * 2.2) ? v.silenceMs + TICK_MS : 0
       const took = Date.now() - v.startedAt
       if ((v.silenceMs >= END_SILENCE_MS && took > MIN_UTTERANCE_MS) || took > MAX_UTTERANCE_MS) endUtterance()
     }
@@ -376,6 +553,7 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     form.append('audio', audio, 'utterance')
     form.append('history', JSON.stringify(history))
     form.append('conversationId', conversationId.current)
+    if (interruptedTurn.current) form.append('interrupted', '1')
     const turn = ++activeTurn.current
     clipQueue.current = []
     clipPlaying.current = false
@@ -474,11 +652,48 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
       stream.current = s
       void loadMics()
       const context = audioContext()
+      // Rumble below the voice (desk knocks, fans, handling noise) removed for both detection and
+      // transcription; detection also ignores hiss above the speech band.
+      const source = context.createMediaStreamSource(s)
+      const highpass = context.createBiquadFilter()
+      highpass.type = 'highpass'
+      highpass.frequency.value = 90
+      source.connect(highpass)
+      const speechBand = context.createBiquadFilter()
+      speechBand.type = 'lowpass'
+      speechBand.frequency.value = 4000
+      highpass.connect(speechBand)
       micAnalyser.current = context.createAnalyser()
       micAnalyser.current.fftSize = 1024
       micAnalyser.current.smoothingTimeConstant = 0.6
-      context.createMediaStreamSource(s).connect(micAnalyser.current) // detection only; never to the speakers
-      vad.current = { floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0 }
+      speechBand.connect(micAnalyser.current) // detection only; never to the speakers
+      vad.current = { floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, ducked: false, duckTicks: 0, suspectAt: 0, played: [], suspectRatio: 0 }
+      try {
+        if (!workletLoaded.current) {
+          const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: 'application/javascript' }))
+          await context.audioWorklet.addModule(url)
+          URL.revokeObjectURL(url)
+          workletLoaded.current = true
+        }
+        const node = new AudioWorkletNode(context, 'voice-capture')
+        const keepBlocks = Math.ceil(((BARGE_IN_PRE_ROLL_MS / 1000) * context.sampleRate) / 2048)
+        node.port.onmessage = (e: MessageEvent<Float32Array>) => {
+          if (captured.current) {
+            captured.current.push(e.data)
+          } else {
+            preRoll.current.push(e.data)
+            if (preRoll.current.length > keepBlocks) preRoll.current.shift()
+          }
+        }
+        highpass.connect(node)
+        // Silent output: a node with nowhere to send its sound may not be run at all.
+        const silent = context.createGain()
+        silent.gain.value = 0
+        node.connect(silent).connect(context.destination)
+        capture.current = { node, rate: context.sampleRate }
+      } catch {
+        capture.current = null // older browser: MediaRecorder from the moment speech is detected
+      }
 
       const res = await fetch(`/api/agents/${agentId}/voice`)
       const body: VoiceResponse & { fillers?: Clip[] } = await res.json()
@@ -508,6 +723,10 @@ export function VoicePanel({ agentId, agentName, onShowRun }: { agentId: string;
     vadTimer.current = null
     if (recorder.current?.state === 'recording') { recorder.current.onstop = null; recorder.current.stop() }
     recorder.current = null
+    capture.current?.node.disconnect()
+    capture.current = null
+    captured.current = null
+    preRoll.current = []
     stream.current?.getTracks().forEach((t) => t.stop())
     stream.current = null
     player.current?.pause()

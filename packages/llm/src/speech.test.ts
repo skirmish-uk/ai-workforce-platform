@@ -12,6 +12,10 @@ import {
   cloneCartesiaVoice,
   deleteCartesiaVoice,
   wavDurationSeconds,
+  transcriptionHint,
+  echoesHint,
+  soundsLikeEcho,
+  notEnglishSpeech,
 } from './speech'
 import { LLMConfigError } from './types'
 
@@ -38,6 +42,42 @@ test('transcription sends the recording as a named file with the configured mode
   const file = calls.transcribe[0].file as File
   assert.equal(file.name, 'utterance.webm')
   assert.equal(calls.transcribe[0].language, 'en')
+})
+
+test('a vocabulary hint is sent as the prompt, and a transcript that is the hint read back is redone without it', async () => {
+  const hint = transcriptionHint(['Ava', 'Demo Marketing Agency', undefined, 'ava', 'Maria Gonzalez', 'CloudNine Analytics'])
+  assert.equal(hint, 'Ava, Demo Marketing Agency, Maria Gonzalez, CloudNine Analytics.')
+  assert.ok(echoesHint('Vocabulary: Ava, Demo Marketing Agency, Maria Gonzalez.', hint!))
+  assert.ok(!echoesHint('Could I book a chat with Maria from CloudNine on Thursday?', hint!))
+  assert.ok(!echoesHint('Maria Gonzalez.', hint!), 'too short to judge: kept')
+
+  const prompts: unknown[] = []
+  const replies = ['Ava, Demo Marketing Agency, Maria Gonzalez, CloudNine Analytics.', '']
+  const openai = { audio: { transcriptions: { create: async (params: Record<string, unknown>) => { prompts.push(params.prompt); return { text: replies.shift() ?? '' } } } } } as never
+  const result = await transcribeAudio(Buffer.from('noise'), { mimeType: 'audio/wav', vocabulary: ['Ava', 'Demo Marketing Agency', 'Maria Gonzalez', 'CloudNine Analytics'] }, { openai, env: {} })
+  assert.deepEqual(prompts, [hint, undefined])
+  assert.equal(result.text, '')
+  assert.equal(result.hintRetried, true)
+
+  const { openai: real, calls } = fakeOpenAI()
+  const heard = await transcribeAudio(Buffer.from('speech'), { mimeType: 'audio/wav', vocabulary: ['Ava'] }, { openai: real, env: { SPEECH_STT_MODEL: 'gpt-4o-transcribe' } })
+  assert.equal(calls.transcribe.length, 1)
+  assert.equal(calls.transcribe[0].prompt, 'Ava.')
+  assert.equal(heard.model, 'gpt-4o-transcribe')
+  assert.equal(heard.hintRetried, undefined)
+})
+
+test('an interruption that is only the agent echoing itself, or a backchannel, is recognised', () => {
+  const agent = ['Growth is our most popular package at $7,500 a month, and it covers SEO, paid ads, content and LinkedIn.']
+  assert.ok(soundsLikeEcho('Sure.', agent))
+  assert.ok(soundsLikeEcho('Mm-hm, okay.', agent))
+  assert.ok(soundsLikeEcho('Great! Growth is our...', agent))
+  assert.ok(!soundsLikeEcho('Actually, what about the Starter package?', agent))
+  assert.ok(!soundsLikeEcho('Stop, can I book a call instead?', agent))
+  assert.ok(notEnglishSpeech('Угу.'))
+  assert.ok(notEnglishSpeech('誰だ?'))
+  assert.ok(!notEnglishSpeech('OK, two cafés.'))
+  assert.ok(!notEnglishSpeech(''))
 })
 
 test('transcription refuses empty and oversized audio before calling the provider', async () => {

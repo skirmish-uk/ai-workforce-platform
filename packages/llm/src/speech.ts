@@ -17,6 +17,11 @@ import { LLMConfigError } from './types'
 export type SttProvider = 'openai'
 export type TtsProvider = 'openai' | 'cartesia'
 
+/**
+ * Compared with gpt-4o-transcribe on 21 Oct on degraded audio (quiet, band-limited, fan noise):
+ * equally accurate once given a vocabulary hint, and on pure noise the mini model returns
+ * nothing where the larger one invented short phrases in other languages. SPEECH_STT_MODEL overrides.
+ */
 export const OPENAI_STT_MODEL = 'gpt-4o-mini-transcribe'
 export const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts'
 export const OPENAI_DEFAULT_VOICE = 'coral'
@@ -50,6 +55,8 @@ export interface TranscriptionResult {
   model: string
   /** Bytes of audio received, for usage records. */
   audioBytes: number
+  /** The vocabulary hint came back as the transcript (noise), so it was transcribed again without it. */
+  hintRetried?: boolean
   /**
    * Mean per-token probability from the transcriber (0–1), or null when not reported.
    * Near-silent or noisy audio produces confident-sounding gibberish in a random
@@ -87,26 +94,96 @@ export function ttsProvider(env: Record<string, string | undefined> = process.en
   return value
 }
 
+/** At most this many hint terms; the transcription prompt is short context, not a dictionary. */
+const MAX_HINT_TERMS = 30
+
+/**
+ * A transcription hint from names and terms the caller is likely to say (business, people,
+ * places). Names are what speech-to-text gets wrong on poor microphones ("Cloud 9" for
+ * CloudNine, "you here" for Maria); a hint fixes them. Only a term list: quoting what the
+ * agent last said made the model return that line for background noise.
+ */
+export function transcriptionHint(terms: Array<string | null | undefined>): string | undefined {
+  const seen = new Set<string>()
+  const kept: string[] = []
+  for (const raw of terms) {
+    const term = (raw ?? '').replace(/[\s"]+/g, ' ').trim().slice(0, 60)
+    if (!term || seen.has(term.toLowerCase())) continue
+    seen.add(term.toLowerCase())
+    kept.push(term)
+    if (kept.length >= MAX_HINT_TERMS) break
+  }
+  return kept.length ? kept.join(', ') + '.' : undefined
+}
+
+const words = (text: string) => text.toLowerCase().match(/[\p{L}\p{N}']+/gu) ?? []
+
+/**
+ * Whether a transcript is the hint read back: on noise with a hint, the model sometimes returns
+ * the hint itself (measured 21 Oct: 5 of 9 noise clips). Real speech made only of hint terms
+ * is rare; when it happens the retry without the hint still hears it.
+ */
+export function echoesHint(transcript: string, hint: string): boolean {
+  const said = words(transcript)
+  if (said.length < 3) return false
+  const vocabulary = new Set([...words(hint), 'vocabulary', 'context', 'names'])
+  return said.filter((w) => vocabulary.has(w)).length / said.length >= 0.8
+}
+
+/** Words that only acknowledge ("mm-hm", "okay"): not something to stop the agent for. */
+const BACKCHANNEL = new Set(['mm', 'mmm', 'hm', 'hmm', 'mhm', 'mm-hm', 'uh', 'huh', 'uh-huh', 'uhum', 'um', 'ok', 'okay', 'sure', 'right', 'yeah', 'yep', 'yes', 'alright', 'all', 'great', 'thanks', 'cool'])
+
+/**
+ * Whether a turn that cut the agent off is really the agent's own voice, or just a
+ * backchannel, rather than the caller saying something. On laptop speakers with weak echo
+ * cancellation, the agent's voice from the speakers interrupted it and was transcribed as the
+ * caller ("Sure.", "Great! Growth is our..."), and the agent then answered itself in a loop.
+ * Only used for interruptions: the same words said when the agent is quiet are a real turn.
+ */
+export function soundsLikeEcho(transcript: string, agentLines: string[]): boolean {
+  const said = words(transcript)
+  if (!said.length) return true
+  if (said.every((w) => BACKCHANNEL.has(w))) return true
+  const agent = new Set(agentLines.flatMap(words))
+  return said.length >= 2 && said.filter((w) => agent.has(w)).length / said.length >= 0.75
+}
+
+/** No English letters at all: noise transcribed as another script ("Угу", "誰だ?"), not a caller speaking English. */
+export function notEnglishSpeech(transcript: string): boolean {
+  return Boolean(transcript) && !/[a-z]/i.test(transcript)
+}
+
 export async function transcribeAudio(
   audio: Buffer,
-  options: { mimeType: string; language?: string; prompt?: string },
+  options: { mimeType: string; language?: string; prompt?: string; vocabulary?: Array<string | null | undefined> },
   deps: SpeechDeps = {}
 ): Promise<TranscriptionResult> {
   if (!audio.length) throw new Error('No audio received')
   if (audio.length > MAX_AUDIO_BYTES) throw new Error(`Audio is larger than ${MAX_AUDIO_BYTES / 1024 / 1024} MB`)
-  const provider = sttProvider(deps.env)
+  const env = deps.env ?? process.env
+  const provider = sttProvider(env)
+  const model = env.SPEECH_STT_MODEL || OPENAI_STT_MODEL
   const extension = options.mimeType.includes('ogg') ? 'ogg' : options.mimeType.includes('mp4') || options.mimeType.includes('m4a') ? 'm4a' : options.mimeType.includes('wav') ? 'wav' : options.mimeType.includes('mpeg') ? 'mp3' : 'webm'
-  const file = await toFile(audio, `utterance.${extension}`, { type: options.mimeType })
-  const result = (await openaiClient(deps).audio.transcriptions.create({
-    file,
-    model: OPENAI_STT_MODEL,
-    include: ['logprobs'],
-    ...(options.language ? { language: options.language } : {}),
-    ...(options.prompt ? { prompt: options.prompt } : {}),
-  })) as { text: string; logprobs?: Array<{ logprob?: number }> }
-  const probs = (result.logprobs ?? []).map((l) => (typeof l.logprob === 'number' ? Math.exp(l.logprob) : null)).filter((p): p is number => p !== null)
-  const confidence = probs.length ? probs.reduce((a, b) => a + b, 0) / probs.length : null
-  return { text: result.text.trim(), provider, model: OPENAI_STT_MODEL, audioBytes: audio.length, confidence }
+  const hint = options.prompt ?? (options.vocabulary ? transcriptionHint(options.vocabulary) : undefined)
+  const transcribe = async (prompt: string | undefined) => {
+    const file = await toFile(audio, `utterance.${extension}`, { type: options.mimeType })
+    const result = (await openaiClient(deps).audio.transcriptions.create({
+      file,
+      model,
+      include: ['logprobs'],
+      ...(options.language ? { language: options.language } : {}),
+      ...(prompt ? { prompt } : {}),
+    })) as { text: string; logprobs?: Array<{ logprob?: number }> }
+    const probs = (result.logprobs ?? []).map((l) => (typeof l.logprob === 'number' ? Math.exp(l.logprob) : null)).filter((p): p is number => p !== null)
+    return { text: result.text.trim(), confidence: probs.length ? probs.reduce((a, b) => a + b, 0) / probs.length : null }
+  }
+  let heard = await transcribe(hint)
+  let hintRetried = false
+  if (hint && echoesHint(heard.text, hint)) {
+    heard = await transcribe(undefined)
+    hintRetried = true
+  }
+  return { text: heard.text, provider, model, audioBytes: audio.length, confidence: heard.confidence, ...(hintRetried ? { hintRetried } : {}) }
 }
 
 /** Removes markdown and other things that read badly aloud, and caps the length. */

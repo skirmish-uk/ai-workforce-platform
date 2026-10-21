@@ -5,7 +5,7 @@ import { prisma } from '@ai-workforce/db'
 import { canAccessTenant, hasPermission, safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
 import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
-import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
+import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, notEnglishSpeech, soundsLikeEcho, synthesizeSpeech, transcribeAudio } from '@ai-workforce/llm'
 import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
 import { UserRole } from '@prisma/client'
 
@@ -26,6 +26,12 @@ async function loadAgent(agentId: string, session: { user: { role: string; tenan
 }
 
 /**
+ * Answers are heard, not read: a full package description typed was about 100 words (35 s
+ * spoken). On a call the agent gives the main points and offers the rest.
+ */
+const SPOKEN_LENGTH = '(Spoken answer: two or three short sentences with the main points, about 60 words at most; offer more detail instead of listing everything.)'
+
+/**
  * A call is a conversation: each turn's run gets the recent exchanges (sent by the browser as
  * form field "history": [{who: 'caller'|'agent', text}]) so "what about Saturdays?" makes sense.
  * Bounded: the last 8 exchanges, 400 characters each.
@@ -40,8 +46,39 @@ function withConversation(transcript: string, rawHistory: FormDataEntryValue | n
     .filter((h) => (h.who === 'caller' || h.who === 'agent') && typeof h.text === 'string' && h.text.trim())
     .slice(-8)
     .map((h) => `${h.who === 'caller' ? 'Caller' : first}: ${String(h.text).replace(/\s+/g, ' ').trim().slice(0, 400)}`)
-  if (!lines.length) return transcript
-  return `This is a live voice call. The conversation so far, most recent last:\n${lines.join('\n')}\n\nThe caller now says: "${transcript}"\n\nReply to what the caller just said, in the context of the call. Don't greet them again.`
+  if (!lines.length) return `${transcript}\n\n${SPOKEN_LENGTH}`
+  return `This is a live voice call. The conversation so far, most recent last:\n${lines.join('\n')}\n\nThe caller now says: "${transcript}"\n\nReply to what the caller just said, in the context of the call. Don't greet them again. ${SPOKEN_LENGTH}`
+}
+
+/** Common capitalised words that are not names, so they stay out of the transcription hint. */
+const NOT_NAMES = new Set(['I', 'I’m', "I'm", 'AI', 'OK', 'Okay', 'Sure', 'Yes', 'No', 'Hi', 'Hello', 'Thanks', 'Sorry', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'])
+
+/**
+ * What the caller is likely to say by name: the agent, the business, the agent's configured
+ * vocabulary, and names already said in this call (mid-sentence capitalised words).
+ */
+function callVocabulary(agentName: string, tenantName: string | undefined, configured: string[] | undefined, rawHistory: FormDataEntryValue | null): Array<string | undefined> {
+  const names: string[] = []
+  try {
+    const history = typeof rawHistory === 'string' ? JSON.parse(rawHistory) : []
+    for (const h of Array.isArray(history) ? history.slice(-8) : []) {
+      if (typeof h?.text !== 'string') continue
+      for (const m of h.text.slice(0, 400).matchAll(/(?<![.!?]\s|^)\b(\p{Lu}[\p{L}'’-]+(?:\s+\p{Lu}[\p{L}'’-]+)*)/gu)) {
+        if (!NOT_NAMES.has(m[1])) names.push(m[1])
+      }
+    }
+  } catch { /* a malformed history adds no names */ }
+  return [agentName.split(/\s+[-–]\s+/)[0], tenantName, ...(configured ?? []), ...names.slice(-15)]
+}
+
+/** The agent's last two lines in the call (from "history"), to recognise its own echo. */
+function agentLines(rawHistory: FormDataEntryValue | null): string[] {
+  try {
+    const history = typeof rawHistory === 'string' ? JSON.parse(rawHistory) : []
+    return (Array.isArray(history) ? history : []).filter((h) => h?.who === 'agent' && typeof h.text === 'string').slice(-2).map((h) => String(h.text).slice(0, 1000))
+  } catch {
+    return []
+  }
 }
 
 /** VOICE_TURN usage row (per-minute pricing data and timings), written without holding up the reply. */
@@ -115,15 +152,29 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
     let transcript: string
     let confidence: number | null = null
+    let hintRetried = false
     try {
-      // No transcription prompt: on silence or noise it makes the model invent sentences.
-      const heard = await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en' })
+      // A names-only hint (never what the agent said: on noise that came back as the transcript).
+      const tenant = await prisma.tenant.findUnique({ where: { id: agent.tenantId }, select: { name: true } })
+      const vocabulary = callVocabulary(agent.name, tenant?.name, voice.vocabulary, form.get('history'))
+      const heard = await transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en', vocabulary })
       transcript = heard.text
       confidence = heard.confidence
+      hintRetried = heard.hintRetried ?? false
       lap('transcribeMs')
     } catch (error) {
       const status = error instanceof LLMConfigError ? 503 : 502
       return NextResponse.json({ error: `Could not transcribe the recording: ${safeErrorMessage(error)}` }, { status })
+    }
+
+    // Noise transcribed into another script, or an interruption that was only the agent's own
+    // voice from the speakers (or a "mm-hm"): ignored like silence, so the agent never answers itself.
+    const interrupted = form.get('interrupted') === '1'
+    const ignored = notEnglishSpeech(transcript) ? 'not_english' : interrupted && soundsLikeEcho(transcript, agentLines(form.get('history'))) ? 'echo' : null
+    if (ignored) {
+      timings.totalMs = Date.now() - started
+      recordTurn(agent, session.user.id, { runId: null, status: 'no_speech', ignored, transcript, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: 0, timings })
+      return NextResponse.json({ transcript, confidence, reply: '', status: 'no_speech', ignored, runId: null, timings, audio: null, mimeType: null })
     }
 
     // Nothing usable was heard: answer at once, without running the agent.
@@ -134,7 +185,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // The browser drops a turn with no speech, so don't spend time or money speaking it.
       const speech = status === 'no_speech' ? { audio: null, mimeType: null, characters: 0 } : await speak(reply, voice)
       timings.totalMs = Date.now() - started
-      recordTurn(agent, session.user.id, { runId: null, status, confidence, audioBytes: audio.length, ttsCharacters: speech.characters, timings })
+      recordTurn(agent, session.user.id, { runId: null, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: speech.characters, timings })
       return NextResponse.json({ transcript, confidence, reply, status, runId: null, timings, ...speech })
     }
 
@@ -259,7 +310,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         lap('speakMs')
         timings.totalMs = Date.now() - started
         send({ type: 'done', status, runId, reply: spokenText, timings })
-        recordTurn(agent, session.user.id, { runId, status, confidence, audioBytes: audio.length, ttsCharacters: characters, ttsModel, ttsError, timings })
+        recordTurn(agent, session.user.id, { runId, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: characters, ttsModel, ttsError, timings })
         controller.close()
       },
     })

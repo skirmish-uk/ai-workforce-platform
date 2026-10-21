@@ -14,7 +14,8 @@ Browser (Talk panel on the agent page)
   ▼
 POST /api/agents/{id}/voice   (multipart "audio", ≤10 MB; "history": the call so far)
   1. checks: signed in, same tenant, agent:write, voice enabled and valid for this agent
-  2. speech-to-text        packages/llm/src/speech.ts  (OpenAI gpt-4o-mini-transcribe)
+  2. speech-to-text        packages/llm/src/speech.ts  (OpenAI gpt-4o-mini-transcribe, with a
+                           names-only hint; WAV from the browser)
   3. agent run             enqueued on agent-run with trigger "voice"; the route waits for the
                            worker's result (≤45 s). Same Diagnose → Assemble → Act → Assess run,
                            policy, approvals, kill switches, spend caps and AuditLog as any run.
@@ -31,11 +32,24 @@ JSON { transcript, reply, status, runId, audio (base64 mp3) } → played in the 
 
 `GET /api/agents/{id}/voice` returns the greeting (text and audio) to start a conversation.
 
-**Garbled audio protection (2026-10-13).** Transcripts now carry a confidence score (mean token probability, `include: ['logprobs']`). Below `MIN_TRANSCRIPT_CONFIDENCE` (0.5) the turn is answered "Sorry, I didn't catch that clearly" and is **not** sent to the agent (status `unclear`). Calibration with real calls: clear speech 0.97–0.99, heavily distorted but correct 0.82, unintelligible audio that came back as foreign-sounding gibberish 0.23; silence and noise come back empty. A transcription *prompt* is deliberately not used: on silence it made the model invent whole sentences at high confidence.
+**Garbled audio protection (2026-10-13).** Transcripts now carry a confidence score (mean token probability, `include: ['logprobs']`). Below `MIN_TRANSCRIPT_CONFIDENCE` (0.5) the turn is answered "Sorry, I didn't catch that clearly" and is **not** sent to the agent (status `unclear`). Calibration with real calls: clear speech 0.97–0.99, heavily distorted but correct 0.82, unintelligible audio that came back as foreign-sounding gibberish 0.23; silence and noise come back empty. A transcription prompt quoting what the agent last said is deliberately not used: on silence it made the model invent whole sentences at high confidence.
+
+**Poor microphones (2026-10-21).** Measured on test sentences degraded to sound like a cheap laptop mic across a room (quiet, band-limited to 300–3200 Hz, fan noise), the transcriber mostly got the names wrong: "Cloud9" for CloudNine, "you here" for Maria, "Paramatta". Four changes:
+- **Names-only hint.** Each turn sends a short term list as the prompt: the agent's name, the business name, the agent's `voice.vocabulary` (optional, up to 40 terms) and names already said in the call. With it, all three test sentences came back word-perfect. On pure noise the model sometimes returns the hint itself (5 of 9 noise clips). `echoesHint()` spots that and transcribes again without the hint, which returns nothing (`VOICE_TURN.hintRetried`).
+- **Model.** `gpt-4o-mini-transcribe` stays. With the hint, `gpt-4o-transcribe` was no more accurate, and on noise it invented short phrases in other languages. Override with `SPEECH_STT_MODEL`.
+- **No clipped first word.** The browser keeps the last 0.6 s of microphone audio, so a turn includes the syllable spoken before speech was detected. Before, recording only started once speech was detected, which cut off the start of every turn.
+- **Clean audio.** Turns are sent as 16 kHz mono WAV instead of compressed Opus, captured by an AudioWorklet. Quiet microphones are brought up to a normal level (at most 8×), trailing silence is trimmed, and rumble below 90 Hz is filtered out. Browsers without AudioWorklet fall back to MediaRecorder.
 
 **Talk panel: a call, not voice messages (2026-10-20).** It sits at the top of the agent page. **Start call** plays the greeting and keeps the microphone open until **End call**:
-- **No buttons per turn.** Voice detection in the browser measures the microphone level against a noise floor it learns while the room is quiet. About 150 ms of speech starts a turn, and 0.8 s of silence ends and sends it. Clicks and coughs under 0.5 s are ignored, and turns are capped at 30 s. A turn that transcribes to nothing is dropped silently, so background noise never makes the agent say "sorry?".
-- **Interrupting by talking.** While the agent speaks, about 250 ms of clearly louder speech stops it mid-sentence and starts your turn; its bubble is marked "Interrupted". The higher threshold, plus the browser's echo cancellation, keeps the agent's own voice from the speakers from cutting it off. A headset works best. Speaking while the agent is still thinking starts a new turn too; the earlier answer is then shown but not played.
+- **No buttons per turn.** Voice detection in the browser measures the microphone level (speech band, 90 Hz–4 kHz) against a noise floor it learns while the room is quiet. The lowest level that counts as speech is 0.006 RMS, because quiet laptop mics gave 0.01–0.03. About 150 ms of speech starts a turn, and 0.65 s of silence ends and sends it. Clicks and coughs under 0.5 s are ignored, and turns are capped at 30 s. A turn that transcribes to nothing is dropped silently, so background noise never makes the agent say "sorry?".
+- **Interrupting by talking (reworked 21 Oct).** Before, interrupting needed a fixed level (0.05 RMS, 6× the noise floor) that ordinary speech on a laptop mic rarely reached. Now:
+  - The page measures what it is playing and learns, during the call, how much of the agent's voice the microphone picks up. With a headset that is almost nothing; with laptop speakers it is whatever echo cancellation leaves.
+  - When the mic is 1.3× louder than that expected echo for 100 ms, the agent is turned down to a quarter. An echo drops with it and a person talking doesn't. If the mic stays 3× over the new expected echo for another 100 ms, the agent stops and your turn starts. Otherwise its volume comes back within about 0.35 s.
+  - The turn keeps your audio from just before you were first heard, so the interrupting words aren't lost.
+  - The expected echo is also used between sentences and just after the agent stops. Without that, its echo tail was sometimes transcribed as you saying "Right." or "So...".
+  - The page compares playback with the loudest moment of the last 200 ms, because echo arrives a little later. If the agent was turned down but it proved to be echo, the estimate is raised.
+  - **Echo guard (server).** A turn that started by interrupting (`interrupted=1`) is ignored like silence when it is only a backchannel ("Sure.", "Mm-hm") or mostly the agent's own last words (`soundsLikeEcho()`). Transcripts with no English letters at all ("Угу", "誰だ?": noise) are ignored on every turn (`VOICE_TURN.ignored`).
+  - Tested 21 Oct in headless Firefox with a scripted microphone: speech at a normal level, and the page's own output fed back after its volume control at 5%, 25% and 50%, with no echo cancellation. Before the echo guard and the raised estimate, 25% echo made the agent interrupt itself and answer its own voice in a loop. After them it never did. During the first greeting the agent's volume dipped for about 1 s in total while the page learned the echo. Interruptions took 0.9–1.1 s from the first word. Turns spoken while the agent was quiet transcribed cleanly. Turns spoken over the agent with raw echo were sometimes garbled ("Demetri" for "Demo"), which the browser's echo cancellation should largely remove. A headset works best.
 - **Memory of the call.** Each turn sends the last 8 exchanges (as `history`, 400 characters each). The route gives the agent the conversation and the new line, so follow-ups like "what about Saturdays?" work.
 - **Mute** (detection paused), a waveform that follows your microphone or the agent's voice, the current exchange with earlier turns collapsible, "Play my recording", a microphone picker, and "See how it answered", which opens that turn's run and reasoning on the same page.
 - **Latency (streamed, 20 Oct).** Before: each step finished before the next started, so the reply began 5.9–6.3 s after upload. Now:
@@ -82,6 +96,7 @@ The recording is not stored by the platform. Cartesia keeps the private voice un
 |---|---|---|
 | `OPENAI_API_KEY` | — | Speech-to-text, OpenAI text-to-speech, and document embeddings |
 | `SPEECH_STT_PROVIDER` | `openai` | Speech-to-text provider (only `openai` today) |
+| `SPEECH_STT_MODEL` | `gpt-4o-mini-transcribe` | Transcription model (see "Poor microphones") |
 | `SPEECH_TTS_PROVIDER` | `openai` | `openai` or `cartesia` (an agent's `voice.provider` overrides it) |
 | `CARTESIA_API_KEY` | — | Needed for Cartesia voices (`sk_car_…`) |
 | `CARTESIA_VOICE_ID` | — | Default Cartesia voice when the agent doesn't name one |

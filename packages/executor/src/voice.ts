@@ -11,6 +11,11 @@ export const voiceConfigSchema = z
     /** Spoken when a conversation starts. Must say the caller is talking to an AI. */
     greeting: z.string().max(300).optional(),
     provider: z.enum(['openai', 'cartesia']).optional(),
+    /**
+     * Names and terms callers are likely to say (products, people, suburbs), given to
+     * speech-to-text as a hint so they are spelled right on poor microphones.
+     */
+    vocabulary: z.array(z.string().trim().min(1).max(60)).max(40).optional(),
     /** Provider voice: an OpenAI voice name, or a Cartesia voice id. */
     voiceId: z.string().min(1).max(100).optional(),
     /**

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, CheckCircle2, Loader2, Mic, Play, Trash2, Wand2 } from 'lucide-react'
+import { Check, CheckCircle2, Loader2, Mic, Play, Square, Trash2, Wand2 } from 'lucide-react'
 import { VoiceRecorder, cloneForm, type CloneSetup, type VoiceTake } from '../voice-recorder'
 
 interface SavedVoice { voiceId: string; consentFrom: string; consentDate: string; inUse: boolean }
@@ -36,6 +36,9 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
   /** A saved voice waiting for "Remove for good?" to be confirmed. */
   const [confirmRemove, setConfirmRemove] = useState<string | null>(null)
   const sample = useRef<HTMLAudioElement | null>(null)
+  /** "Listen" previews: which voice is loading or playing, and its audio. */
+  const [preview, setPreview] = useState<{ key: string; loading: boolean } | null>(null)
+  const previewAudio = useRef<HTMLAudioElement | null>(null)
 
   const refresh = useCallback(async () => {
     try {
@@ -44,7 +47,7 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
     } catch { /* shown as unavailable */ }
   }, [agentId])
   useEffect(() => { void refresh() }, [refresh])
-  useEffect(() => () => { sample.current?.pause() }, [])
+  useEffect(() => () => { sample.current?.pause(); previewAudio.current?.pause() }, [])
   // Arrived from the new-agent form after the voice couldn't be made: say so and reopen the recorder.
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('voice') === 'failed') {
@@ -93,6 +96,39 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
     }
   }
 
+  const stopPreview = () => {
+    previewAudio.current?.pause()
+    previewAudio.current = null
+    setPreview(null)
+  }
+
+  /** Plays the greeting in a voice without switching to it (the second time comes from the cache). */
+  const listen = async (key: string) => {
+    if (preview?.key === key) { stopPreview(); return }
+    stopPreview()
+    sample.current?.pause()
+    setError(null)
+    setPreview({ key, loading: true })
+    try {
+      const res = await fetch(`/api/agents/${agentId}/voice/preview?voice=${encodeURIComponent(key)}`)
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error ?? `Request failed (${res.status})`)
+      const url = URL.createObjectURL(await res.blob())
+      const audio = new Audio(url)
+      previewAudio.current = audio
+      const done = () => {
+        URL.revokeObjectURL(url)
+        if (previewAudio.current === audio) { previewAudio.current = null; setPreview(null) }
+      }
+      audio.onended = done
+      audio.onerror = done
+      await audio.play()
+      if (previewAudio.current === audio) setPreview({ key, loading: false })
+    } catch (e) {
+      setPreview((p) => (p?.key === key ? null : p))
+      setError(e instanceof Error ? e.message : 'Couldn’t play that voice')
+    }
+  }
+
   const use = async (choice: { voiceId: string } | { stock: true }) => {
     const key = 'stock' in choice ? 'stock' : choice.voiceId
     setBusy(key)
@@ -136,6 +172,12 @@ export function VoiceClone({ agentId, agentName }: { agentId: string; agentName:
                 <p className="text-xs text-neutral-500">{row.detail}</p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                <button onClick={() => listen(row.key)} aria-label={`${preview?.key === row.key ? 'Stop' : 'Listen to'} ${row.label}`} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800">
+                  {preview?.key === row.key
+                    ? preview.loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Square className="w-3.5 h-3.5 fill-current" />
+                    : <Play className="w-4 h-4" />}
+                  {preview?.key === row.key && !preview.loading ? 'Stop' : 'Listen'}
+                </button>
                 {row.inUse ? (
                   <span className="inline-flex items-center gap-1 rounded-full bg-green-50 dark:bg-green-900/30 px-2.5 py-1 text-xs font-medium text-green-800 dark:text-green-300"><Check className="w-3.5 h-3.5" />In use</span>
                 ) : status.canChange && (

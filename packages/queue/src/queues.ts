@@ -96,7 +96,14 @@ export async function waitForAgentRun<T = unknown>(jobId: string, timeoutMs = 45
     const job = await agentRunQueue.getJob(jobId)
     if (!job) return { state: 'failed', reason: 'Run not found' }
     const state = await job.getState()
-    if (state === 'completed') return { state: 'completed', result: job.returnvalue as T }
+    if (state === 'completed') {
+      // The job object was read before it finished, so its return value can still be missing:
+      // read it again (this race crashed voice answers with "Error in input stream").
+      const done = job.returnvalue ?? (await agentRunQueue.getJob(jobId))?.returnvalue
+      if (done !== null && done !== undefined) return { state: 'completed', result: done as T }
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+      continue
+    }
     if (state === 'failed') return { state: 'failed', reason: job.failedReason ?? 'Run failed' }
     await new Promise((resolve) => setTimeout(resolve, pollMs))
   }

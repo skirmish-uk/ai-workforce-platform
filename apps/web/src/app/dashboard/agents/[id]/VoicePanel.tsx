@@ -108,10 +108,10 @@ const TICK_MS = 50
 const START_TICKS = 3
 /**
  * Interrupting the agent: after HOLD_TICKS loud ticks it pauses mid-word (held, not muted, so
- * nothing is lost) and the page listens with no echo of it in the microphone. A voice (loud, and
- * speech to the detector) for CONFIRM_TICKS after HOLD_SETTLE_TICKS stops it: the caller is
- * interrupting. A noise lets it carry on from where it paused, as soon as the detector has heard
- * a few frames of no speech (about a quarter of a second), at most after HOLD_MAX_TICKS.
+ * nothing is lost) and the page listens with no echo of it in the microphone. A voice (loud from
+ * HOLD_COUNT_FROM_TICKS, and speech to the detector) stops it: the caller is interrupting. A
+ * noise lets it carry on from where it paused, as soon as the detector has heard a few frames of
+ * no speech (about a quarter of a second), at most after HOLD_MAX_TICKS.
  *
  * Pausing, not turning it down: the detector hears the agent's own voice as speech however
  * quiet (at a tenth it still scored 0.99), and that carried into the frames of a pot clattering
@@ -120,11 +120,14 @@ const START_TICKS = 3
 const HOLD_TICKS = 2
 /**
  * Paused, the end of the agent's voice still reaches the microphone for a moment (speaker delay,
- * the room's reverb); the detector starts afresh after that, or its memory of that last bit of
- * speech carried into a clatter and let it through.
+ * the room's reverb): the detector starts afresh after HOLD_RESET_TICKS (its memory of that last
+ * bit of speech otherwise carried into a clatter and let it through), and loudness counts from
+ * HOLD_COUNT_FROM_TICKS. Waiting 150 ms for both, then asking for two loud ticks, decided only
+ * ~0.4 s into the caller's words: a short "hang on" was over by then and had to be said again.
  */
-const HOLD_SETTLE_TICKS = 3
-const CONFIRM_TICKS = 2
+const HOLD_RESET_TICKS = 1
+const HOLD_COUNT_FROM_TICKS = 2
+const CONFIRM_TICKS = 1
 const HOLD_MAX_TICKS = 9
 /**
  * After a pause that wasn't the caller, no new pause for this long: on laptop speakers the
@@ -722,11 +725,11 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         v.holdTicks++
         // Loud enough to be the caller, and a voice (not a noise in the room) heard since the
         // agent paused, once its own voice has dropped out of the microphone.
-        const settledAt = v.heldAt + HOLD_SETTLE_TICKS * TICK_MS
-        // Its voice has cleared the room: the detector starts afresh, hearing only the room.
-        if (v.holdTicks === HOLD_SETTLE_TICKS) detector.current?.reset()
-        if (v.holdTicks > HOLD_SETTLE_TICKS && speech) v.loudTicks++
-        if (v.holdTicks > HOLD_SETTLE_TICKS && heardVoice(settledAt, speechLevel)) v.voiceHeard = true
+        const settledAt = v.heldAt + HOLD_RESET_TICKS * TICK_MS
+        // Its voice has (nearly) cleared the room: the detector starts afresh, hearing only the room.
+        if (v.holdTicks === HOLD_RESET_TICKS) detector.current?.reset()
+        if (v.holdTicks >= HOLD_COUNT_FROM_TICKS && speech) v.loudTicks++
+        if (v.holdTicks > HOLD_RESET_TICKS && heardVoice(settledAt, speechLevel)) v.voiceHeard = true
         if (v.loudTicks >= CONFIRM_TICKS && v.voiceHeard) {
           v.loudTicks = 0
           bargeIn()
@@ -801,6 +804,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     if (interruptedTurn.current) form.append('interrupted', '1')
     const turn = ++activeTurn.current
     answerDone.current = false
+    let heard = false
     // If the answer is slow to start, acknowledge, the way a person says "mm-hm" on a call.
     const fillerAllowed = !fillerLastTurn.current
     fillerLastTurn.current = false
@@ -836,6 +840,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
 
       // Streamed answer: heard → for each sentence, say → pcm… (and words) → said → done.
       const update = (fn: (t: Turn) => Turn) => setTurns((prev) => prev.map((t) => (t.who === 'agent' && t.id === turn ? fn(t) : t)))
+      heard = true
       const reader = res.body!.getReader()
       const decoder = new TextDecoder()
       let pending = ''
@@ -880,7 +885,10 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     } catch (e) {
       if (live.current?.turn === turn) live.current.done = true
       if (turn === activeTurn.current) answerDone.current = true
-      setError(e instanceof Error ? e.message : 'Something went wrong')
+      // The connection dropped part-way through an answer (Firefox: "Error in input stream"):
+      // say so on that answer, and keep the call going.
+      if (heard) setTurns((prev) => prev.map((t) => (t.who === 'agent' && t.id === turn ? { ...t, note: 'The connection dropped, so part of this answer may be missing.' } : t)))
+      else setError(e instanceof Error ? e.message : 'Something went wrong')
     }
   }
 

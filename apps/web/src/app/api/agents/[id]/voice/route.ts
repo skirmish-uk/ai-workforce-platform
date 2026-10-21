@@ -307,7 +307,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           const outcome = runId ? await waitForAgentRun<RunAgentResult>(runId, 45_000, 100) : null
           // The last published deltas can land just after the job completes.
           await new Promise((resolve) => setTimeout(resolve, 80))
-          if (outcome?.state === 'completed') {
+          if (outcome?.state === 'completed' && outcome.result) {
             result = outcome.result
             status = result.status
             timings.agentRunMs = result.durationMs

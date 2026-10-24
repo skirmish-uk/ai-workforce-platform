@@ -525,6 +525,10 @@ const HANDOFFS: Record<string, string[]> = {
   'demo-scheduler-1': ['demo-crm-1'],
   'demo-manager-1': ['*'],
 }
+/** Minutes a person would spend on one of each agent's tasks (the impact page's "time saved"). */
+const MANUAL_MINUTES: Record<string, number> = {
+  'demo-agent-1': 15, 'demo-assistant-1': 8, 'demo-manager-1': 15, 'demo-scheduler-1': 10, 'demo-triage-1': 20, 'demo-crm-1': 30, [STAGED_REPAIR_AGENT_ID]: 12,
+}
 const MEMORY_AGENTS = ['demo-agent-1', 'demo-assistant-1', 'demo-manager-1', 'demo-scheduler-1', 'demo-triage-1', 'demo-crm-1', STAGED_REPAIR_AGENT_ID]
 
 /** A few things staff told the team when it was set up, so the memory page isn't empty. */
@@ -552,7 +556,9 @@ export async function enableTeamwork(prisma: PrismaClient, tenantId: string, cre
     // Prepare everything, then wait: an action held for approval doesn't stop the rest of the job.
     const approvals = (contract.approvals ?? {}) as Record<string, unknown>
     if (approvals.mode === undefined) next.approvals = { ...approvals, mode: 'continue' }
-    if (next.memory !== contract.memory || next.handoffs !== contract.handoffs || next.approvals !== contract.approvals) {
+    const assessment = (contract.taskAssessment ?? {}) as Record<string, unknown>
+    if (assessment.manualEffortMinutes === undefined && MANUAL_MINUTES[id]) next.taskAssessment = { ...assessment, manualEffortMinutes: MANUAL_MINUTES[id] }
+    if (next.memory !== contract.memory || next.handoffs !== contract.handoffs || next.approvals !== contract.approvals || next.taskAssessment !== contract.taskAssessment) {
       await prisma.agent.update({ where: { id }, data: { config: { ...config, contract: next } as Prisma.InputJsonValue } })
     }
   }

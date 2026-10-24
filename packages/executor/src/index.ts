@@ -30,3 +30,4 @@ export { renderDigest, appBaseUrl, splitRecipients } from './notifications/forma
 export * from './memory'
 export * from './handoffs'
 export * from './onboarding'
+export * from './impact'

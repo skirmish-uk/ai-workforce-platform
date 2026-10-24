@@ -4,6 +4,8 @@ import { DashboardNav } from './DashboardNav'
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: 'LayoutDashboard' },
   { name: 'Team', href: '/dashboard/team', icon: 'Network' },
+  { name: 'Team cases', href: '/dashboard/cases', icon: 'Workflow' },
+  { name: 'What the team knows', href: '/dashboard/memory', icon: 'Lightbulb' },
   { name: 'Agents', href: '/dashboard/agents', icon: 'Bot' },
   { name: 'Approvals', href: '/dashboard/approvals', icon: 'CheckCircle2' },
   { name: 'Improvements', href: '/dashboard/improvements', icon: 'Sparkles' },

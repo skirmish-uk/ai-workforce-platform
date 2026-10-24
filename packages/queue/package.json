@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ai-workforce/db": "^0.0.1",
+    "@ai-workforce/domain": "^0.0.1",
     "@ai-workforce/executor": "^0.0.1",
     "@ai-workforce/knowledge": "^0.0.1",
     "@ai-workforce/llm": "^0.0.1",

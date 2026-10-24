@@ -1,4 +1,4 @@
-import type { PrismaClient } from '@prisma/client'
+import type { Prisma, PrismaClient } from '@prisma/client'
 
 /**
  * The showcase team: three specialists that, with Sarah (sales), Ava (client questions) and
@@ -507,4 +507,60 @@ export async function restoreStagedFlaw(prisma: PrismaClient, tenantId: string):
   await prisma.agentPermission.deleteMany({ where: { agentId: STAGED_REPAIR_AGENT_ID } })
   await prisma.agent.update({ where: { id: STAGED_REPAIR_AGENT_ID }, data: { version: 1, status: 'DRAFT' } })
   return { revisions: revisions.count, playbookVersions: playbooks.count }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Teamwork and memory (packages/executor/src/handoffs.ts, memory.ts)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Who hands work to whom. Iris routes the inbox; Sarah, Jordan and Ava pass bookings to Riley
+ * and record-keeping to Casey; Morgan (the manager) can hand anything to anyone.
+ */
+const HANDOFFS: Record<string, string[]> = {
+  'demo-triage-1': ['demo-agent-1', 'demo-scheduler-1', 'demo-crm-1'],
+  'demo-agent-1': ['demo-scheduler-1', 'demo-crm-1'],
+  [STAGED_REPAIR_AGENT_ID]: ['demo-agent-1', 'demo-scheduler-1'],
+  'demo-assistant-1': ['demo-agent-1', 'demo-scheduler-1'],
+  'demo-scheduler-1': ['demo-crm-1'],
+  'demo-manager-1': ['*'],
+}
+const MEMORY_AGENTS = ['demo-agent-1', 'demo-assistant-1', 'demo-manager-1', 'demo-scheduler-1', 'demo-triage-1', 'demo-crm-1', STAGED_REPAIR_AGENT_ID]
+
+/** A few things staff told the team when it was set up, so the memory page isn't empty. */
+const STARTER_MEMORIES = [
+  { id: 'demo-memory-hours', category: 'business', content: 'The office is open Monday to Friday, 9am to 5:30pm Sydney time (meetings are booked between 9am and 5pm), and closed on public holidays and between Christmas and New Year.' },
+  { id: 'demo-memory-discovery', category: 'process', content: 'Discovery calls are 30 minutes on video and our account director, Alex Chen (alex.chen@demo-agency.example), takes them: invite Alex to every discovery call.' },
+  { id: 'demo-memory-proposals', category: 'process', content: 'Proposals go out within two business days of a discovery call; nobody quotes custom prices before that call.' },
+  { id: 'demo-memory-silva', category: 'customer', subject: 'Silva Design', content: 'Silva Design (Ana Silva) is a Growth package client since March; monthly report goes out on the 3rd.' },
+]
+
+/**
+ * Turns on shared memory and hand-offs for the demo team. Unlike the rest of the seed this also
+ * applies to agents that revisions have changed, but only fills in settings an agent doesn't
+ * have yet (a person or a revision that set them keeps theirs).
+ */
+export async function enableTeamwork(prisma: PrismaClient, tenantId: string, createdById?: string): Promise<void> {
+  for (const id of MEMORY_AGENTS) {
+    const agent = await prisma.agent.findFirst({ where: { id, tenantId } })
+    const config = agent?.config && typeof agent.config === 'object' && !Array.isArray(agent.config) ? (agent.config as Record<string, unknown>) : null
+    const contract = config?.contract && typeof config.contract === 'object' ? (config.contract as Record<string, unknown>) : null
+    if (!agent || !config || !contract) continue
+    const next = { ...contract }
+    if (next.memory === undefined) next.memory = { mode: 'tenant' }
+    if (next.handoffs === undefined && HANDOFFS[id]) next.handoffs = { enabled: true, allowedAgents: HANDOFFS[id] }
+    // Prepare everything, then wait: an action held for approval doesn't stop the rest of the job.
+    const approvals = (contract.approvals ?? {}) as Record<string, unknown>
+    if (approvals.mode === undefined) next.approvals = { ...approvals, mode: 'continue' }
+    if (next.memory !== contract.memory || next.handoffs !== contract.handoffs || next.approvals !== contract.approvals) {
+      await prisma.agent.update({ where: { id }, data: { config: { ...config, contract: next } as Prisma.InputJsonValue } })
+    }
+  }
+  for (const m of STARTER_MEMORIES) {
+    await prisma.memory.upsert({
+      where: { id: m.id },
+      update: {},
+      create: { ...m, tenantId, trust: 'staff', status: 'ACTIVE', source: { kind: 'staff' }, createdById: createdById ?? null, reviewedById: createdById ?? null, reviewedAt: new Date() },
+    })
+  }
 }

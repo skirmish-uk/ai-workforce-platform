@@ -7,6 +7,7 @@ import { readKillSwitch, resolveEffectiveStage } from './safety'
 import { auditToolEvent, runAuthorizedTool, type ToolExecutorFn } from './tool-runner'
 // Import cycle (revisions → evaluation → agent → approvals) is safe: only used inside functions.
 import { closeRevisionApproval, promoteRevision } from './workforce/revisions'
+import { settleTaskApproval } from './handoffs'
 
 export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED' | 'EXECUTING' | 'EXECUTED' | 'EXECUTION_FAILED'
 
@@ -189,6 +190,13 @@ export async function decideApproval(params: {
     },
   })
 
+  if (status === 'REJECTED' && payloadKind.kind === 'tool_call') {
+    await settleTaskApproval(approval.id, 'rejected', params.reason).catch(() => undefined)
+    if (approval.agentId && params.reason && params.reason.trim().length >= 8) {
+      await learnFromRejection({ tenantId: approval.tenantId, agentId: approval.agentId, approvalId: approval.id, action: approval.action, reason: params.reason, userId: params.actor.id }).catch(() => undefined)
+    }
+  }
+
   const kind = ((approval.input ?? {}) as { kind?: ApprovalPayload['kind'] }).kind ?? 'unknown'
   return { status, workflowRunId: approval.workflowRunId, kind }
 }
@@ -201,6 +209,7 @@ async function expireApproval(id: string, tenantId: string, workflowRunId: strin
   if (payload.kind === 'agent_revision' && payload.revisionId) {
     await closeRevisionApproval(payload.revisionId, 'EXPIRED')
   }
+  await settleTaskApproval(id, 'expired').catch(() => undefined)
   if (workflowRunId) {
     await prisma.workflowRun.updateMany({
       where: { id: workflowRunId, status: 'APPROVAL_REQUIRED' },
@@ -210,6 +219,29 @@ async function expireApproval(id: string, tenantId: string, workflowRunId: strin
   await prisma.auditLog.create({
     data: { action: 'APPROVAL_EXPIRED', entityType: 'Approval', entityId: id, tenantId, workflowRunId, newData: { agentId } },
   })
+}
+
+/**
+ * A person turning down what an agent prepared, with a reason, is the clearest lesson there is:
+ * kept as a correction for that agent (trusted: a person wrote it), shown on /dashboard/memory
+ * and given to the agent in future runs (./memory.ts).
+ */
+async function learnFromRejection(p: { tenantId: string; agentId: string; approvalId: string; action: string; reason: string; userId: string }): Promise<void> {
+  const reason = redactString(p.reason.trim(), 360)
+  const tool = p.action.replace(/^[a-z-]+__/, '').replace(/_/g, ' ')
+  const memory = await prisma.memory.create({
+    data: {
+      tenantId: p.tenantId,
+      agentId: p.agentId,
+      category: 'correction',
+      trust: 'staff',
+      status: 'ACTIVE',
+      content: `Staff turned down your request to ${tool}: "${reason}". Take this into account next time.`,
+      source: { kind: 'approval_rejected', approvalId: p.approvalId },
+      createdById: p.userId,
+    },
+  })
+  await prisma.auditLog.create({ data: { action: 'MEMORY_SAVED', entityType: 'Memory', entityId: memory.id, tenantId: p.tenantId, userId: p.userId, newData: { agentId: p.agentId, category: 'correction', from: 'approval_rejected', approvalId: p.approvalId } } })
 }
 
 /** Marks every pending approval past its expiry as EXPIRED (called from the scheduler tick). */
@@ -267,6 +299,7 @@ export async function executeApprovedAction(
       where: { id: approvalId },
       data: { status, output: redact({ output, error }) as unknown as Prisma.InputJsonValue },
     })
+    await settleTaskApproval(approvalId, status === 'EXECUTED' ? 'executed' : 'failed', error).catch(() => undefined)
     return { approvalId, status, workflowRunId: approval.workflowRunId, workflowStepId: payload.workflowStepId, output, error }
   }
 

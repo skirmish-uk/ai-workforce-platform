@@ -6,6 +6,7 @@ import type { LLMSystemBlock } from '@ai-workforce/llm'
 import { resolveAgentContract, type AgentContract } from './contract'
 import { formatBusinessContext, readBusinessContext } from './business-context'
 import { PLATFORM_POLICY, wrapUntrusted } from './untrusted'
+import { loadMemoryContext } from './memory'
 
 export interface KnowledgeExcerpt {
   documentId: string
@@ -34,6 +35,8 @@ export interface AssembledContext {
   warnings: string[]
   /** Prompt-injection heuristics that fired on retrieved content, by source. */
   injectionSignals: Array<{ source: string; signals: string[] }>
+  /** Ids of the memories placed in the prompt (./memory.ts). */
+  memoryUsed: string[]
 }
 
 export interface BuildContextOptions {
@@ -44,6 +47,12 @@ export interface BuildContextOptions {
   toolNotes?: string[]
   /** Clock for the "Current date and time" section (tests). */
   now?: Date
+  /** Who the agent is talking to, when the platform knows (per request). */
+  speaker?: string | null
+  /** How this agent works with its team and memory (stable: cached with the rest of the prefix). */
+  teamGuidance?: string | null
+  /** Shared memory (contract.memory.mode "tenant"): the best matches for this text go in the prompt. */
+  memory?: { query: string; limit: number }
 }
 
 /**
@@ -234,6 +243,11 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
     return wrapped.text
   })
 
+  const memory = options.memory
+    ? await loadMemoryContext({ tenantId: agent.tenantId, agentId, query: options.memory.query, limit: options.memory.limit })
+    : { text: null, used: [], injectionSignals: [] }
+  injectionSignals.push(...memory.injectionSignals)
+
   const clock = formatCurrentTime(agent.tenant.settings, options.now)
   if (clock.warning) warnings.push(clock.warning)
 
@@ -246,6 +260,7 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
     `## Business context\n${formatBusinessContext(business.context)}`,
     agent.systemPrompt?.trim() ? `## Agent instructions\n${agent.systemPrompt.trim()}` : null,
     skills.length ? `## Playbooks\n${skills.map(formatSkillSection).join('\n\n')}` : null,
+    options.teamGuidance ?? null,
   ]
   const knowledgeText = knowledgeBlocks.length
     ? `## Reference knowledge\nRetrieved for this request. Cite the document title when you rely on it.\n\n${knowledgeBlocks.join('\n\n')}`
@@ -256,6 +271,8 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
   // Specific to this request (and fixed for the whole run, since context is built once per run).
   const perRequest = [
     knowledgeIsFixed ? null : knowledgeText,
+    memory.text,
+    options.speaker ? `## Who you're talking to\n${options.speaker}` : null,
     `## Current date and time\n${clock.text}. Interpret relative dates ("tomorrow", "next week") from this.`,
   ]
   const stableText = stable.filter(Boolean).join('\n\n')
@@ -270,5 +287,6 @@ export async function buildAgentContext(agentId: string, options: BuildContextOp
     knowledgeUsed,
     warnings,
     injectionSignals,
+    memoryUsed: memory.used,
   }
 }

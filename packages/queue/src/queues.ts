@@ -12,6 +12,8 @@ export interface AgentRunJobData {
   streamChannel?: string
   /** The dashboard conversation this run belongs to, and the person's own words in it. */
   conversation?: { id: string; message: string }
+  /** A team-case task (packages/executor/src/handoffs.ts): the input is built from the case when the run starts. */
+  taskId?: string
 }
 
 export interface WorkflowRunJobData {
@@ -53,6 +55,11 @@ export const revisionQueue = new Queue<RevisionJobData>('agent-revision', { conn
 
 export async function enqueueAgentRun(data: AgentRunJobData) {
   return agentRunQueue.add('agent-run', data)
+}
+
+/** A team-case task. Job id == the task's run id, so queueing it twice runs it once. */
+export async function enqueueAgentTask(task: { id: string; runId: string | null; agentId: string }) {
+  return agentRunQueue.add('agent-task', { agentId: task.agentId, input: '', taskId: task.id, trigger: 'event' }, { jobId: task.runId ?? `task-${task.id}` })
 }
 
 export async function enqueueWorkflowRun(data: WorkflowRunJobData, options: { resumeKey?: string } = {}) {

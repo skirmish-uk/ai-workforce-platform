@@ -1,8 +1,8 @@
 import { CronExpressionParser } from 'cron-parser'
 import { prisma } from '@ai-workforce/db'
 import type { AgentStatus, Prisma, Schedule } from '@prisma/client'
-import { expireStaleApprovals, findDueManagerReviews, notifyAgentActions, notifyHandovers, notifyPendingApprovals, findPendingRevisionIds, resolveAgentContract, watchPromotedRevisions } from '@ai-workforce/executor'
-import { agentRunQueue, enqueueRevision, type AgentRunJobData } from './queues'
+import { expireStaleApprovals, queuedTasks, findDueManagerReviews, notifyAgentActions, notifyHandovers, notifyPendingApprovals, findPendingRevisionIds, resolveAgentContract, watchPromotedRevisions } from '@ai-workforce/executor'
+import { agentRunQueue, enqueueAgentTask, enqueueRevision, type AgentRunJobData } from './queues'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -133,6 +133,18 @@ export async function dispatchManagerReviews(now = new Date()): Promise<number> 
   return due.length
 }
 
+/** Team-case tasks still queued after this long are sent again (the worker restarted mid-hand-off). */
+const STUCK_TASK_MS = 30_000
+
+export async function dispatchQueuedTasks(): Promise<number> {
+  const tasks = await queuedTasks(STUCK_TASK_MS)
+  for (const task of tasks) {
+    const row = await prisma.agentTask.findUnique({ where: { id: task.id }, select: { toAgentId: true } })
+    if (row) await enqueueAgentTask({ id: task.id, runId: task.runId, agentId: row.toAgentId })
+  }
+  return tasks.length
+}
+
 const MANAGER_CHECK_INTERVAL_MS = 10 * 60_000
 let lastManagerCheck = 0
 
@@ -149,6 +161,7 @@ export function startScheduler(intervalMs = POLL_INTERVAL_MS): NodeJS.Timeout {
     notifyHandovers()
       .then((r) => r.handovers && console.log(`Handover emails: ${r.handovers} handover(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
       .catch((error) => console.error('Handover notification sweep failed:', error))
+    dispatchQueuedTasks().catch((error) => console.error('Task dispatch failed:', error))
     dispatchRevisions().catch((error) => console.error('Revision dispatch failed:', error))
     watchPromotedRevisions().catch((error) => console.error('Revision watch failed:', error))
     // Checking every tenant's metrics is heavier than the rest of the tick: every 10 minutes is enough.

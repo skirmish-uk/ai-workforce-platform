@@ -153,6 +153,19 @@ All three are also reachable through Morgan's "Ask the team". Their test suites 
 
 **Ava** (client questions, voice) speaks with Cartesia's Australian "Bronte" voice and runs on `claude-haiku-5-5`. Besides answering from the documents she can check the calendar's free time and offer slots ("Tuesday at 10am or Wednesday at 2pm"); she never books, and says a person will confirm. Try in the Talk panel: "What are your opening hours?", "Could I come in for a chat this week?", "How much is the Growth package?".
 
+### The team working together (Team cases)
+
+1. **Team cases** → **New enquiry from the website (Sarah)**. Watch the case live: Sarah qualifies Daniel from Stackwise, drafts the reply and the CRM record (held for approval) and hands the booking to Riley, who prepares the invite with Alex Chen (from what the team knows). About a minute in all.
+2. **Sort this morning's inbox (Iris)**: Iris hands the CloudNine lead to Sarah and the urgent legal email to a person. If an agent stops to ask something, answer it in the case and it carries on.
+3. Approve the waiting actions on **Approvals**; the case turns Done.
+
+### The team learning (What the team knows)
+
+1. Open an agent (e.g. Ava) and type: "Heads up for the team: from 1 December our office hours change to 8:30am to 4:30pm." She saves it as staff knowledge.
+2. **What the team knows**: the note is there, used by every agent. Ask Riley to book something at 4:45pm on a December weekday: he refuses, citing the new hours.
+3. Say the same thing on a voice call ("I'm the owner…"): it arrives as **waiting for you**, unused until you confirm it. Customers can't teach the team rules.
+4. Reject an approval with a reason: it becomes a lesson for that agent, shown on the page.
+
 ### Kill switch
 
 **Stop all agents** on the Team page (admins only) stops every agent at once: new runs end as "Blocked" and approved actions don't execute. A red banner stays on the Team page until you press **Turn agents back on**. Same switch as `PUT /api/tenants/[id]/kill-switch`; every change is in the audit trail.

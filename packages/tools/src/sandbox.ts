@@ -62,23 +62,30 @@ function offsetMinutes(offset: string): number {
 }
 
 /**
- * The calendar as a business sees it: wall-clock days and times in one UTC offset, so "10am"
- * means 10am where the business is, whatever time zone the server runs in. Starts from the
- * request's timeMin when given (and in its offset), otherwise from now in Sydney time.
+ * The calendar as a business sees it: wall-clock days and times in the business's own time zone
+ * (Sydney), so "10am" means 10am where the business is, whatever offset the request or the server
+ * uses. A request with no offset is read as Sydney time. Starts from the request's timeMin when
+ * given (that day too, if it starts before 9am), otherwise from tomorrow.
  */
 class SandboxCalendar {
   readonly offset: string
   private readonly start: Date
+  private readonly includeStartDay: boolean
   constructor(timeMin?: string) {
-    const parsed = timeMin ? new Date(timeMin) : null
-    this.start = parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date()
-    this.offset = (timeMin && offsetOf(timeMin)) || zoneOffset(SANDBOX_TIME_ZONE, this.start)
+    const local = timeMin && !offsetOf(timeMin) ? `${timeMin}${zoneOffset(SANDBOX_TIME_ZONE, new Date(`${timeMin}Z`))}` : timeMin
+    const parsed = local ? new Date(local) : null
+    const valid = parsed !== null && !Number.isNaN(parsed.getTime())
+    this.start = valid ? parsed : new Date()
+    this.offset = zoneOffset(SANDBOX_TIME_ZONE, this.start)
+    // The start day itself only when the request starts before the working day does.
+    this.includeStartDay = valid && new Date(this.start.getTime() + offsetMinutes(this.offset) * 60_000).getUTCHours() < 9
   }
-  /** Business days (Mon–Fri) after the start date, as local calendar dates. */
+  /** Business days (Mon–Fri) from the start date, as local calendar dates. */
   businessDays(count: number): Array<{ y: number; m: number; d: number }> {
     const local = new Date(this.start.getTime() + offsetMinutes(this.offset) * 60_000)
     const days: Array<{ y: number; m: number; d: number }> = []
     const cursor = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()))
+    if (this.includeStartDay) cursor.setUTCDate(cursor.getUTCDate() - 1)
     while (days.length < count) {
       cursor.setUTCDate(cursor.getUTCDate() + 1)
       const dow = cursor.getUTCDay()

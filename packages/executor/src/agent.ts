@@ -28,6 +28,8 @@ import { readVoiceConfig } from './voice'
 import { CONVERSATION_MESSAGE_MAX_CHARS, isConversationId } from './conversations'
 import { readSelfManagementPolicy } from './workforce/policy'
 import { executeWorkforceTool, workforceToolsFor, WORKFORCE_READ_TOOLS } from './workforce/tools'
+import { RECALL_TOOL, REMEMBER_TOOL, executeRecall, executeRemember, markMemoriesUsed } from './memory'
+import { HAND_OFF, executeHandOff, finishTask, handOffTool, taskRunId, type RunTask, type Teammate } from './handoffs'
 
 /** Hard ceiling on delegation depth regardless of any contract. */
 export const MAX_DELEGATION_DEPTH = 3
@@ -45,7 +47,7 @@ export type RunAgentStatus =
 export type RunPhase = 'diagnose' | 'assemble' | 'act' | 'assess'
 
 /** 'replay': the revision pipeline re-running a recent real input against a candidate (always dry-run). */
-export type RunTrigger = 'manual' | 'api' | 'schedule' | 'workflow' | 'delegation' | 'evaluation' | 'replay' | 'voice' | 'event'
+export type RunTrigger = 'manual' | 'api' | 'schedule' | 'workflow' | 'delegation' | 'evaluation' | 'replay' | 'voice' | 'event' | 'handoff'
 
 export interface RunAgentDeps {
   createClient?: (provider: string, model: string, config: LLMClientConfig) => LLMClient
@@ -91,6 +93,10 @@ export interface RunAgentOptions {
   onTextDelta?: (delta: string, step: number) => void
   /** The dashboard conversation this run belongs to; its id and the person's own words go on the audit row. */
   conversation?: { id: string; message: string }
+  /** The team-case task this run is doing (./handoffs.ts); its status is updated when the run ends. */
+  task?: RunTask
+  /** A hand-off queued a task: the worker starts it straight away (the scheduler sweep is the fallback). */
+  onTaskQueued?: (task: { id: string; runId: string; agentId: string }) => void
   deps?: RunAgentDeps
 }
 
@@ -188,6 +194,8 @@ export interface RunAgentResult {
   /** Problems a finished run can have despite its status (see ./quality.ts). */
   qualitySignals: QualitySignal[]
   approvalId?: string
+  /** Every approval this run is waiting on (more than one with approvals.mode "continue"). */
+  approvalIds?: string[]
   pendingTool?: { toolName: string; input: unknown }
   /** Voice: the agent ended the call (platform__end_call) after saying goodbye. */
   endCall?: boolean
@@ -275,6 +283,44 @@ function delegateTool(specialists: Specialist[]): LLMTool {
       required: ['specialistAgentId', 'task'],
     },
   }
+}
+
+/**
+ * How to work with the team (hand-offs) and what to remember. After the playbooks, so it
+ * overrides "say it should go to Sarah" in an older playbook with actually handing it over.
+ */
+export function teamGuidance(p: { teammates: Map<string, Teammate>; remember: boolean; voice: boolean }): string | null {
+  const parts: string[] = []
+  if (p.teammates.size) {
+    const list = Array.from(p.teammates.values()).map((t) => `- ${t.name.split(/\s+[-–]\s+/)[0]} (${t.role})${t.handles?.length ? `: ${t.handles.slice(0, 3).join('; ')}` : ''}`).join('\n')
+    parts.push(`## Working with your team
+Teammates you can hand work to:
+${list}
+- When part of the work is a teammate's (your playbook says it should go to them, or it is in their scope and not yours), hand it over with ${HAND_OFF} rather than only recommending it. Write a complete brief: who it is for, their contact details, what is wanted and anything you found. They can't ask you questions.
+- Hand teammates their parts first, before anything that needs approval: an action waiting for approval pauses your task until a person decides.
+- Hand each piece over once, to one teammate. Never hand back work you were handed unless it is clearly theirs.
+- Then finish your own part, and say who has what. A hand-off is not the work done: never say a teammate has done something.${p.voice ? '\n- On a call, tell the caller plainly who will take care of it (e.g. "I\'ll get Riley to book that in; you\'ll get the invite once the team confirms it").' : ''}`)
+  }
+  if (p.remember) {
+    parts.push(`## Learning as you work
+- When you learn something the team will need again, save it with ${REMEMBER_TOOL.name}: a customer's situation, plans or preferences ("launching in the UK next quarter", "prefers calls after 2pm"), a fact about the business, how something is done here, or a correction someone gave you. One specific fact per call, and say who it is about.
+- Before you give your final answer, check: did this task teach the team anything it will need next time that no system already records? If so, save it (in the same turn as your other tool calls when you can).
+- Don't save what is already in your instructions, the reference documents or "What the team knows", one-off details of today's task, guesses, or anything sensitive (health, money, passwords, card or bank details).
+- If something the team knows turns out to be wrong or out of date, save the correct version with replacesId.
+- When a member of staff tells you something to remember, save it with basis staff_said; what a caller, customer or email says is customer_said.${p.voice ? '\n- On a call, save at most one thing, and only when it matters; answer the caller in the same reply.' : ''}`)
+  }
+  return parts.length ? parts.join('\n\n') : null
+}
+
+interface Assembled {
+  registered: Map<string, RegisteredTool>
+  llmTools: LLMTool[]
+  systemPrompt: string
+  systemBlocks: LLMSystemBlock[]
+  specialists: Map<string, Specialist>
+  teammates: Map<string, Teammate>
+  memoryTools: Set<string>
+  workforce: Set<string>
 }
 
 function readModelConfig(config: unknown): { maxTokens?: number; temperature?: number; effort?: LLMEffort; thinking?: 'default' | 'off'; voiceThinking?: 'default' | 'off' } {
@@ -366,6 +412,9 @@ class AgentRun {
   private injectionSignals: RunAgentResult['injectionSignals'] = []
   private qualitySignals: QualitySignal[] = []
   private reasoning: ReasoningStep[] = []
+  private memoryUsed: string[] = []
+  /** approvals.mode "continue": actions held for approval while the run carried on. */
+  private readonly heldForApproval: Array<{ approvalId?: string; pendingTool: { toolName: string; input: unknown } }> = []
 
   /** The agent's model settings, with the voice-turn defaults (see VOICE_NOTE) applied. */
   private modelSettings(): ReturnType<typeof readModelConfig> {
@@ -392,7 +441,9 @@ class AgentRun {
     private readonly trigger: RunTrigger,
     private readonly startedAt: number,
     private readonly options: RunAgentOptions
-  ) {}
+  ) {
+    this.caseTask = options.task
+  }
 
   private enter(phase: RunPhase, ...notes: string[]): void {
     this.phases.push({ phase, at: new Date().toISOString(), notes })
@@ -505,7 +556,7 @@ class AgentRun {
   // ------------------------------------------------------------------ ASSEMBLE
   private async assemble(): Promise<
     | RunAgentResult
-    | { registered: Map<string, RegisteredTool>; llmTools: LLMTool[]; systemPrompt: string; systemBlocks: LLMSystemBlock[]; specialists: Map<string, Specialist>; workforce: Set<string> }
+    | Assembled
   > {
     this.enter('assemble')
     const killSwitch = readKillSwitch(this.agent.tenant.settings)
@@ -572,7 +623,14 @@ class AgentRun {
     const { policy } = readSelfManagementPolicy(this.agent.tenant.settings)
     const workforceTools = workforceToolsFor({ policy, contract: this.contract, isCandidate: this.agent.isCandidate })
 
+    const memoryOn = this.contract.memory.mode === 'tenant'
+    const memoryTools = memoryOn ? [...(this.contract.memory.write ? [REMEMBER_TOOL] : []), RECALL_TOOL] : []
+    const teammates = await this.loadTeammates()
+
     const context = await buildAgentContext(this.agent.id, {
+      speaker: await this.speaker(),
+      teamGuidance: teamGuidance({ teammates, remember: memoryTools.some((t) => t.name === REMEMBER_TOOL.name), voice: this.trigger === 'voice' }),
+      memory: memoryOn ? { query: this.input, limit: this.contract.memory.maxInPrompt } : undefined,
       // Voice turns skip the semantic search (an embedding round trip, ~0.3 s) and use the
       // agent's attached documents directly: a caller is waiting on every turn.
       query: this.trigger === 'voice' ? undefined : this.input,
@@ -582,6 +640,8 @@ class AgentRun {
         ...toolNotes,
         ...(specialists.size ? ['platform__delegate — hand a bounded subtask to a specialist'] : []),
         ...workforceTools.map((t) => `${t.name} — platform self-management tool`),
+        ...(teammates.size ? [`${HAND_OFF} — pass work to a teammate (doesn't end your run)`] : []),
+        ...memoryTools.map((t) => `${t.name} — the team's shared memory`),
         'platform__request_clarification — ask for missing information (ends the run)',
         'platform__escalate — hand off to a human (ends the run)',
         ...(this.trigger === 'voice' ? [`${END_CALL_TOOL.name} — end the phone call after saying goodbye (ends the run)`] : []),
@@ -589,6 +649,8 @@ class AgentRun {
     })
     this.contextWarnings = context.warnings
     this.injectionSignals = [...context.injectionSignals]
+    this.memoryUsed = context.memoryUsed
+    if (context.memoryUsed.length) this.note(`memory: ${context.memoryUsed.length} notes (${context.memoryUsed.join(', ')})`)
     if (context.knowledgeUsed.length) {
       this.note(`knowledge: ${context.knowledgeUsed.map((k) => `${k.documentId}${k.stale ? '(stale)' : ''}`).join(', ')}`)
     }
@@ -599,6 +661,8 @@ class AgentRun {
       ESCALATE_TOOL,
       ...(this.trigger === 'voice' ? [END_CALL_TOOL] : []),
       ...(specialists.size ? [delegateTool(Array.from(specialists.values()))] : []),
+      ...(teammates.size ? [handOffTool(Array.from(teammates.values()))] : []),
+      ...memoryTools,
       ...workforceTools,
     ]
 
@@ -612,7 +676,41 @@ class AgentRun {
       ? [...context.systemBlocks.slice(0, -1), { text: VOICE_STYLE, cache: true }, ...context.systemBlocks.slice(-1)]
       : context.systemBlocks
     const systemPrompt = this.trigger === 'voice' ? systemBlocks.map((b) => b.text).join('\n\n') : context.systemPrompt
-    return { registered, llmTools, systemPrompt, systemBlocks, specialists, workforce: new Set(workforceTools.map((t) => t.name)) }
+    return { registered, llmTools, systemPrompt, systemBlocks, specialists, teammates, memoryTools: new Set(memoryTools.map((t) => t.name)), workforce: new Set(workforceTools.map((t) => t.name)) }
+  }
+
+  /** Teammates this agent may hand work to (contract.handoffs): "*" = every non-manager agent. */
+  private async loadTeammates(): Promise<Map<string, Teammate>> {
+    const teammates = new Map<string, Teammate>()
+    const h = this.contract.handoffs
+    if (!h.enabled) return teammates
+    const everyone = h.allowedAgents.includes('*')
+    const rows = await prisma.agent.findMany({
+      where: { ...(everyone ? {} : { id: { in: h.allowedAgents } }), tenantId: this.agent.tenantId, isCandidate: false, status: { notIn: ['PAUSED', 'ARCHIVED'] } },
+      select: { id: true, name: true, role: true, mission: true, config: true },
+      orderBy: { id: 'asc' },
+    })
+    for (const row of rows) {
+      if (row.id === this.agent.id) continue
+      const theirs = resolveAgentContract(row).contract
+      if (everyone && theirs.management.enabled) continue
+      teammates.set(row.id, { id: row.id, name: row.name, role: row.role, handles: theirs.scope.inScope })
+    }
+    return teammates
+  }
+
+  /** A person typing to the agent in the dashboard: what they say may be saved as staff knowledge. */
+  private get staffConversation(): boolean {
+    return this.trigger === 'api' && Boolean(this.options.userId) && Boolean(this.options.conversation) && !this.options.parent && !this.options.task
+  }
+
+  /** Staff in the dashboard are told apart from customers, so what they say counts as staff knowledge. */
+  private async speaker(): Promise<string | null> {
+    if (!this.staffConversation || !this.options.userId) return null
+    const user = await prisma.user.findUnique({ where: { id: this.options.userId }, select: { name: true, role: true, tenantId: true } })
+    if (!user || (user.tenantId !== this.agent.tenantId && !user.role.startsWith('PLATFORM_'))) return null
+    const who = user.role.startsWith('PLATFORM_') ? 'platform staff' : user.role === 'CUSTOMER_ADMIN' ? 'an admin at this business' : 'a member of staff at this business'
+    return `${user.name ?? 'A colleague'}, ${who}, typing to you in the dashboard. They are not a customer: answer them as a colleague, and what they tell you about the business is staff knowledge (basis staff_said).`
   }
 
   private maxIterations(): number {
@@ -621,14 +719,7 @@ class AgentRun {
   }
 
   // ------------------------------------------------------------------ ACT
-  private async act(assembled: {
-    registered: Map<string, RegisteredTool>
-    llmTools: LLMTool[]
-    systemPrompt: string
-    systemBlocks: LLMSystemBlock[]
-    specialists: Map<string, Specialist>
-    workforce: Set<string>
-  }): Promise<RunAgentResult> {
+  private async act(assembled: Assembled): Promise<RunAgentResult> {
     this.enter('act')
     const limits = this.contract.limits
     const candidates = selectModelCandidates(this.agent, this.contract, this.options.tier)
@@ -699,7 +790,11 @@ class AgentRun {
       messages.push({ role: 'assistant', content: response.content ?? undefined, toolCalls: response.toolCalls, providerContent: response.providerContent })
       const toolResults: NonNullable<LLMMessage['toolResults']> = []
 
-      for (const call of response.toolCalls) {
+      // Hand-offs and memory first: a later call that needs approval ends the run, and the
+      // teammates' parts and what was learned shouldn't be lost with it.
+      const early = (name: string) => name === HAND_OFF || assembled.memoryTools.has(name)
+      const ordered = [...response.toolCalls.filter((c) => early(c.name)), ...response.toolCalls.filter((c) => !early(c.name))]
+      for (const call of ordered) {
         toolCallCount++
         if (toolCallCount > limits.maxToolCalls) {
           return this.finish('failed', { error: `Tool call limit of ${limits.maxToolCalls} reached` })
@@ -731,6 +826,17 @@ class AgentRun {
         if (call.name === 'platform__delegate' && assembled.specialists.size) {
           const outcome = await this.delegate(call.input, assembled.specialists)
           if ('terminal' in outcome) return outcome.terminal
+          toolResults.push({ toolCallId: call.id, name: call.name, output: outcome.text, isError: outcome.isError })
+          continue
+        }
+
+        if (call.name === HAND_OFF && assembled.teammates.size) {
+          const outcome = await this.handOff(call.input, assembled.teammates)
+          toolResults.push({ toolCallId: call.id, name: call.name, output: outcome.text, isError: outcome.isError })
+          continue
+        }
+        if (assembled.memoryTools.has(call.name)) {
+          const outcome = await this.runMemoryTool(call.name, call.input)
           toolResults.push({ toolCallId: call.id, name: call.name, output: outcome.text, isError: outcome.isError })
           continue
         }
@@ -832,6 +938,16 @@ class AgentRun {
             userId: this.options.userId,
           })
         }
+        if (this.contract.approvals.mode === 'continue' && !this.options.workflowRunId) {
+          this.heldForApproval.push({ approvalId, pendingTool: { toolName, input: redact(input) } })
+          return {
+            text: JSON.stringify({
+              waitingForApproval: true,
+              note: 'Held for a person to approve: it will run exactly as written once they do. It has NOT happened yet. Carry on with the rest of the task, and say in your answer that this is waiting for approval.',
+            }),
+            isError: false,
+          }
+        }
         return { terminal: await this.finish('approval_required', { approvalId, pendingTool: { toolName, input: redact(input) }, output: rationale }) }
       }
       case 'execute': {
@@ -918,6 +1034,80 @@ class AgentRun {
     return { text: JSON.stringify(outcome.output), isError }
   }
 
+  // ------------------------------------------------------------------ TEAMWORK AND MEMORY
+  private handOffs = 0
+  private remembered = 0
+  /** The case task this run is doing: given by the worker, or started by this run's first hand-off. */
+  private caseTask?: RunTask
+
+  private async handOff(input: Record<string, unknown>, teammates: Map<string, Teammate>): Promise<{ text: string; isError: boolean }> {
+    const outcome = await executeHandOff(input, {
+      tenantId: this.agent.tenantId,
+      agentId: this.agent.id,
+      agentName: this.agent.name,
+      runId: this.runId,
+      input: this.options.conversation?.message ?? this.input,
+      trigger: this.trigger,
+      userId: this.options.userId,
+      task: this.caseTask,
+      teammates,
+      maxPerRun: this.contract.handoffs.maxPerRun,
+      dryRun: this.options.dryRun === true,
+      count: this.handOffs,
+      observeOnly: this.stage === 'observe',
+    })
+    if (outcome.status === 'completed') {
+      this.handOffs++
+      if (outcome.startedCase) this.caseTask = outcome.startedCase
+      try {
+        this.options.onTaskQueued?.({ id: outcome.task.id, runId: taskRunId(outcome.task.id), agentId: String(input.toAgentId) })
+      } catch { /* the scheduler sweep starts it */ }
+    }
+    const isError = outcome.status === 'error' || outcome.status === 'denied'
+    this.toolCalls.push({
+      toolName: HAND_OFF,
+      input: redact(input),
+      output: redact(outcome.output),
+      status: outcome.status,
+      reason: outcome.status === 'completed' ? `task ${outcome.task.id} for ${String(input.toAgentId)}` : undefined,
+      error: isError ? (outcome.output as { error: string }).error : undefined,
+    })
+    if (outcome.status === 'proposed') this.proposedActions.push({ toolName: HAND_OFF, input: redact(input), reason: 'test run: not handed over' })
+    return { text: JSON.stringify(outcome.output), isError }
+  }
+
+  private async runMemoryTool(name: string, input: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+    const outcome = name === REMEMBER_TOOL.name
+      ? await executeRemember(input, {
+        tenantId: this.agent.tenantId,
+        agentId: this.agent.id,
+        runId: this.runId,
+        trigger: this.trigger,
+        staffConversation: this.staffConversation,
+        conversationId: this.options.conversation?.id,
+        caseId: this.caseTask?.caseId,
+        dryRun: this.options.dryRun === true || this.agent.isCandidate,
+        count: this.remembered,
+      })
+      : await executeRecall(input, { tenantId: this.agent.tenantId, agentId: this.agent.id })
+    if (name === REMEMBER_TOOL.name && outcome.status === 'completed') this.remembered++
+    const isError = outcome.status === 'error' || outcome.status === 'denied'
+    this.toolCalls.push({
+      toolName: name,
+      input: redact(input),
+      output: name === RECALL_TOOL.name ? undefined : redact(outcome.output),
+      status: outcome.status,
+      error: isError ? (outcome.output as { error: string }).error : undefined,
+    })
+    if (name === RECALL_TOOL.name && !isError) {
+      // Saved memories partly come from outside content: data, not instructions.
+      const wrapped = wrapUntrusted(`platform:${name}`, outcome.output)
+      if (wrapped.signals.length) this.injectionSignals.push({ source: `platform:${name}`, signals: wrapped.signals })
+      return { text: wrapped.text, isError: false }
+    }
+    return { text: JSON.stringify(outcome.output), isError }
+  }
+
   // ------------------------------------------------------------------ DELEGATION
   private async delegate(
     rawInput: Record<string, unknown>,
@@ -952,6 +1142,7 @@ class AgentRun {
       dryRun: this.options.dryRun,
       liveReads: this.options.liveReads,
       toolFixtures: this.options.toolFixtures,
+      onTaskQueued: this.options.onTaskQueued,
       deps: this.options.deps,
     })
     this.childCost += child.costUsd ?? 0
@@ -994,6 +1185,11 @@ class AgentRun {
     this.qualitySignals = detectQualitySignals(output, this.toolCalls, { conversational })
     for (const signal of this.qualitySignals) this.note(`quality signal: ${signal}`)
 
+    // Actions held for approval while the run carried on: the task isn't done until a person decides.
+    if (this.heldForApproval.length && (dod.passed || output?.trim())) {
+      const held = this.heldForApproval[0]
+      return this.finish('approval_required', { output, dod, approvalId: held.approvalId, pendingTool: held.pendingTool })
+    }
     if (dod.passed) return this.finish('completed', { output, dod })
     const madeProgress = Boolean(output?.trim()) || this.toolCalls.some((c) => c.status === 'completed')
     const failed = dod.results.filter((r) => !r.passed).map((r) => r.detail)
@@ -1032,6 +1228,7 @@ class AgentRun {
       qualitySignals: this.qualitySignals,
       reasoning: this.reasoning,
       approvalId: extra.approvalId,
+      approvalIds: this.heldForApproval.length ? this.heldForApproval.map((h) => h.approvalId).filter((id): id is string => Boolean(id)) : undefined,
       pendingTool: extra.pendingTool,
       endCall: this.endCall || undefined,
       error: extra.error ? redactString(extra.error, 1000) : undefined,
@@ -1062,6 +1259,7 @@ class AgentRun {
         dodResults: result.dod?.results.map((r) => ({ type: r.check.type, passed: r.passed, detail: r.detail })),
         proposedActions: this.proposedActions.length,
         approvalId: result.approvalId,
+        approvalIds: result.approvalIds,
         clarificationQuestions: result.clarificationQuestions,
         escalation: result.escalation,
         endCall: result.endCall,
@@ -1072,6 +1270,9 @@ class AgentRun {
         phases: this.phases,
         reasoning: this.reasoning,
         parentRunId: this.options.parent?.runId,
+        caseId: this.caseTask?.caseId,
+        taskId: this.caseTask?.id,
+        memoryUsed: this.memoryUsed.length ? this.memoryUsed : undefined,
         rootRunId: this.rootRunId,
       })
     }
@@ -1092,6 +1293,12 @@ class AgentRun {
           },
         })
         .catch((error) => console.error('Failed to record handover:', safeErrorMessage(error)))
+    }
+    if (!this.options.dryRun && !this.agent.isCandidate) {
+      await markMemoriesUsed(this.memoryUsed)
+      if (this.caseTask) {
+        await finishTask(this.caseTask.id, result).catch((error) => console.error('Failed to record the task result:', safeErrorMessage(error)))
+      }
     }
     if (status === 'completed' || status === 'partial') agentHeartbeatSafe(this.agent.id)
     if (status === 'failed') agentFailureSafe(this.agent.id, result.error)

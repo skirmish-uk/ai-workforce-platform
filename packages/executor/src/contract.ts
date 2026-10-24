@@ -99,13 +99,31 @@ export const agentContractSchema = z
         toolTimeoutMs: z.number().int().min(1_000).max(300_000).default(30_000),
       })
       .default({}),
+    /**
+     * What the team has learned (./memory.ts, /dashboard/memory). "tenant": the agent reads the
+     * business's shared memories in every run and may save new ones (platform__remember, unless
+     * `write` is false); "none": nothing carries over between runs except the audit trail.
+     */
     memory: z
       .object({
-        /**
-         * Only "none" is implemented: nothing is persisted across runs except the
-         * audit trail. Any other value is rejected so nobody believes memory is on.
-         */
-        mode: z.literal('none').default('none'),
+        mode: z.enum(['none', 'tenant']).default('none'),
+        write: z.boolean().default(true),
+        /** Most memories placed in one prompt (the best matches for the request first). */
+        maxInPrompt: z.number().int().min(1).max(40).default(12),
+      })
+      .default({}),
+    /**
+     * Passing work on to a teammate without waiting (./handoffs.ts): platform__hand_off queues an
+     * AgentTask for another agent in the same case. Unlike delegation, the result isn't handed
+     * back; the case shows each agent's part.
+     */
+    handoffs: z
+      .object({
+        enabled: z.boolean().default(false),
+        /** Agent ids this agent may hand work to; "*" = any non-manager teammate. */
+        allowedAgents: z.array(z.string().min(1)).default([]),
+        /** Hand-offs one run may make. */
+        maxPerRun: z.number().int().min(1).max(10).default(4),
       })
       .default({}),
     delegation: z
@@ -138,6 +156,13 @@ export const agentContractSchema = z
     approvals: z
       .object({
         ttlHours: z.number().positive().max(720).default(72),
+        /**
+         * pause: an action needing approval ends the run (it resumes only in a workflow).
+         * continue: the action is held for approval exactly as written and the agent carries on
+         * with the rest of the task (hand-offs, other drafts); the run ends approval_required.
+         * Workflow runs always pause, since they resume from that checkpoint.
+         */
+        mode: z.enum(['pause', 'continue']).default('pause'),
       })
       .default({}),
     evaluation: z
@@ -271,6 +296,10 @@ export function validateAgentDefinition(
   }
   if (contract.delegation.allowedSpecialists.includes('*') && !contract.management.enabled) {
     errors.push('contract.delegation.allowedSpecialists "*" (the whole team) is only allowed for a manager agent.')
+  }
+
+  if (contract.handoffs.enabled && contract.handoffs.allowedAgents.length === 0) {
+    errors.push('contract.handoffs is enabled but allowedAgents is empty.')
   }
 
   if (contract.model.privacy === 'local_only') {

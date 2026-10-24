@@ -94,6 +94,9 @@ model Tenant {
   agents            Agent[]
   notifications     Notification[]
   handovers         Handover[]
+  memories          Memory[]
+  teamCases         TeamCase[]
+  agentTasks        AgentTask[]
   skills            Skill[]
   knowledgeDocs     KnowledgeDocument[]
   knowledgeChunks   KnowledgeChunk[]
@@ -444,6 +447,103 @@ model Handover {
   tenantId       String
   tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
+  @@index([tenantId, status])
+}
+
+/// Something the team has learned about the business (packages/executor/src/memory.ts): a fact,
+/// preference, rule or correction, shared by every agent in the tenant that has memory on. Agents
+/// save them with platform__remember; staff add, edit, confirm and archive them on
+/// /dashboard/memory. What an agent learned from outside content (a customer, an email) that would
+/// change how the whole team works starts PENDING and is only used once a person confirms it.
+model Memory {
+  id           String    @id @default(cuid())
+  content      String    @db.Text
+  /// customer | preference | business | process | correction
+  category     String    @default("business")
+  /// Who or what it is about ("Henderson Family Dental", a contact email); null = the business itself.
+  subject      String?
+  /// ACTIVE (used by agents) | PENDING (waiting for a person to confirm) | ARCHIVED
+  status       String    @default("ACTIVE")
+  /// staff (a person wrote or confirmed it) | agent (an agent concluded it from its own work) | external (said by a customer or found in an email)
+  trust        String    @default("agent")
+  /// Only this agent uses it (a lesson for one agent); null = the whole team.
+  agentId      String?
+  /// Where it came from: { kind, runId?, conversationId?, approvalId?, caseId? }
+  source       Json      @default("{}")
+  /// The agent that saved it (null when a person did).
+  learnedById  String?
+  createdById  String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  /// The memory this one replaced (archived when this one became active).
+  replacesId   String?
+  useCount     Int       @default(0)
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, subject])
+}
+
+/// One piece of work moving through the team (packages/executor/src/handoffs.ts): an enquiry, an
+/// inbox sweep, a booking. Each agent's part is an AgentTask; the case page shows them in order.
+model TeamCase {
+  id          String      @id @default(cuid())
+  title       String
+  /// OPEN | WAITING (on a person: approval, question, hand-over) | DONE | FAILED
+  status      String      @default("OPEN")
+  /// manual | email | voice | schedule | web
+  source      String      @default("manual")
+  /// Who it is about, when known (a customer or company).
+  subject     String?
+  createdById String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tasks       AgentTask[]
+
+  @@index([tenantId, updatedAt])
+}
+
+/// One agent's part of a case: given by a person or handed over by another agent
+/// (platform__hand_off), run in the worker as its own agent run.
+model AgentTask {
+  id           String    @id @default(cuid())
+  /// What the agent is asked to do, in the words of whoever handed it over.
+  brief        String    @db.Text
+  /// Why it went to this agent (the hand-off reason).
+  reason       String?   @db.Text
+  /// QUEUED | RUNNING | DONE | WAITING_APPROVAL | NEEDS_INFO | ESCALATED | FAILED | CANCELLED
+  status       String    @default("QUEUED")
+  toAgentId    String
+  /// The agent that handed it over (null: a person or the platform).
+  fromAgentId  String?
+  /// The run that handed it over, and the run that did it (run id == BullMQ job id).
+  fromRunId    String?
+  runId        String?   @unique
+  parentTaskId String?
+  /// Hand-offs between this task and the start of the case (0 = started by a person).
+  depth        Int       @default(0)
+  /// The agent's answer, or why it stopped.
+  result       String?   @db.Text
+  approvalId   String?
+  createdById  String?
+  createdAt    DateTime  @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  caseId       String
+  case         TeamCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
   @@index([tenantId, status])
 }
 

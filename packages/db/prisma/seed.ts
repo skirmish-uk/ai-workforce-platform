@@ -1,7 +1,7 @@
 import { prisma } from '../src'
 import type { Prisma } from '@prisma/client'
 import { hash } from 'bcryptjs'
-import { seedShowcaseTeam } from './seed-showcase'
+import { enableTeamwork, seedShowcaseTeam } from './seed-showcase'
 
 /**
  * Agent contract for the demo agent (packages/executor/src/contract.ts). Starts approval-gated:
@@ -719,6 +719,10 @@ Guidelines:
 
   // Showcase specialists: Riley (meetings), Iris (inbox triage), Casey (CRM hygiene).
   await seedShowcaseTeam(prisma, demoTenant.id, { seedOwned, linkSkill })
+
+  // Shared memory and hand-offs for the whole team (also on agents revisions have changed).
+  const demoAdminUser = await prisma.user.findUnique({ where: { email: 'admin@demo-agency.local' }, select: { id: true } })
+  await enableTeamwork(prisma, demoTenant.id, demoAdminUser?.id)
 
   // Placeholder integrations in sandbox mode (fictional data, nothing real is sent; see
   // packages/tools/src/sandbox.ts) until real accounts are connected. Idempotent: one row per name; earlier

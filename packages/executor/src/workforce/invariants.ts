@@ -118,6 +118,9 @@ export function checkRevisionInvariants(input: InvariantInput): InvariantResult 
   for (const id of contract.delegation.allowedSpecialists) {
     if (!input.tenantAgentIds.has(id)) violations.push(`Delegation target "${id}" is not an agent in this tenant.`)
   }
+  for (const id of contract.handoffs.allowedAgents) {
+    if (id !== '*' && !input.tenantAgentIds.has(id)) violations.push(`Hand-off target "${id}" is not an agent in this tenant.`)
+  }
 
   // ---- test cases are append-only
   if (current) {
@@ -134,6 +137,7 @@ export function checkRevisionInvariants(input: InvariantInput): InvariantResult 
     if (risky.length) riskIncreases.push(`New agent with high-risk tools: ${risky.join(', ')}.`)
     if (stageRank(contract.autonomyStage) > stageRank('approval_gated')) riskIncreases.push(`New agent starts above approval_gated ("${contract.autonomyStage}").`)
     if (contract.delegation.enabled) riskIncreases.push('New agent can delegate to other agents.')
+    if (contract.handoffs.enabled) riskIncreases.push('New agent can hand work to other agents.')
     return { violations, riskIncreases, tools, contract }
   }
 
@@ -159,6 +163,10 @@ export function checkRevisionInvariants(input: InvariantInput): InvariantResult 
     if (contract.delegation.enabled && !before.delegation.enabled) riskIncreases.push('Enables delegation.')
     const newSpecialists = contract.delegation.allowedSpecialists.filter((id) => !before.delegation.allowedSpecialists.includes(id))
     if (before.delegation.enabled && newSpecialists.length) riskIncreases.push(`Adds delegation targets: ${newSpecialists.join(', ')}.`)
+    if (contract.handoffs.enabled && !before.handoffs.enabled) riskIncreases.push('Enables hand-offs to other agents.')
+    const newTargets = contract.handoffs.allowedAgents.filter((id) => !before.handoffs.allowedAgents.includes(id))
+    if (before.handoffs.enabled && newTargets.length) riskIncreases.push(`Adds hand-off targets: ${newTargets.join(', ')}.`)
+    if (contract.memory.mode === 'tenant' && contract.memory.write && !(before.memory.mode === 'tenant' && before.memory.write)) riskIncreases.push('Lets the agent save memories the whole team uses.')
     if (before.model.privacy === 'local_only' && contract.model.privacy !== 'local_only') riskIncreases.push('Allows data to leave local models (privacy local_only removed).')
     const beforeCap = before.limits.maxRunCostUsd ?? Infinity
     const afterCap = contract.limits.maxRunCostUsd ?? Infinity

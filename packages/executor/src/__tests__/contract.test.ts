@@ -44,6 +44,7 @@ test('missing required contract fields are reported, not defaulted', () => {
 test('unknown keys and unimplemented memory modes are rejected (strict schema)', () => {
   assert.ok(resolveAgentContract(agentWith({ ...BASE_CONTRACT, superpowers: true })).errors.length > 0)
   assert.ok(resolveAgentContract(agentWith({ ...BASE_CONTRACT, memory: { mode: 'persistent' } })).errors.length > 0)
+  assert.deepEqual(resolveAgentContract(agentWith({ ...BASE_CONTRACT, memory: { mode: 'tenant' } })).errors, [])
   assert.ok(resolveAgentContract(agentWith({ ...BASE_CONTRACT, autonomyStage: 'god_mode' })).errors.length > 0)
 })
 

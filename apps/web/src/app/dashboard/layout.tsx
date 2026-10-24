@@ -1,5 +1,6 @@
 import { ReactNode } from 'react'
 import { DashboardNav } from './DashboardNav'
+import { DemoGuide } from './DemoGuide'
 
 const navigation = [
   { name: 'Dashboard', href: '/dashboard', icon: 'LayoutDashboard' },
@@ -29,6 +30,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       adminNavigation={adminNavigation}
     >
       {children}
+      <DemoGuide />
     </DashboardNav>
   )
 }

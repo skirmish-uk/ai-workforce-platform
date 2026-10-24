@@ -179,8 +179,8 @@ export default function DashboardPage() {
             <Tile label="Cost per task" value={money(data.costPerTaskUsd)} detail={`${money(data.costUsd)} in model costs ${period}`} />
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-3">
-            <section className="lg:col-span-2 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5" aria-labelledby="daily-heading">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <section className="min-w-0 lg:col-span-2 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5" aria-labelledby="daily-heading">
               <h2 id="daily-heading" className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">Tasks finished per day</h2>
               {data.tasks.total ? <DailyChart daily={data.daily} /> : <p className="mt-6 mb-4 text-sm text-neutral-500">No work yet {period}. Give the team something on <Link href="/dashboard/cases" className="underline">Team cases</Link>.</p>}
             </section>
@@ -205,8 +205,8 @@ export default function DashboardPage() {
             </section>
           </div>
 
-          <div className="grid gap-4 lg:grid-cols-5">
-            <section className="lg:col-span-3 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800" aria-labelledby="activity-heading">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+            <section className="min-w-0 lg:col-span-3 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800" aria-labelledby="activity-heading">
               <div className="px-5 pt-5 pb-2 flex items-center justify-between">
                 <h2 id="activity-heading" className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">Latest work</h2>
                 <Link href="/dashboard/cases" className="text-xs text-primary-600 inline-flex items-center gap-1">Team cases <ArrowRight className="w-3 h-3" /></Link>

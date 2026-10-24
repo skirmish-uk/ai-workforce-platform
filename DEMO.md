@@ -153,6 +153,10 @@ All three are also reachable through Morgan's "Ask the team". Their test suites 
 
 **Ava** (client questions, voice) speaks with Cartesia's Australian "Bronte" voice and runs on `claude-haiku-5-5`. Besides answering from the documents she can check the calendar's free time and offer slots ("Tuesday at 10am or Wednesday at 2pm"); she never books, and says a person will confirm. Try in the Talk panel: "What are your opening hours?", "Could I come in for a chat this week?", "How much is the Growth package?".
 
+### Demo guide
+
+Signed in to the demo business, every dashboard page has a **Demo guide** button (bottom right): the walkthrough below as an 8-step checklist with where to go, what to do and what to say. Ticks are kept in that browser; the reset icon starts again.
+
 ### The team working together (Team cases)
 
 1. **Team cases** → **New enquiry from the website (Sarah)**. Watch the case live: Sarah qualifies Daniel from Stackwise, drafts the reply and the CRM record (held for approval) and hands the booking to Riley, who prepares the invite with Alex Chen (from what the team knows). About a minute in all.

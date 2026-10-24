@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { google } from 'googleapis'
-import { BaseIntegrationAdapter, OAuthCredentials } from './base'
+import { BaseIntegrationAdapter, OAuthCredentials, fromGoogleTokens, toGoogleCredentials } from './base'
 
 const CALENDAR_SCOPES = [
   'https://www.googleapis.com/auth/calendar',
@@ -27,8 +27,8 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
         summary: z.string().min(1),
         description: z.string().optional(),
         location: z.string().optional(),
-        startTime: z.string().datetime(),
-        endTime: z.string().datetime(),
+        startTime: z.string().datetime({ offset: true }),
+        endTime: z.string().datetime({ offset: true }),
         timeZone: z.string().default('UTC'),
         attendees: z.array(z.object({
           email: z.string().email(),
@@ -83,8 +83,8 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
       name: 'list_events',
       description: 'List calendar events',
       inputSchema: z.object({
-        timeMin: z.string().datetime().optional(),
-        timeMax: z.string().datetime().optional(),
+        timeMin: z.string().datetime({ offset: true }).optional(),
+        timeMax: z.string().datetime({ offset: true }).optional(),
         maxResults: z.number().min(1).max(250).default(20),
         singleEvents: z.boolean().default(true),
         orderBy: z.enum(['startTime', 'updated']).default('startTime'),
@@ -153,8 +153,8 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
         summary: z.string().optional(),
         description: z.string().optional(),
         location: z.string().optional(),
-        startTime: z.string().datetime().optional(),
-        endTime: z.string().datetime().optional(),
+        startTime: z.string().datetime({ offset: true }).optional(),
+        endTime: z.string().datetime({ offset: true }).optional(),
         attendees: z.array(z.object({
           email: z.string().email(),
           displayName: z.string().optional(),
@@ -212,14 +212,14 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
       name: 'find_free_time',
       description: 'Find free time slots',
       inputSchema: z.object({
-        timeMin: z.string().datetime(),
-        timeMax: z.string().datetime(),
+        timeMin: z.string().datetime({ offset: true }),
+        timeMax: z.string().datetime({ offset: true }),
         durationMinutes: z.number().int().positive().default(30),
       }),
       outputSchema: z.object({
         freeSlots: z.array(z.object({
-          start: z.string().datetime(),
-          end: z.string().datetime(),
+          start: z.string().datetime({ offset: true }),
+          end: z.string().datetime({ offset: true }),
         })),
       }),
       execute: async (input, credentials) => {
@@ -277,11 +277,7 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
       process.env.GOOGLE_REDIRECT_URI
     )
 
-    oauth2Client.setCredentials({
-      access_token: credentials.access_token,
-      refresh_token: credentials.refresh_token,
-      expiry_date: credentials.expires_at,
-    })
+    oauth2Client.setCredentials(toGoogleCredentials(credentials))
 
     return google.calendar({ version: 'v3', auth: oauth2Client })
   }
@@ -309,13 +305,7 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
     )
 
     const { tokens } = await oauth2Client.getToken(code)
-    return {
-      access_token: tokens.access_token!,
-      refresh_token: tokens.refresh_token,
-      expires_at: tokens.expiry_date,
-      token_type: tokens.token_type,
-      scope: tokens.scope,
-    }
+    return fromGoogleTokens(tokens)
   }
 
   async refreshToken(refreshToken: string): Promise<OAuthCredentials> {
@@ -328,13 +318,7 @@ export class CalendarAdapter extends BaseIntegrationAdapter {
     oauth2Client.setCredentials({ refresh_token: refreshToken })
     const { credentials } = await oauth2Client.refreshAccessToken()
 
-    return {
-      access_token: credentials.access_token!,
-      refresh_token: credentials.refresh_token,
-      expires_at: credentials.expiry_date,
-      token_type: credentials.token_type,
-      scope: credentials.scope,
-    }
+    return fromGoogleTokens(credentials)
   }
 
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {

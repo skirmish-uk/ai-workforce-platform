@@ -4,7 +4,7 @@ import { ReactNode, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
-import { Menu, X, LogOut, User, Settings, Bot, Brain, BookOpen, Zap, Shield, BarChart2, LayoutDashboard, Building2, Users, Building } from 'lucide-react'
+import { Menu, X, LogOut, User, Settings, Bot, Brain, BookOpen, Zap, Shield, BarChart2, LayoutDashboard, Building2, Users, Building, CheckCircle2, Sparkles, Network, Workflow, Lightbulb } from 'lucide-react'
 import clsx from 'clsx'
 
 interface NavItem {
@@ -35,6 +35,11 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   LogOut,
   User,
   Settings,
+  CheckCircle2,
+  Sparkles,
+  Network,
+  Workflow,
+  Lightbulb,
 }
 
 export function DashboardNav({ 
@@ -108,7 +113,7 @@ export function DashboardNav({
           {/* Navigation */}
           <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto" aria-label="Main">
             {navigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'))
               return (
                 <Link
                   key={item.name}
@@ -121,13 +126,13 @@ export function DashboardNav({
                   )}
                   aria-current={isActive ? 'page' : undefined}
                 >
-                  <Icon iconName={item.icon} />
+                  {Icon(item.icon)}
                   {item.name}
                 </Link>
               )
             })}
             {['PLATFORM_ADMIN', 'PLATFORM_OPERATOR'].includes(user?.role || '') && adminNavigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'))
               return (
                 <Link
                   key={item.name}
@@ -140,7 +145,7 @@ export function DashboardNav({
                   )}
                   aria-current={isActive ? 'page' : undefined}
                 >
-                  <Icon iconName={item.icon} />
+                  {Icon(item.icon)}
                   {item.name}
                 </Link>
               )

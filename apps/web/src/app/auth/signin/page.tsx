@@ -26,9 +26,10 @@ function SignInForm() {
 
     try {
       const result = await signIn('credentials', {
-        email,
+        email: email.trim(),
         password,
-        tenantSlug: tenantSlug || undefined,
+        // Only send a tenant when one was typed: an undefined value is sent as the text "undefined".
+        ...(tenantSlug.trim() ? { tenantSlug: tenantSlug.trim() } : {}),
         redirect: false,
       })
 

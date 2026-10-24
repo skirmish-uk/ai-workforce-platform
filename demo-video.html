@@ -1,0 +1,816 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Workforce — Business Demo</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --primary: #0284c7;
+    --primary-light: #e0f2fe;
+    --primary-dark: #0369a1;
+    --green: #16a34a;
+    --red: #dc2626;
+    --purple: #7c3aed;
+    --amber: #f59e0b;
+  }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: #fff;
+    color: #171717;
+    overflow: hidden;
+    height: 100vh;
+    width: 100vw;
+  }
+
+  /* ─── Slides ─── */
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transform: scale(0.97);
+    transition: opacity 0.8s ease, transform 0.8s ease;
+    pointer-events: none;
+    padding: 60px 40px;
+  }
+  .slide.active {
+    opacity: 1;
+    transform: scale(1);
+    pointer-events: auto;
+  }
+  .slide.exit {
+    opacity: 0;
+    transform: scale(1.03);
+  }
+
+  .slide-inner {
+    max-width: 1100px;
+    width: 100%;
+    text-align: center;
+  }
+
+  /* ─── Typography ─── */
+  h1 { font-size: clamp(2.5rem, 5vw, 4.5rem); font-weight: 900; line-height: 1.1; letter-spacing: -0.03em; }
+  h2 { font-size: clamp(2rem, 4vw, 3.2rem); font-weight: 800; line-height: 1.15; letter-spacing: -0.02em; }
+  h3 { font-size: clamp(1.2rem, 2vw, 1.5rem); font-weight: 700; }
+  p  { font-size: clamp(1rem, 1.5vw, 1.25rem); line-height: 1.7; color: #525252; }
+
+  .eyebrow {
+    display: inline-block;
+    padding: 6px 16px;
+    background: var(--primary-light);
+    color: var(--primary-dark);
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 20px;
+    letter-spacing: 0.02em;
+  }
+
+  .gradient-text {
+    background: linear-gradient(135deg, var(--primary), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* ─── Animations ─── */
+  .anim { opacity: 0; transform: translateY(40px); transition: all 0.7s cubic-bezier(0.16, 1, 0.3, 1); }
+  .anim.show { opacity: 1; transform: translateY(0); }
+  .anim-delay-1 { transition-delay: 0.15s; }
+  .anim-delay-2 { transition-delay: 0.3s; }
+  .anim-delay-3 { transition-delay: 0.45s; }
+  .anim-delay-4 { transition-delay: 0.6s; }
+  .anim-delay-5 { transition-delay: 0.75s; }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(-15px) rotate(2deg); }
+  }
+  @keyframes float-reverse {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50% { transform: translateY(12px) rotate(-2deg); }
+  }
+  @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+  @keyframes count-up { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+  @keyframes bar-grow { from { height: 0; } }
+  @keyframes slide-in-right { from { opacity: 0; transform: translateX(60px); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes slide-in-left { from { opacity: 0; transform: translateX(-60px); } to { opacity: 1; transform: translateX(0); } }
+  @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes checkmark { from { width: 0; } to { width: 100%; } }
+
+  .bg-blob {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.25;
+    pointer-events: none;
+  }
+
+  /* ─── Flow diagram ─── */
+  .flow { display: flex; align-items: center; justify-content: center; gap: 12px; flex-wrap: wrap; margin-top: 40px; }
+  .flow-node {
+    width: 120px; height: 120px;
+    border-radius: 20px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    font-size: 2.5rem;
+    border: 2px solid;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
+    background: #fff;
+  }
+  .flow-label { font-size: 0.8rem; font-weight: 600; margin-top: 8px; color: #404040; }
+  .flow-arrow { font-size: 1.5rem; color: #a3a3a3; }
+
+  /* ─── Step cards ─── */
+  .steps-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin-top: 40px; }
+  .step-card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 24px 16px;
+    border: 1px solid #e5e5e5;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    position: relative;
+  }
+  .step-num {
+    position: absolute; top: -12px; left: -8px;
+    width: 32px; height: 32px;
+    background: var(--primary);
+    color: #fff;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 0.9rem;
+    box-shadow: 0 2px 8px rgba(2,132,199,0.4);
+  }
+  .step-icon { font-size: 2rem; margin-bottom: 12px; }
+  .step-card h4 { font-size: 0.95rem; font-weight: 700; margin-bottom: 6px; }
+  .step-card p { font-size: 0.8rem; line-height: 1.5; color: #737373; }
+
+  /* ─── Comparison table ─── */
+  .compare-table {
+    width: 100%;
+    max-width: 800px;
+    margin: 40px auto 0;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+    border: 1px solid #e5e5e5;
+  }
+  .compare-row { display: grid; grid-template-columns: 2fr 1fr 1fr; }
+  .compare-row.header { background: #f5f5f5; }
+  .compare-cell { padding: 16px 20px; font-size: 0.95rem; border-bottom: 1px solid #f0f0f0; }
+  .compare-cell:last-child { border-bottom: none; }
+  .compare-cell.task { font-weight: 600; color: #171717; }
+  .compare-cell.without { color: var(--red); text-align: center; }
+  .compare-cell.with { color: var(--green); font-weight: 600; text-align: center; }
+
+  /* ─── Dashboard mockup ─── */
+  .mockup {
+    background: #fff;
+    border-radius: 16px;
+    box-shadow: 0 8px 40px rgba(0,0,0,0.12);
+    border: 1px solid #e5e5e5;
+    overflow: hidden;
+    max-width: 900px;
+    margin: 40px auto 0;
+    text-align: left;
+  }
+  .mockup-bar {
+    background: #f5f5f5;
+    border-bottom: 1px solid #e5e5e5;
+    padding: 12px 20px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .mockup-dot { width: 12px; height: 12px; border-radius: 50%; }
+  .mockup-tabs { display: flex; border-bottom: 1px solid #e5e5e5; padding: 0 20px; }
+  .mockup-tab {
+    padding: 12px 16px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #737373;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+  .mockup-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .mockup-content { padding: 24px; }
+  .mockup-content h4 { font-size: 1.1rem; font-weight: 700; margin-bottom: 16px; }
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .stat-card {
+    background: #fafafa;
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid #f0f0f0;
+  }
+  .stat-label { font-size: 0.8rem; color: #737373; margin-bottom: 4px; }
+  .stat-value { font-size: 1.5rem; font-weight: 800; color: #171717; }
+  .stat-change { font-size: 0.75rem; color: #a3a3a3; margin-top: 4px; }
+
+  /* ─── Pricing ─── */
+  .pricing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: 40px; align-items: start; }
+  .price-card {
+    background: #fff;
+    border-radius: 20px;
+    padding: 32px;
+    border: 1px solid #e5e5e5;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.06);
+    text-align: left;
+    position: relative;
+    transition: transform 0.3s;
+  }
+  .price-card.popular {
+    background: var(--primary);
+    color: #fff;
+    border-color: var(--primary);
+    transform: scale(1.05);
+    box-shadow: 0 8px 30px rgba(2,132,199,0.3);
+  }
+  .price-badge {
+    position: absolute; top: -12px; left: 50%; transform: translateX(-50%);
+    background: #facc15;
+    color: #713f12;
+    padding: 4px 14px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .price-name { font-size: 1.1rem; font-weight: 700; margin-bottom: 8px; }
+  .price-amount { font-size: 2.5rem; font-weight: 900; margin-bottom: 20px; }
+  .price-period { font-size: 0.85rem; font-weight: 400; opacity: 0.7; }
+  .price-features { list-style: none; }
+  .price-features li {
+    padding: 8px 0;
+    font-size: 0.9rem;
+    display: flex; align-items: flex-start; gap: 10px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+  }
+  .price-card:not(.popular) .price-features li { border-bottom-color: #f0f0f0; }
+  .price-features li:last-child { border-bottom: none; }
+  .check { flex-shrink: 0; }
+
+  /* ─── Revenue chart ─── */
+  .chart-container { display: flex; align-items: flex-end; justify-content: center; gap: 40px; height: 280px; margin-top: 40px; }
+  .chart-bar-wrapper { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .chart-value { font-size: 1.3rem; font-weight: 800; color: var(--primary); }
+  .chart-bar { width: 100px; border-radius: 12px 12px 0 0; transition: height 1.5s cubic-bezier(0.16, 1, 0.3, 1); }
+  .chart-label { font-size: 0.9rem; font-weight: 600; color: #525252; }
+
+  /* ─── Stats row ─── */
+  .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; margin-top: 40px; }
+  .stat-big { text-align: center; }
+  .stat-big-value { font-size: clamp(2.5rem, 4vw, 3.5rem); font-weight: 900; color: var(--primary); }
+  .stat-big-label { font-size: 0.95rem; color: #525252; margin-top: 8px; }
+
+  /* ─── CTA ─── */
+  .cta-btn {
+    display: inline-block;
+    padding: 18px 40px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 1.15rem;
+    font-weight: 700;
+    border-radius: 14px;
+    border: none;
+    cursor: pointer;
+    box-shadow: 0 4px 20px rgba(2,132,199,0.35);
+    transition: all 0.3s;
+    text-decoration: none;
+  }
+  .cta-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(2,132,199,0.45); }
+  .cta-trust { display: flex; gap: 32px; justify-content: center; margin-top: 32px; font-size: 0.9rem; color: #737373; }
+  .cta-trust span { display: flex; align-items: center; gap: 6px; }
+  .cta-trust svg { width: 16px; height: 16px; color: var(--green); }
+
+  /* ─── Controls overlay ─── */
+  .controls {
+    position: fixed;
+    bottom: 0; left: 0; right: 0;
+    z-index: 100;
+    background: rgba(255,255,255,0.95);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid #e5e5e5;
+    padding: 12px 24px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .controls button {
+    background: none;
+    border: 1px solid #d4d4d4;
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: #404040;
+    transition: all 0.2s;
+  }
+  .controls button:hover { background: #f5f5f5; }
+  .controls button.active-btn { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .progress-bar {
+    flex: 1;
+    height: 6px;
+    background: #e5e5e5;
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--primary);
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .slide-counter { font-size: 0.85rem; font-weight: 600; color: #737373; min-width: 60px; text-align: center; }
+  .speed-btn { font-size: 0.8rem; }
+
+  /* ─── Responsive ─── */
+  @media (max-width: 768px) {
+    .slide { padding: 40px 20px; }
+    .steps-grid { grid-template-columns: 1fr; }
+    .pricing-grid { grid-template-columns: 1fr; }
+    .stats-row { grid-template-columns: 1fr; }
+    .stat-grid { grid-template-columns: 1fr; }
+    .flow { flex-direction: column; }
+    .flow-arrow { transform: rotate(90deg); }
+    .compare-row { grid-template-columns: 1fr; }
+    .compare-cell.header { display: none; }
+    .chart-container { gap: 20px; }
+    .chart-bar { width: 70px; }
+    .price-card.popular { transform: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════ SLIDE 0: HERO ════════════════════════════════════════ -->
+<div class="slide active" data-duration="5000">
+  <div class="bg-blob" style="width:400px;height:400px;background:#bae6fd;top:10%;left:5%;animation:float 8s ease-in-out infinite;"></div>
+  <div class="bg-blob" style="width:350px;height:350px;background:#c4b5fd;bottom:10%;right:5%;animation:float-reverse 8s ease-in-out infinite;"></div>
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">Introducing AI Workforce</span></div>
+    <h1 class="anim anim-delay-1">What if your business had<br><span class="gradient-text">an AI employee?</span></h1>
+    <p class="anim anim-delay-2" style="max-width:680px;margin:24px auto 0;">A smart assistant that knows your business, connects to your tools, and works around the clock — like hiring the perfect employee, but instantly.</p>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 1: PROBLEM ════════════════════════════════════════ -->
+<div class="slide" data-duration="5000">
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">The Problem</span></div>
+    <h2 class="anim anim-delay-1">Every day, businesses lose<br>time and money on repetitive work</h2>
+    <div class="stats-row" style="margin-top:48px;">
+      <div class="stat-big anim anim-delay-2">
+        <div class="stat-big-value" data-count="73" data-suffix="%">0%</div>
+        <div class="stat-big-label">of employees spend time on tasks a computer could do</div>
+      </div>
+      <div class="stat-big anim anim-delay-3">
+        <div class="stat-big-value" data-count="3" data-prefix="$" data-suffix=" trillion">$0 trillion</div>
+        <div class="stat-big-label">lost annually to workplace inefficiency</div>
+      </div>
+      <div class="stat-big anim anim-delay-4">
+        <div class="stat-big-value" data-count="40" data-suffix="%">0%</div>
+        <div class="stat-big-label">of leads are never followed up on</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 2: SOLUTION ════════════════════════════════════════ -->
+<div class="slide" data-duration="6000">
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">The Solution</span></div>
+    <h2 class="anim anim-delay-1">Meet your AI Employee</h2>
+    <p class="anim anim-delay-2" style="max-width:650px;margin:16px auto 0;">It's like hiring someone who already knows your business, never sleeps, and costs a fraction of a salary.</p>
+    <div class="flow anim anim-delay-3">
+      <div>
+        <div class="flow-node" style="border-color:#93c5fd;background:#eff6ff;">🏢</div>
+        <div class="flow-label">Your Business</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div>
+        <div class="flow-node" style="border-color:#7dd3fc;background:#f0f9ff;">⚙️</div>
+        <div class="flow-label">Our Platform</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div>
+        <div class="flow-node" style="border-color:#c4b5fd;background:#f5f3ff;">🤖</div>
+        <div class="flow-label">AI Employee</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div>
+        <div class="flow-node" style="border-color:#86efac;background:#f0fdf4;">🔗</div>
+        <div class="flow-label">Your Tools</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div>
+        <div class="flow-node" style="border-color:#fcd34d;background:#fefce8;">📈</div>
+        <div class="flow-label">Real Results</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 3: 5 STEPS ════════════════════════════════════════ -->
+<div class="slide" data-duration="7000">
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">How It Works</span></div>
+    <h2 class="anim anim-delay-1">5 simple steps to your AI employee</h2>
+    <p class="anim anim-delay-2" style="max-width:600px;margin:12px auto 0;">From sign-up to working AI employee in days, not months.</p>
+    <div class="steps-grid" style="margin-top:40px;">
+      <div class="step-card anim anim-delay-2"><div class="step-num">1</div><div class="step-icon">💬</div><h4>Tell Us About You</h4><p>Share your business and what tasks you need help with.</p></div>
+      <div class="step-card anim anim-delay-3"><div class="step-num">2</div><div class="step-icon">🔧</div><h4>We Build Your AI</h4><p>Our team creates a custom AI trained on your knowledge.</p></div>
+      <div class="step-card anim anim-delay-4"><div class="step-num">3</div><div class="step-icon">🔗</div><h4>Connect Your Tools</h4><p>Link email, calendar, CRM with a few clicks.</p></div>
+      <div class="step-card anim anim-delay-5"><div class="step-num">4</div><div class="step-icon">✅</div><h4>We Test & Tune</h4><p>We verify it works exactly how you need.</p></div>
+      <div class="step-card anim" style="transition-delay:0.9s;"><div class="step-num">5</div><div class="step-icon">🚀</div><h4>It's Working!</h4><p>Your AI employee is live and saving you time.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 4: BEFORE / AFTER ════════════════════════════════════════ -->
+<div class="slide" data-duration="6000">
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">Before & After</span></div>
+    <h2 class="anim anim-delay-1">What changes with an AI employee</h2>
+    <div class="compare-table anim anim-delay-2">
+      <div class="compare-row header">
+        <div class="compare-cell" style="font-weight:700;color:#404040;">Task</div>
+        <div class="compare-cell" style="color:var(--red);font-weight:700;text-align:center;">Without AI</div>
+        <div class="compare-cell" style="color:var(--green);font-weight:700;text-align:center;">With AI Workforce</div>
+      </div>
+      <div class="compare-row anim anim-delay-2">
+        <div class="compare-cell task">Answering the same questions</div>
+        <div class="compare-cell without">3+ hours/day</div>
+        <div class="compare-cell with">24/7 automatically</div>
+      </div>
+      <div class="compare-row anim anim-delay-3">
+        <div class="compare-cell task">Following up with leads</div>
+        <div class="compare-cell without">Missed 40% of leads</div>
+        <div class="compare-cell with">Every lead, within 5 min</div>
+      </div>
+      <div class="compare-row anim anim-delay-4">
+        <div class="compare-cell task">Processing invoices</div>
+        <div class="compare-cell without">Manual data entry</div>
+        <div class="compare-cell with">Instant, error-free</div>
+      </div>
+      <div class="compare-row anim anim-delay-5">
+        <div class="compare-cell task">Writing reports</div>
+        <div class="compare-cell without">Days of work</div>
+        <div class="compare-cell with">Minutes to generate</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 5: DASHBOARD ════════════════════════════════════════ -->
+<div class="slide" data-duration="6000">
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">Live Demo</span></div>
+    <h2 class="anim anim-delay-1">Your command centre</h2>
+    <p class="anim anim-delay-2" style="max-width:500px;margin:8px auto 0;">See everything at a glance. No spreadsheets. No guessing.</p>
+    <div class="mockup anim anim-delay-3">
+      <div class="mockup-bar">
+        <div class="mockup-dot" style="background:#ef4444;"></div>
+        <div class="mockup-dot" style="background:#f59e0b;"></div>
+        <div class="mockup-dot" style="background:#22c55e;"></div>
+        <span style="flex:1;text-align:center;font-size:0.85rem;color:#737373;font-weight:500;">AI Workforce Dashboard</span>
+      </div>
+      <div class="mockup-tabs">
+        <div class="mockup-tab active" data-tab="0">Overview</div>
+        <div class="mockup-tab" data-tab="1">Agents</div>
+        <div class="mockup-tab" data-tab="2">Workflows</div>
+        <div class="mockup-tab" data-tab="3">Billing</div>
+      </div>
+      <div class="mockup-content" id="mockup-content">
+        <h4>Business Dashboard</h4>
+        <div class="stat-grid">
+          <div class="stat-card"><div class="stat-label">Active AI Employees</div><div class="stat-value">3</div><div class="stat-change">+1 this month</div></div>
+          <div class="stat-card"><div class="stat-label">Tasks Completed</div><div class="stat-value">1,247</div><div class="stat-change">+340 this week</div></div>
+          <div class="stat-card"><div class="stat-label">Hours Saved</div><div class="stat-value">892</div><div class="stat-change">Last 30 days</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 6: PRICING ════════════════════════════════════════ -->
+<div class="slide" data-duration="6000">
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">Simple Pricing</span></div>
+    <h2 class="anim anim-delay-1">Pick the plan that fits your team</h2>
+    <p class="anim anim-delay-2" style="max-width:500px;margin:8px auto 0;">No hidden fees. No lock-in. Cancel anytime.</p>
+    <div class="pricing-grid">
+      <div class="price-card anim anim-delay-2">
+        <div class="price-name">Starter</div>
+        <div class="price-amount">$299<span class="price-period">/month</span></div>
+        <ul class="price-features">
+          <li><span class="check">✓</span> 1 AI Employee</li>
+          <li><span class="check">✓</span> Up to 10 workflows</li>
+          <li><span class="check">✓</span> 5 custom skills</li>
+          <li><span class="check">✓</span> Email support</li>
+        </ul>
+      </div>
+      <div class="price-card popular anim anim-delay-3">
+        <div class="price-badge">MOST POPULAR</div>
+        <div class="price-name">Growth</div>
+        <div class="price-amount">$799<span class="price-period">/month</span></div>
+        <ul class="price-features">
+          <li><span class="check">✓</span> Up to 5 AI Employees</li>
+          <li><span class="check">✓</span> Up to 50 workflows</li>
+          <li><span class="check">✓</span> 20 custom skills</li>
+          <li><span class="check">✓</span> Priority support</li>
+          <li><span class="check">✓</span> Custom integrations</li>
+        </ul>
+      </div>
+      <div class="price-card anim anim-delay-4">
+        <div class="price-name">Enterprise</div>
+        <div class="price-amount">$2,499<span class="price-period">/month</span></div>
+        <ul class="price-features">
+          <li><span class="check">✓</span> Unlimited AI Employees</li>
+          <li><span class="check">✓</span> Unlimited everything</li>
+          <li><span class="check">✓</span> SSO & audit logs</li>
+          <li><span class="check">✓</span> Dedicated support</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 7: REVENUE ════════════════════════════════════════ -->
+<div class="slide" data-duration="6000">
+  <div class="slide-inner">
+    <div class="anim"><span class="eyebrow">Market Opportunity</span></div>
+    <h2 class="anim anim-delay-1">Massive market, proven demand</h2>
+    <p class="anim anim-delay-2" style="max-width:550px;margin:8px auto 0;">AI automation is the fastest-growing segment in enterprise software.</p>
+    <div class="chart-container anim anim-delay-3">
+      <div class="chart-bar-wrapper">
+        <div class="chart-value">$1.2M</div>
+        <div class="chart-bar" style="background:linear-gradient(to top,#7dd3fc,#0ea5e9);height:0;" data-height="70px;"></div>
+        <div class="chart-label">Year 1</div>
+      </div>
+      <div class="chart-bar-wrapper">
+        <div class="chart-value">$3.6M</div>
+        <div class="chart-bar" style="background:linear-gradient(to top,#38bdf8,#0284c7);height:0;" data-height="140px;"></div>
+        <div class="chart-label">Year 2</div>
+      </div>
+      <div class="chart-bar-wrapper">
+        <div class="chart-value">$8.4M</div>
+        <div class="chart-bar" style="background:linear-gradient(to top,#0ea5e9,#0369a1);height:0;" data-height="240px;"></div>
+        <div class="chart-label">Year 3</div>
+      </div>
+    </div>
+    <div class="stats-row anim anim-delay-4" style="margin-top:40px;">
+      <div class="stat-big">
+        <div class="stat-big-value" data-count="50" data-prefix="$" data-suffix="B+">$0B+</div>
+        <div class="stat-big-label">AI automation market by 2028</div>
+      </div>
+      <div class="stat-big">
+        <div class="stat-big-value" data-count="19" data-suffix=":1">0:1</div>
+        <div class="stat-big-label">LTV to CAC ratio</div>
+      </div>
+      <div class="stat-big">
+        <div class="stat-big-value" data-count="82" data-suffix="%">0%</div>
+        <div class="stat-big-label">Gross margin at scale</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ SLIDE 8: CTA ════════════════════════════════════════ -->
+<div class="slide" data-duration="8000">
+  <div class="bg-blob" style="width:500px;height:500px;background:#bae6fd;top:20%;left:10%;animation:float 8s ease-in-out infinite;"></div>
+  <div class="bg-blob" style="width:400px;height:400px;background:#c4b5fd;bottom:15%;right:10%;animation:float-reverse 8s ease-in-out infinite;"></div>
+  <div class="slide-inner">
+    <h2 class="anim" style="font-size:clamp(2.5rem,5vw,4rem);">Ready to see it in action?</h2>
+    <p class="anim anim-delay-1" style="max-width:600px;margin:16px auto 0;">Join the businesses already saving hundreds of hours with AI employees.</p>
+    <div class="anim anim-delay-2" style="margin-top:32px;">
+      <a href="/auth/signin" class="cta-btn">Explore the Live Demo →</a>
+    </div>
+    <div class="cta-trust anim anim-delay-3">
+      <span><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg> No credit card</span>
+      <span><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg> 14-day free trial</span>
+      <span><svg viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd"/></svg> Cancel anytime</span>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════ CONTROLS ════════════════════════════════════════ -->
+<div class="controls">
+  <button id="playPauseBtn" class="active-btn" title="Play / Pause">⏸ Pause</button>
+  <button id="prevBtn" title="Previous slide">← Prev</button>
+  <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+  <span class="slide-counter" id="slideCounter">1 / 9</span>
+  <button id="nextBtn" title="Next slide">Next →</button>
+  <button class="speed-btn" id="speedBtn" title="Playback speed">1×</button>
+</div>
+
+<script>
+(function() {
+  const slides = document.querySelectorAll('.slide');
+  const total = slides.length;
+  let current = 0;
+  let playing = true;
+  let speed = 1;
+  let timer = null;
+  let progressTimer = null;
+
+  const playPauseBtn = document.getElementById('playPauseBtn');
+  const prevBtn = document.getElementById('prevBtn');
+  const nextBtn = document.getElementById('nextBtn');
+  const speedBtn = document.getElementById('speedBtn');
+  const progressFill = document.getElementById('progressFill');
+  const slideCounter = document.getElementById('slideCounter');
+
+  const mockupData = [
+    { title: 'Business Dashboard', cards: [
+      { label: 'Active AI Employees', value: '3', change: '+1 this month' },
+      { label: 'Tasks Completed', value: '1,247', change: '+340 this week' },
+      { label: 'Hours Saved', value: '892', change: 'Last 30 days' },
+    ]},
+    { title: 'Your AI Employees', cards: [
+      { label: 'Sarah — Sales Assistant', value: 'Active', change: 'Qualifying leads since 9am' },
+      { label: 'Mike — Support Agent', value: 'Active', change: 'Handled 23 tickets today' },
+      { label: 'Lisa — Content Writer', value: 'Paused', change: 'Finished 5 blog posts' },
+    ]},
+    { title: 'Automated Workflows', cards: [
+      { label: 'Lead Follow-up', value: 'Running', change: '24 leads in pipeline' },
+      { label: 'Invoice Processing', value: 'Completed', change: '12 invoices processed' },
+      { label: 'Social Media Posting', value: 'Scheduled', change: '6 posts queued' },
+    ]},
+    { title: 'Subscription & Billing', cards: [
+      { label: 'Current Plan', value: 'Growth', change: '$799/month' },
+      { label: 'Usage This Month', value: '68%', change: 'Within limits' },
+      { label: 'Next Invoice', value: 'Oct 1', change: '$799.00' },
+    ]},
+  ];
+
+  function showSlide(index, direction) {
+    slides.forEach((s, i) => {
+      s.classList.remove('active', 'exit');
+      if (i === index) s.classList.add('active');
+    });
+
+    // Trigger animations
+    setTimeout(() => {
+      slides[index].querySelectorAll('.anim').forEach(el => el.classList.add('show'));
+    }, 200);
+
+    // Animate chart bars on slide 7
+    if (index === 7) {
+      setTimeout(() => {
+        slides[7].querySelectorAll('.chart-bar').forEach(bar => {
+          bar.style.height = bar.dataset.height;
+        });
+      }, 500);
+    }
+
+    // Animate counters
+    slides[index].querySelectorAll('[data-count]').forEach(el => {
+      animateCounter(el);
+    });
+
+    // Update mockup tabs if on dashboard slide
+    if (index === 5) {
+      cycleMockupTabs();
+    }
+
+    current = index;
+    updateControls();
+  }
+
+  function animateCounter(el) {
+    const target = parseInt(el.dataset.count);
+    const prefix = el.dataset.prefix || '';
+    const suffix = el.dataset.suffix || '';
+    let current = 0;
+    const step = target / 60;
+    const interval = setInterval(() => {
+      current += step;
+      if (current >= target) {
+        current = target;
+        clearInterval(interval);
+      }
+      el.textContent = prefix + Math.round(current).toLocaleString() + suffix;
+    }, 25);
+  }
+
+  let mockupCycle = null;
+  function cycleMockupTabs() {
+    if (mockupCycle) clearInterval(mockupCycle);
+    let tabIdx = 0;
+    const tabs = document.querySelectorAll('.mockup-tab');
+    const updateTab = () => {
+      tabs.forEach(t => t.classList.remove('active'));
+      tabs[tabIdx].classList.add('active');
+      const data = mockupData[tabIdx];
+      const content = document.getElementById('mockup-content');
+      content.innerHTML = `<h4>${data.title}</h4><div class="stat-grid">${data.cards.map(c => `
+        <div class="stat-card">
+          <div class="stat-label">${c.label}</div>
+          <div class="stat-value">${c.value}</div>
+          <div class="stat-change">${c.change}</div>
+        </div>`).join('')}</div>`;
+      tabIdx = (tabIdx + 1) % tabs.length;
+    };
+    mockupCycle = setInterval(updateTab, 2000);
+  }
+
+  function updateControls() {
+    slideCounter.textContent = `${current + 1} / ${total}`;
+    progressFill.style.width = `${((current + 1) / total) * 100}%`;
+    playPauseBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+    playPauseBtn.classList.toggle('active-btn', playing);
+  }
+
+  function startAutoPlay() {
+    stopAutoPlay();
+    const duration = parseInt(slides[current].dataset.duration) || 5000;
+    const adjustedDuration = duration / speed;
+
+    let elapsed = 0;
+    progressFill.style.width = `${(current / total) * 100}%`;
+
+    progressTimer = setInterval(() => {
+      elapsed += 50;
+      const pct = (current / total) * 100 + (elapsed / adjustedDuration) * (100 / total);
+      progressFill.style.width = `${Math.min(pct, ((current + 1) / total) * 100)}%`;
+    }, 50);
+
+    timer = setTimeout(() => {
+      clearInterval(progressTimer);
+      if (current < total - 1) {
+        showSlide(current + 1);
+        if (playing) startAutoPlay();
+      } else {
+        playing = false;
+        updateControls();
+      }
+    }, adjustedDuration);
+  }
+
+  function stopAutoPlay() {
+    if (timer) clearTimeout(timer);
+    if (progressTimer) clearInterval(progressTimer);
+    if (mockupCycle) clearInterval(mockupCycle);
+  }
+
+  function togglePlay() {
+    playing = !playing;
+    if (playing) {
+      startAutoPlay();
+    } else {
+      stopAutoPlay();
+    }
+    updateControls();
+  }
+
+  function goToSlide(idx) {
+    stopAutoPlay();
+    showSlide(idx);
+    if (playing) startAutoPlay();
+  }
+
+  // Event listeners
+  playPauseBtn.addEventListener('click', togglePlay);
+  prevBtn.addEventListener('click', () => {
+    if (current > 0) goToSlide(current - 1);
+  });
+  nextBtn.addEventListener('click', () => {
+    if (current < total - 1) goToSlide(current + 1);
+  });
+  speedBtn.addEventListener('click', () => {
+    const speeds = [0.5, 1, 1.5, 2];
+    const idx = speeds.indexOf(speed);
+    speed = speeds[(idx + 1) % speeds.length];
+    speedBtn.textContent = speed + '×';
+    if (playing) {
+      stopAutoPlay();
+      startAutoPlay();
+    }
+  });
+
+  // Keyboard controls
+  document.addEventListener('keydown', (e) => {
+    if (e.key === ' ' || e.key === 'k') { e.preventDefault(); togglePlay(); }
+    if (e.key === 'ArrowRight' || e.key === 'l') { if (current < total - 1) goToSlide(current + 1); }
+    if (e.key === 'ArrowLeft' || e.key === 'j') { if (current > 0) goToSlide(current - 1); }
+    if (e.key === 'f') { document.documentElement.requestFullscreen?.(); }
+  });
+
+  // Initialize
+  showSlide(0);
+  startAutoPlay();
+})();
+</script>
+</body>
+</html>

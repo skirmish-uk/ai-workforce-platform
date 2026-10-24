@@ -140,7 +140,8 @@ const columns = [
   },
 ]
 
-export default async function IncidentsPage({ searchParams }: { searchParams: { page?: string; search?: string; tenantId?: string; status?: string } }) {
+export default async function IncidentsPage({ searchParams: searchParamsPromise }: { searchParams: Promise<{ page?: string; search?: string; tenantId?: string; status?: string }> }) {
+  const searchParams = await searchParamsPromise
   const data = await getIncidents(searchParams)
 
   return (

@@ -1,8 +1,8 @@
-version: '3.8'
-
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 is a drop-in postgres:16 build with the pgvector
+    # extension preinstalled, required by packages/knowledge for embeddings.
+    image: pgvector/pgvector:pg16
     container_name: ai-workforce-postgres
     environment:
       POSTGRES_USER: postgres

@@ -11,6 +11,22 @@ const credentialsSchema = z.object({
   tenantSlug: z.string().optional(),
 })
 
+/**
+ * Normalises what a sign-in form sends: emails are trimmed and lower-cased, and an empty
+ * tenant (including the literal "undefined"/"null" that browsers send for a missing form
+ * value) means "no tenant given". That literal made every sign-in with an empty Tenant box
+ * fail as "Invalid credentials".
+ */
+export function normalizeCredentials(raw: Record<string, unknown> | undefined): Record<string, unknown> {
+  const email = typeof raw?.email === 'string' ? raw.email.trim().toLowerCase() : raw?.email
+  const slug = typeof raw?.tenantSlug === 'string' ? raw.tenantSlug.trim() : undefined
+  return {
+    ...raw,
+    email,
+    tenantSlug: slug && slug !== 'undefined' && slug !== 'null' ? slug : undefined,
+  }
+}
+
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma) as NextAuthOptions['adapter'],
   session: {
@@ -30,7 +46,7 @@ export const authOptions: NextAuthOptions = {
         tenantSlug: { label: 'Tenant', type: 'text', placeholder: 'demo-agency' },
       },
       async authorize(credentials) {
-        const parsed = credentialsSchema.safeParse(credentials)
+        const parsed = credentialsSchema.safeParse(normalizeCredentials(credentials))
         if (!parsed.success) {
           throw new Error('Invalid credentials')
         }

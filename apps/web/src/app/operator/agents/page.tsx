@@ -114,7 +114,8 @@ const columns = [
   },
 ]
 
-export default async function AgentsPage({ searchParams }: { searchParams: { page?: string; search?: string; tenantId?: string } }) {
+export default async function AgentsPage({ searchParams: searchParamsPromise }: { searchParams: Promise<{ page?: string; search?: string; tenantId?: string }> }) {
+  const searchParams = await searchParamsPromise
   const data = await getAgents(searchParams)
 
   return (

@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { hasPermission, canAccessTenant } from '@ai-workforce/domain'
+import { evaluateAlertRules, getActiveAlerts, getComponentHealth, runHealthChecks } from '@ai-workforce/monitoring'
+import { getAgentRunMetrics } from '@ai-workforce/executor'
 import { UserRole } from '@prisma/client'
 
 export async function GET(request: NextRequest) {
@@ -27,79 +29,64 @@ export async function GET(request: NextRequest) {
 
     switch (type) {
       case 'health': {
-        // Run health checks
-        const dbStart = Date.now()
-        try {
-          await prisma.$queryRaw`SELECT 1`
-          return NextResponse.json({
-            status: 'healthy',
-            timestamp: new Date(),
-            checks: [
-              { name: 'database', status: 'healthy', latencyMs: Date.now() - dbStart },
-            ],
-          })
-        } catch {
-          return NextResponse.json({
-            status: 'unhealthy',
-            timestamp: new Date(),
-            checks: [
-              { name: 'database', status: 'unhealthy', latencyMs: Date.now() - dbStart },
-            ],
-          }, { status: 503 })
-        }
+        const result = await runHealthChecks()
+        return NextResponse.json(result, { status: result.status === 'unhealthy' ? 503 : 200 })
       }
 
       case 'alerts': {
-        // Get active alerts
-        const auditLogs = await prisma.auditLog.findMany({
-          where: {
-            tenantId,
-            action: { startsWith: 'ALERT_' },
-            createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-          },
-          orderBy: { createdAt: 'desc' },
-          take: 100,
-        })
+        // Evaluate rules on read so this stays current without a separate cron process for the demo;
+        // the worker process (packages/queue) additionally runs Watchdog checks continuously.
+        await evaluateAlertRules()
+        const alerts = await getActiveAlerts(tenantId)
+        return NextResponse.json({ alerts })
+      }
 
-        return NextResponse.json({ alerts: auditLogs })
+      case 'agent-runs': {
+        // Brief §13 run metrics (completion/failure/DoD/escalation/override rates, latency, cost per
+        // successful run, tool errors, denials, duplicates) from the AuditLog trail.
+        const isPlatform = userRole === 'PLATFORM_ADMIN' || userRole === 'PLATFORM_OPERATOR'
+        const scopeTenant = isPlatform && searchParams.get('tenantId') ? searchParams.get('tenantId')! : tenantId
+        const days = Math.min(Math.max(Number(searchParams.get('days') ?? 7) || 7, 1), 90)
+        const metrics = await getAgentRunMetrics({
+          tenantId: scopeTenant,
+          agentId: searchParams.get('agentId') ?? undefined,
+          since: new Date(Date.now() - days * 86_400_000),
+        })
+        return NextResponse.json(metrics)
       }
 
       case 'metrics': {
-        // Get system metrics
-        // In a real implementation, this would query a metrics database
+        const [activeAgents, workflowsLastHour] = await Promise.all([
+          prisma.agent.count({ where: { tenantId, status: 'PRODUCTION' } }),
+          prisma.workflowRun.count({ where: { tenantId, createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) } } }),
+        ])
+
         return NextResponse.json({
           timestamp: new Date(),
-          system: {
-            cpuUsagePercent: 0,
-            memoryUsagePercent: 0,
-            diskUsagePercent: 0,
-          },
-          application: {
-            requestsPerSecond: 0,
-            errorRate: 0,
-            avgLatencyMs: 0,
-          },
+          // No APM/infra metrics collector is wired up yet; these stay at 0 rather than faking data.
+          system: { cpuUsagePercent: 0, memoryUsagePercent: 0, diskUsagePercent: 0 },
+          application: { requestsPerSecond: 0, errorRate: 0, avgLatencyMs: 0 },
           business: {
-            activeTenants: 0,
-            activeAgents: 0,
-            workflowsPerHour: 0,
+            activeTenants: userRole === 'PLATFORM_ADMIN' || userRole === 'PLATFORM_OPERATOR' ? await prisma.tenant.count() : 1,
+            activeAgents,
+            workflowsPerHour: workflowsLastHour,
           },
         })
       }
 
       case 'components': {
-        // Get component health status
-        const components = await prisma.agent.findMany({
-          where: { tenantId },
-          select: {
-            id: true,
-            name: true,
-            status: true,
-            updatedAt: true,
-          },
+        const agents = await prisma.agent.findMany({
+          where: { tenantId, isCandidate: false },
+          select: { id: true, name: true, status: true, updatedAt: true },
         })
+        const watchdogHealth = await getComponentHealth(tenantId)
 
-        return NextResponse.json({ components })
+        return NextResponse.json({
+          components: agents.map((agent) => ({
+            ...agent,
+            runtime: watchdogHealth.find((c) => c.component === agent.name) ?? null,
+          })),
+        })
       }
 
       default:

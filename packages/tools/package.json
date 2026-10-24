@@ -1,0 +1,22 @@
+{
+  "name": "@ai-workforce/tools",
+  "version": "0.0.1",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "lint": "eslint src --ext .ts",
+    "test": "tsx --test 'src/**/*.test.ts'"
+  },
+  "dependencies": {
+    "@ai-workforce/db": "^0.0.1",
+    "@ai-workforce/domain": "^0.0.1",
+    "@ai-workforce/integrations": "^0.0.1",
+    "@ai-workforce/llm": "^0.0.1",
+    "zod": "^3.22.0",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "eslint": "^8.57.0"
+  }
+}

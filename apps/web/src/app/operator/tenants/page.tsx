@@ -100,7 +100,8 @@ const columns: ColumnDef<any>[] = [
   },
 ]
 
-export default async function TenantsPage({ searchParams }: { searchParams: { page?: string; search?: string } }) {
+export default async function TenantsPage({ searchParams: searchParamsPromise }: { searchParams: Promise<{ page?: string; search?: string }> }) {
+  const searchParams = await searchParamsPromise
   const data = await getTenants(searchParams)
 
   return (

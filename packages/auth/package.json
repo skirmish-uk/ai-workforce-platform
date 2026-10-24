@@ -8,7 +8,7 @@
     "test": "tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
-    "next-auth": "^4.24.5",
+    "next-auth": "^4.24.15",
     "@ai-workforce/db": "^0.0.1",
     "bcryptjs": "^2.4.3",
     "zod": "^3.22.0"

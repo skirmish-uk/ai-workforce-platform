@@ -14,7 +14,7 @@
     "@ai-workforce/llm": "^0.0.1",
     "@ai-workforce/monitoring": "^0.0.1",
     "@ai-workforce/tools": "^0.0.1",
-    "nodemailer": "^10.0.10",
+    "nodemailer": "^10.2.1",
     "zod": "^3.22.0"
   },
   "devDependencies": {

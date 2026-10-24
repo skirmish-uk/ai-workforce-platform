@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A multi-tenant SaaS platform that lets businesses deploy custom AI employees ("AI agents"). Built as a monorepo with Next.js 14 (App Router), TypeScript, Prisma, PostgreSQL, Redis, Tailwind CSS, and Turborepo.
+A multi-tenant SaaS platform that lets businesses deploy custom AI employees ("AI agents"). Built as a monorepo with Next.js 15 (App Router, React 19), TypeScript, Prisma, PostgreSQL, Redis, Tailwind CSS, and Turborepo.
 
 **Purpose**: Pitchable demo for investors + foundation for a real product.
 
@@ -52,7 +52,7 @@ A multi-tenant SaaS platform that lets businesses deploy custom AI employees ("A
 - **Pre-existing integration adapter bugs** — `packages/integrations` (Gmail/Calendar/HubSpot/Drive) had several real type errors (now fixed to compile) around a HubSpot SDK version mismatch (`associationsApi` call is cast, unverified) and Google OAuth token shapes. None of these adapters have live credentials configured, so none have been runtime-tested — verify against real HubSpot/Google accounts before relying on them.
 - **No APM/infra metrics collector** — `GET /api/monitoring?type=metrics` reports real DB-derived counts (active agents, workflows/hour) but system-level metrics (CPU, latency percentiles) stay at 0 rather than being faked.
 - **Idempotency is check-then-act** — duplicate non-idempotent tool calls are suppressed via `AuditLog` lookup (24 h window), but two runs racing on the identical call within milliseconds could both execute. Needs a unique ledger or Redis reservation. Shared business memory is implemented (`docs/TEAMWORK.md`); retrieval is keyword-based, not embeddings, which is fine for hundreds of notes per tenant.
-- **Dependency audit (2026-10-10): 21 findings remain, all needing major upgrades** — Next.js 14.2.35 is the last 14.x release and still has advisories fixed only in 15.5.24+, including two critical image-optimizer/Windows RCEs. The image optimizer is disabled (`images.unoptimized: true` in `apps/web/next.config.js`, verified to return 404) because nothing uses `next/image`; keep it that way until upgrading to Next 15.5.x (React 19). The rest are build/lint-time only (tailwindcss 3, typescript-eslint 6, eslint-config-next) or not reachable (googleapis → uuid buffer bug).
+- **Dependency audit (2026-10-24): 9 findings, none critical** — upgraded to Next.js 15.5.28 + React 19 (all Next.js advisories, including the two critical RCEs, are gone; page `searchParams`/route `params` are Promises; one React copy enforced with root `overrides`; lucide-react 0.577, nodemailer 10.2.1; the unused @testing-library packages were removed). Left: postcss inside Next (build-time, only our own CSS; fixed in Next 16), zod 3 memory exhaustion on oversized constrained arrays (needs zod 4, a major change; only reachable by signed-in users behind the site password), uuid via googleapis (unused code path), tailwind/eslint build tooling. The image optimizer stays disabled (`images.unoptimized: true`).
 - **Self-management never run against a real model** — the revision pipeline and manager tools are tested with a scripted fake model and smoke-tested live up to evaluation (which failed without an API key, as designed). Review the manager's first real proposals by hand before activating its schedule. Revisions are visible at `/dashboard/improvements`; no notifications yet.
 - **Voice: one turn waits for the worker (≤45 s) inside the request** — fine for a browser demo, not for phone calls (AI Receptionist not built). Verified live 15 Oct (OpenAI speech) and 18 Oct (Cartesia "Bronte", Ava on Haiku 5.5): greeting 1.8 s, answers 4.8–7.9 s end to end; not yet heard by a person on a real microphone. Cloned voices: **Use your own voice** on the agent page records a consent-first script in the browser and clones it via Cartesia (`/api/agents/[id]/voice/clone`, docs/VOICE.md §2a); Remove restores the previous voice and deletes the copy at Cartesia.
 
@@ -64,7 +64,7 @@ A multi-tenant SaaS platform that lets businesses deploy custom AI employees ("A
 ```
 /home/elliot/Documents/ai-workforce-platform/
 ├── apps/
-│   └── web/                          # Next.js 14 App Router
+│   └── web/                          # Next.js 15 App Router
 │       ├── src/app/
 │       │   ├── page.tsx              # Landing page (links to /demo)
 │       │   ├── demo/                 # Investor presentation (animated)

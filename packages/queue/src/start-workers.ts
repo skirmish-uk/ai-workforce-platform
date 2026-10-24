@@ -7,6 +7,7 @@ import { createEmbedWorker } from './workers/embed.worker'
 import { createEvaluationWorker } from './workers/evaluation.worker'
 import { createRevisionWorker } from './workers/revision.worker'
 import { createWorkflowWorker } from './workers/workflow.worker'
+import { createWebsiteWorker } from './workers/website.worker'
 import { startScheduler } from './scheduler'
 
 /**
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
     createApprovalWorker(),
     createEvaluationWorker(),
     createRevisionWorker(),
+    createWebsiteWorker(),
   ]
 
   for (const worker of workers) {

@@ -97,6 +97,7 @@ model Tenant {
   memories          Memory[]
   teamCases         TeamCase[]
   agentTasks        AgentTask[]
+  websiteImports    WebsiteImport[]
   skills            Skill[]
   knowledgeDocs     KnowledgeDocument[]
   knowledgeChunks   KnowledgeChunk[]
@@ -545,6 +546,31 @@ model AgentTask {
 
   @@index([caseId, createdAt])
   @@index([tenantId, status])
+}
+
+/// Learning a business from its public website (packages/executor/src/onboarding.ts): the pages
+/// read, the profile drafted from them, and whether a person applied it.
+model WebsiteImport {
+  id          String    @id @default(cuid())
+  url         String
+  /// READING -> READY (profile drafted, waiting for review) -> APPLIED | FAILED
+  status      String    @default("READING")
+  /// [{ url, title, chars }]
+  pages       Json      @default("[]")
+  /// The drafted profile (see onboarding.ts WebsiteProfile).
+  profile     Json?
+  error       String?
+  costUsd     Float?
+  createdById String?
+  appliedById String?
+  appliedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
 }
 
 model ApprovalPolicy {

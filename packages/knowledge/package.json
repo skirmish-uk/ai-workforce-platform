@@ -5,7 +5,7 @@
   "types": "src/index.ts",
   "scripts": {
     "lint": "eslint src --ext .ts",
-    "test": "node -e \"console.log('no tests in this package')\""
+    "test": "tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@ai-workforce/db": "^0.0.1",
@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "typescript": "^5.4.0",
-    "eslint": "^8.57.0"
+    "eslint": "^8.57.0",
+    "tsx": "^4.7.0"
   }
 }

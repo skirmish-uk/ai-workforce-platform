@@ -166,6 +166,10 @@ All three are also reachable through Morgan's "Ask the team". Their test suites 
 3. Say the same thing on a voice call ("I'm the owner…"): it arrives as **waiting for you**, unused until you confirm it. Customers can't teach the team rules.
 4. Reject an approval with a reason: it becomes a lesson for that agent, shown on the page.
 
+### Onboarding from a website
+
+**Onboarding** → "Learn from your website" → paste a business's site (the prospect's own works best) → about a minute later, review what the team learned: services and prices, hours, FAQs, notes for memory, what the site doesn't say, and a suggested team with "Set up" links. Apply adds it; **Undo** (same card, or "Earlier imports") takes it back, so the demo agency's own profile is safe. Leave "Use this as the business profile" unticked on the demo tenant unless you mean to replace it.
+
 ### Kill switch
 
 **Stop all agents** on the Team page (admins only) stops every agent at once: new runs end as "Blocked" and approved actions don't execute. A red banner stays on the Team page until you press **Turn agents back on**. Same switch as `PUT /api/tenants/[id]/kill-switch`; every change is in the audit trail.

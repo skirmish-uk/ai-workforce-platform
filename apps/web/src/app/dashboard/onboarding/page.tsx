@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
 import { ArrowLeft, ArrowRight, Check, Loader2, Building2, Target, Zap, FileText, Plug, CheckCircle } from 'lucide-react'
 import { Button, Input, Textarea, Card, CardContent, CardHeader, CardTitle } from '@ai-workforce/ui'
+import { WebsiteImport } from './WebsiteImport'
 
 const steps = [
   { id: 1, title: 'Business Profile', icon: Building2, description: 'Tell us about your company' },
@@ -243,6 +244,8 @@ export default function OnboardingPage() {
         <h1 className="text-3xl font-bold text-neutral-900 dark:text-neutral-50">Welcome to AI Workforce</h1>
         <p className="text-neutral-600 dark:text-neutral-400 mt-2">Let&apos;s set up your AI employee in 5 steps</p>
       </div>
+
+      <WebsiteImport />
 
       <div className="flex items-center justify-center gap-1 sm:gap-2">
         {steps.map((step, i) => (

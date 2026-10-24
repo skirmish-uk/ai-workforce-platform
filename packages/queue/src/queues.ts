@@ -43,6 +43,10 @@ export interface RevisionJobData {
   revisionId: string
 }
 
+export interface WebsiteImportJobData {
+  importId: string
+}
+
 const connection = getRedisConnection()
 
 export const agentRunQueue = new Queue<AgentRunJobData>('agent-run', { connection })
@@ -52,6 +56,12 @@ export const deploymentQueue = new Queue<DeploymentJobData>('deployment', { conn
 export const approvalExecuteQueue = new Queue<ApprovalExecuteJobData>('approval-execute', { connection })
 export const evaluationQueue = new Queue<EvaluationJobData>('agent-evaluation', { connection })
 export const revisionQueue = new Queue<RevisionJobData>('agent-revision', { connection })
+export const websiteImportQueue = new Queue<WebsiteImportJobData>('website-import', { connection })
+
+/** Reading a business's website for onboarding (one job per import). */
+export async function enqueueWebsiteImport(data: WebsiteImportJobData) {
+  return websiteImportQueue.add('website-import', data, { jobId: `website-import-${data.importId}` })
+}
 
 export async function enqueueAgentRun(data: AgentRunJobData) {
   return agentRunQueue.add('agent-run', data)

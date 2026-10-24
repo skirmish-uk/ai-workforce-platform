@@ -47,6 +47,15 @@ export default function NewAgentPage() {
   const [take, setTake] = useState<VoiceTake | null>(null)
   const [progress, setProgress] = useState<string | null>(null)
 
+  // Pre-filled from a suggestion (e.g. the website import's suggested team): ?name=&role=&mission=&instructions=
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    const pick = (key: string, max: number) => (q.get(key) ?? '').slice(0, max)
+    if (q.get('name') || q.get('role')) {
+      setFormData((f) => ({ ...f, name: pick('name', 100) || f.name, role: pick('role', 100) || f.role, mission: pick('mission', 1000) || f.mission, systemPrompt: pick('instructions', 4000) || f.systemPrompt }))
+    }
+  }, [])
+
   useEffect(() => {
     fetch('/api/voice/clone-setup')
       .then((r) => (r.ok ? r.json() : null))

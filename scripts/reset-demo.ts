@@ -138,6 +138,8 @@ async function main(): Promise<void> {
       ['approvals', () => prisma.approval.deleteMany({ where: { tenantId } }), () => prisma.approval.count({ where: { tenantId } })],
       ['hand-offs to a person', () => prisma.handover.deleteMany({ where: { tenantId } }), () => prisma.handover.count({ where: { tenantId } })],
       ['notification records', () => prisma.notification.deleteMany({ where: { tenantId } }), () => prisma.notification.count({ where: { tenantId } })],
+      ['documents added from website imports', () => prisma.knowledgeDocument.deleteMany({ where: { tenantId, metadata: { path: ['source'], equals: 'website' } } }), () => prisma.knowledgeDocument.count({ where: { tenantId, metadata: { path: ['source'], equals: 'website' } } })],
+      ['website imports', () => prisma.websiteImport.deleteMany({ where: { tenantId } }), () => prisma.websiteImport.count({ where: { tenantId } })],
       ['team cases and their tasks', () => prisma.teamCase.deleteMany({ where: { tenantId } }), () => prisma.teamCase.count({ where: { tenantId } })],
       ['memories learned in demos (the seeded ones stay)', () => prisma.memory.deleteMany({ where: { tenantId, NOT: { id: { startsWith: 'demo-' } } } }), () => prisma.memory.count({ where: { tenantId, NOT: { id: { startsWith: 'demo-' } } } })],
       ['workflows (and their runs)', () => prisma.workflow.deleteMany({ where: { tenantId, NOT: { id: { startsWith: 'demo-' } } } }), () => prisma.workflow.count({ where: { tenantId, NOT: { id: { startsWith: 'demo-' } } } })],

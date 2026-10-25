@@ -106,6 +106,13 @@ test('eval assertions are deterministic; cases without expectations are never co
   assert.deepEqual(assertEvalCase(cases[1], result), ['no deterministic assertions'])
 })
 
+test('toolsRequestedAny passes when any one of the tools was requested', () => {
+  const { cases } = parseEvalCases([{ input: 'x', expect: { toolsRequestedAny: ['platform__delegate', 'platform__hand_off'] } }])
+  const run = (toolName: string) => ({ status: 'completed' as const, output: 'ok', toolCalls: [{ toolName, input: {}, status: 'proposed' as const }], dod: undefined })
+  assert.deepEqual(assertEvalCase(cases[0], run('platform__hand_off')), [])
+  assert.deepEqual(assertEvalCase(cases[0], run('gmail__send_email')), ['expected one of platform__delegate, platform__hand_off to be requested'])
+})
+
 test('eval text assertions include the hand-off reason and clarification questions', () => {
   const { cases } = parseEvalCases([{ input: 'x', expect: { outputContains: ['urgent'] } }])
   assert.deepEqual(assertEvalCase(cases[0], { status: 'escalated', output: null, toolCalls: [], dod: undefined, escalation: { reason: 'Classified as URGENT: legal deadline Friday', severity: 'medium', destination: 'x' } }), [])

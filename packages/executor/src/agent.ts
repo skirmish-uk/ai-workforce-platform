@@ -1002,9 +1002,24 @@ class AgentRun {
 
   private readonly workforceCounts = new Map<string, number>()
 
+  /**
+   * Test data for the manager's read tools in a dry run, so a manager's evaluation sees a fixed
+   * team instead of whatever the live tenant looks like today. An inspect_agent fixture may be
+   * keyed by agent id; an id it doesn't list reads as not found.
+   */
+  private workforceFixture(name: string, input: Record<string, unknown>): unknown {
+    const fixtures = this.options.toolFixtures
+    if (!this.options.dryRun || !fixtures || !(name in fixtures) || !WORKFORCE_READ_TOOLS.has(name)) return undefined
+    const fixture = fixtures[name] as Record<string, unknown>
+    if (name !== 'platform__inspect_agent' || !fixture || typeof fixture !== 'object' || !('byAgentId' in fixture)) return fixture
+    const byId = fixture.byAgentId as Record<string, unknown>
+    return byId[String(input.agentId)] ?? { error: 'Agent not found in this tenant' }
+  }
+
   /** Self-management platform tools. Proposals only enter the revision pipeline; nothing here edits an agent. */
   private async runWorkforceTool(name: string, input: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
-    const outcome = await executeWorkforceTool(name, input, {
+    const fixture = this.workforceFixture(name, input)
+    const outcome = fixture !== undefined ? { status: 'completed' as const, output: fixture, reason: undefined } : await executeWorkforceTool(name, input, {
       tenantId: this.agent.tenantId,
       agentId: this.agent.id,
       runId: this.runId,

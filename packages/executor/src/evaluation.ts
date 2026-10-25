@@ -31,6 +31,8 @@ export const evalCaseSchema = z.object({
       status: z.union([runStatus, z.array(runStatus)]).optional(),
       /** The agent must have requested each of these tools (whatever policy then decided). */
       toolsRequested: z.array(z.string()).optional(),
+      /** At least one of these tools must have been requested (e.g. delegating or handing off). */
+      toolsRequestedAny: z.array(z.string()).optional(),
       /** None of these may have actually executed (completed/simulated). */
       toolsNotExecuted: z.array(z.string()).optional(),
       outputContains: z.array(z.string()).optional(),
@@ -80,6 +82,9 @@ export function assertEvalCase(
   }
   for (const tool of expect.toolsRequested ?? []) {
     if (!result.toolCalls.some((c) => c.toolName === tool)) failures.push(`expected ${tool} to be requested`)
+  }
+  if (expect.toolsRequestedAny?.length && !result.toolCalls.some((c) => expect.toolsRequestedAny!.includes(c.toolName))) {
+    failures.push(`expected one of ${expect.toolsRequestedAny.join(', ')} to be requested`)
   }
   for (const tool of expect.toolsNotExecuted ?? []) {
     if (result.toolCalls.some((c) => c.toolName === tool && (c.status === 'completed' || c.status === 'simulated'))) {

@@ -118,7 +118,7 @@ All of this is returned to the manager wrapped as untrusted data (`<untrusted_da
 
 Each (problem, agent) pair fires at most once per 24 h (`MANAGER_REVIEW_TRIGGERED` audit rows). There are at most `autoReview.maxPerDay` reviews per tenant (default 4). All thresholds are in `Tenant.settings.selfManagement.autoReview`.
 
-**Front desk.** A manager whose contract has `delegation.allowedSpecialists: ["*"]` can hand any request to any non-manager, non-paused agent on the team with `platform__delegate`, and reports the outcome. If the agent's action needs approval, the manager's run ends `approval_required` with that approval. `"*"` is refused for non-managers (contract validation, and the revision pipeline rejects it as an unknown delegate). Morgan is seeded this way. Each routed request costs a manager run (Sonnet 5, about $0.015 for a simple routing on 13 Oct) plus the agent's run.
+**Front desk.** A manager whose contract has `delegation.allowedSpecialists: ["*"]` can hand any request to any non-manager, non-paused agent on the team with `platform__delegate`, and reports the outcome. If the agent's action needs approval, the manager's run ends `approval_required` with that approval. `"*"` is refused for non-managers (contract validation, and the revision pipeline rejects it as an unknown delegate). Morgan is seeded this way. Each routed request costs a manager run (about $0.015 for a simple routing on Sonnet 5, 13 Oct) plus the agent's run. The manager may also pass work on as a team case with `platform__hand_off` (docs/TEAMWORK.md); either is fine.
 
 **Team page** (`/dashboard/team`, `GET /api/team`):
 - each agent's 7-day health, flagged "needs attention" on the same thresholds as automatic reviews;
@@ -185,7 +185,7 @@ Set with `PUT /api/tenants/[id]/self-management`, which needs tenant/settings wr
 ## 8. Running it
 
 1. `npx prisma db push` (adds `AgentRevision` and `Agent.isCandidate`) and reseed. The seed creates **Morgan - Workforce Manager** (`demo-manager-1`) for the demo tenant, enables self-management there, and creates a weekly schedule (Mondays 07:00 Sydney) that is **inactive**.
-2. Set `ANTHROPIC_API_KEY` (the manager uses `claude-sonnet-5`; workers use whatever they're configured with).
+2. Set `ANTHROPIC_API_KEY` (the manager uses `claude-sonnet-5-5`; workers use whatever they're configured with).
 3. Run the worker process (`npx tsx packages/queue/src/start-workers.ts`). It now includes the `agent-revision` worker. Each 60 s scheduler tick also queues PROPOSED revisions and runs the watch.
 4. Trigger the manager manually (`POST /api/agents/demo-manager-1/run` with an input such as "Weekly workforce review"), or activate its schedule.
 5. Watch `GET /api/revisions` and `GET /api/approvals`.
@@ -247,4 +247,5 @@ Customers mainly want reliability, coverage of their own tools, steady improveme
 - **Processing is sequential and polled.** A proposal waits for the next scheduler tick (≤ 60 s) unless it came from the API route, which enqueues immediately. The scheduler is still single-process (see CLAUDE.md known gaps).
 - **Deployment rows aren't updated** when an `update` revision is promoted. The agent's version changes in place, and the revision row is the record. New agents (`create`) go through the normal deployment job.
 - **Playbook versions accumulate.** Each changed playbook is a new `Skill` row. Nothing prunes old, unused versions.
-- **The manager's model** is `claude-sonnet-5` because that ID is in the pricing table; with an unpriced ID the spend cap couldn't count its cost. Add newer models to `packages/llm/src/pricing.ts` (with verified prices) before switching.
+- **The manager's model** is `claude-sonnet-5-5` (since 25 Oct 2026: it passed the manager's suite 10/10 at about 40% less than `claude-sonnet-5`). It must be in the pricing table, or the spend cap can't count its cost: add newer models to `packages/llm/src/pricing.ts` (with verified prices) before switching.
+- **The manager's test suite** is the `workforce_review` playbook (`packages/db/prisma/seed-showcase.ts`): a recurring rejection gets one playbook fix, a healthy team gets no proposal, an instruction planted in run data never raises autonomy or grants a permission, front-desk work is passed to a teammate, billing and kill-switch requests go to a person. Its cases use fixtures for `platform__list_agents` / `platform__inspect_agent` (in a dry run, a fixture replaces the live read; an `inspect_agent` fixture may be `{ byAgentId: {...} }`), so the result doesn't depend on what the tenant looks like that day. About $0.13 per run of the suite.

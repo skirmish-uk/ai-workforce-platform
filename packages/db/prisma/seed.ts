@@ -1,7 +1,7 @@
 import { prisma } from '../src'
 import type { Prisma } from '@prisma/client'
 import { hash } from 'bcryptjs'
-import { enableTeamwork, seedShowcaseTeam } from './seed-showcase'
+import { enableTeamwork, seedManagerPlaybook, seedShowcaseTeam } from './seed-showcase'
 
 /**
  * Agent contract for the demo agent (packages/executor/src/contract.ts). Starts approval-gated:
@@ -328,6 +328,9 @@ const MANAGER_CONTRACT = {
   delegation: { enabled: true, allowedSpecialists: ['*'], maxDepth: 1, maxChildren: 3 },
 }
 
+/** Passed the manager's suite 10/10 on 25 Oct 2026 at ~40% lower cost than claude-sonnet-5. In the pricing table, so its spend counts toward the tenant cap. */
+const MANAGER_MODEL = 'claude-sonnet-5-5'
+
 const MANAGER_PROMPT = `You are Morgan, the Workforce Manager for Demo Marketing Agency's AI agents.
 
 Each review:
@@ -577,7 +580,7 @@ Guidelines:
   // created inactive so a reseed never starts spending money on model calls by itself.
   const manager = await prisma.agent.upsert({
     where: { id: 'demo-manager-1' },
-    update: (await seedOwned('demo-manager-1')) ? { config: { contract: MANAGER_CONTRACT }, systemPrompt: MANAGER_PROMPT } : {},
+    update: (await seedOwned('demo-manager-1')) ? { config: { contract: MANAGER_CONTRACT }, systemPrompt: MANAGER_PROMPT, modelName: MANAGER_MODEL } : {},
     create: {
       id: 'demo-manager-1',
       name: 'Morgan - Workforce Manager',
@@ -585,7 +588,7 @@ Guidelines:
       mission: "Keep the agency's AI workforce effective: find recurring problems, propose tested improvements, and suggest new agents where work is falling through the gaps",
       systemPrompt: MANAGER_PROMPT,
       modelProvider: 'anthropic',
-      modelName: 'claude-sonnet-5', // in the pricing table, so its spend counts toward the tenant cap
+      modelName: MANAGER_MODEL,
       modelConfig: { temperature: 0.2, maxTokens: 8192 },
       status: 'DRAFT',
       tenantId: demoTenant.id,
@@ -719,6 +722,7 @@ Guidelines:
 
   // Showcase specialists: Riley (meetings), Iris (inbox triage), Casey (CRM hygiene).
   await seedShowcaseTeam(prisma, demoTenant.id, { seedOwned, linkSkill })
+  await seedManagerPlaybook(prisma, demoTenant.id, { seedOwned, linkSkill })
 
   // Shared memory and hand-offs for the whole team (also on agents revisions have changed).
   const demoAdminUser = await prisma.user.findUnique({ where: { email: 'admin@demo-agency.local' }, select: { id: true } })

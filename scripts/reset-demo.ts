@@ -12,7 +12,8 @@
  * seed id). Promoted revisions stay, so Sarah keeps her current version and playbook and the
  * Improvements page keeps its history. The exception is Jordan, whose flaw is staged for the
  * self-repair moment: Jordan always goes back to the flawed version 1. Then the seed runs to
- * restore anything missing.
+ * restore anything missing, and the team is deployed again (scripts/deploy-demo-team.ts) so it
+ * shows as live; pass --no-deploy to leave the agents in DRAFT.
  *
  * --full deletes the whole demo tenant (and its playbooks), reseeds, and re-embeds the
  * knowledge documents when OPENAI_API_KEY is set. Agents go back to version 1, so upgrades
@@ -33,6 +34,7 @@ for (const [key, value] of Object.entries(loaded.parsed ?? {})) {
 
 import { prisma } from '@ai-workforce/db'
 import { restoreStagedFlaw } from '../packages/db/prisma/seed-showcase'
+import { deployDemoTeam } from './deploy-demo-team'
 
 const TENANT_SLUG = 'demo-agency'
 const SEEDED_USERS = ['admin@demo-agency.local', 'staff@demo-agency.local']
@@ -95,12 +97,23 @@ async function removeQueuedJobs(ids: { agents: Set<string>; workflowRuns: Set<st
   return removed
 }
 
+async function deployTeam(): Promise<void> {
+  if (args.has('--no-deploy')) return
+  console.log('\n🚀 Deploying the team...')
+  const { deployed, failed } = await deployDemoTeam()
+  console.log(`  deployed: ${deployed.length}`)
+  for (const f of failed) console.log(`  ! ${f.name} was not deployed: ${f.error}`)
+}
+
 async function main(): Promise<void> {
   assertLocalDatabase()
   const tenant = await prisma.tenant.findUnique({ where: { slug: TENANT_SLUG } })
   if (!tenant) {
     console.log(`No "${TENANT_SLUG}" tenant yet.`)
-    if (!dryRun) runSeed()
+    if (!dryRun) {
+      runSeed()
+      await deployTeam()
+    }
     return
   }
   const tenantId = tenant.id
@@ -159,7 +172,7 @@ async function main(): Promise<void> {
       console.log(`  ${label}: ${n}`)
     }
     if (!dryRun) {
-      // Back to the seeded operating state: agents in DRAFT (not paused or deployed), schedules off, kill switch off.
+      // Back to the seeded operating state: agents in DRAFT (deployed again after the seed), schedules off, kill switch off.
       await prisma.agent.updateMany({ where: { id: { in: keptAgents } }, data: { status: 'DRAFT' } })
       await prisma.schedule.updateMany({ where: { agentId: { in: keptAgents } }, data: { isActive: false } })
       const settings = { ...((tenant.settings ?? {}) as Record<string, unknown>) }
@@ -187,6 +200,7 @@ async function main(): Promise<void> {
       console.log('OPENAI_API_KEY not set: knowledge search will use keyword matching.')
     }
   }
+  await deployTeam()
   console.log('\n✅ Demo reset. Restart the worker if it was running during the reset.')
 }
 

@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Button, Badge } from '@ai-workforce/ui'
 import { formatDate } from '@ai-workforce/ui'
+import { agentStatus } from '../../../lib/agent-status'
 
 interface Agent {
   id: string
@@ -34,13 +35,6 @@ interface AgentsResponse {
   }
 }
 
-const statusColors: Record<string, 'default' | 'success' | 'warning' | 'danger' | 'info'> = {
-  DRAFT: 'default',
-  EVALUATING: 'warning',
-  PRODUCTION: 'success',
-  PAUSED: 'warning',
-  ARCHIVED: 'danger',
-}
 
 export default function AgentsPage() {
   const { data: session } = useSession()
@@ -121,8 +115,8 @@ export default function AgentsPage() {
         >
           <option value="">All Statuses</option>
           <option value="DRAFT">Draft</option>
-          <option value="EVALUATING">Evaluating</option>
-          <option value="PRODUCTION">Production</option>
+          <option value="EVALUATING">Deploying</option>
+          <option value="PRODUCTION">Live</option>
           <option value="PAUSED">Paused</option>
           <option value="ARCHIVED">Archived</option>
         </select>
@@ -172,7 +166,7 @@ export default function AgentsPage() {
                             </div>
                             <p className="text-xs text-neutral-500 dark:text-neutral-400">{agent.role}</p>
                             {/* Status moves under the name when its column is hidden. */}
-                            <div className="sm:hidden mt-1"><Badge variant={statusColors[agent.status] || 'default'}>{agent.status.toLowerCase()}</Badge></div>
+                            <div className="sm:hidden mt-1"><Badge variant={agentStatus(agent.status).variant}>{agentStatus(agent.status).label}</Badge></div>
                           </div>
                         </div>
                       </td>
@@ -180,7 +174,7 @@ export default function AgentsPage() {
                         {agent.modelName}
                       </td>
                       <td className="hidden sm:table-cell px-4 sm:px-6 py-4">
-                        <Badge variant={statusColors[agent.status] || 'default'}>{agent.status.toLowerCase()}</Badge>
+                        <Badge variant={agentStatus(agent.status).variant}>{agentStatus(agent.status).label}</Badge>
                       </td>
                       <td className="hidden lg:table-cell px-6 py-4">
                         <div className="flex flex-wrap gap-1 max-w-[16rem]">

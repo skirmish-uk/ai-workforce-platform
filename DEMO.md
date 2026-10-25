@@ -37,7 +37,7 @@ Open **http://127.0.0.1:3000** in your browser
 
 **What to See**:
 1. **Dashboard** - Your agency's metrics (1 active agent, 2 skills, 3 knowledge docs)
-2. **Agents** → "Sarah - Sales Assistant" (DRAFT status)
+2. **Agents** → "Sarah - Sales Assistant" (live: deployed through the validation gate)
    - Click to configure: role, mission, system prompt, model
    - Skills tab: 2 skills attached (lead_follow_up, email_triage)
    - Knowledge tab: 3 docs attached
@@ -209,9 +209,10 @@ npm run demo:reset              # clear runs, approvals, audit trail and anythin
 npm run demo:reset -- --dry-run # show what would be removed first
 npm run demo:reset -- --full    # delete the demo tenant and reseed from scratch (agents back to v1,
                                 # knowledge re-embedded if OPENAI_API_KEY is set)
+npm run demo:deploy             # deploy any demo agent that isn't live (the reset does this itself)
 ```
 
-It only touches the `demo-agency` tenant and refuses to run against a non-local database. Promoted upgrades are kept, except Jordan's: Jordan always goes back to the flawed version 1 so the self-repair moment can be shown again. Restart the worker afterwards if it was running. Clearing the audit trail also resets the demo tenant's spend toward its cost cap.
+It only touches the `demo-agency` tenant and refuses to run against a non-local database. Promoted upgrades are kept, except Jordan's: Jordan always goes back to the flawed version 1 so the self-repair moment can be shown again. After reseeding, the reset deploys the team again through the same checks as the Deploy button (contract, playbooks with owners and test cases, model key), so every agent shows as **live**; `--no-deploy` leaves them in draft. Deploying changes no permissions or autonomy. Restart the worker afterwards if it was running. Clearing the audit trail also resets the demo tenant's spend toward its cost cap.
 
 ---
 

@@ -7,6 +7,7 @@ import { ArrowLeft, CheckCircle2, CircleDashed, Loader2, MessageSquare, Mic, Pla
 import { Badge, Button, formatDateTime } from '@ai-workforce/ui'
 import { VoicePanel } from './VoicePanel'
 import { VoiceClone } from './VoiceClone'
+import { agentStatus } from '../../../../lib/agent-status'
 
 interface AgentDetail {
   id: string
@@ -17,7 +18,7 @@ interface AgentDetail {
   version: number
   modelProvider: string
   modelName: string
-  config: { contract?: { autonomyStage?: string; allowedTools?: string[]; scope?: { inScope?: string[]; outOfScope?: string[] } }; voice?: { enabled?: boolean } }
+  config: { contract?: { autonomyStage?: string; allowedTools?: string[]; scope?: { inScope?: string[]; outOfScope?: string[] }; management?: { enabled?: boolean }; handoffs?: { enabled?: boolean }; delegation?: { enabled?: boolean }; memory?: { mode?: string } }; voice?: { enabled?: boolean } }
   skills: Array<{ skill: { name: string; version: string; requiredTools: string[] } }>
   permissions: Array<{ action: string; level: string }>
 }
@@ -601,6 +602,12 @@ export default function AgentPage() {
   const newConversationRunning = running !== null && !conversations.some((c) => c.id === running.conversationId)
   const tools = Array.from(new Set(agent?.skills.flatMap((s) => s.skill.requiredTools) ?? []))
   const firstName = agent?.name.split(' ')[0] ?? 'the agent'
+  // Platform abilities that aren't integration tools, so a manager doesn't read as "No tools".
+  const teamAbilities = [
+    contract?.management?.enabled && 'Reviews and improves the team',
+    (contract?.handoffs?.enabled || contract?.delegation?.enabled) && 'Passes work to teammates',
+    contract?.memory?.mode === 'tenant' && 'Shared team notes',
+  ].filter((a): a is string => Boolean(a))
 
   return (
     <div className="space-y-6">
@@ -614,7 +621,7 @@ export default function AgentPage() {
         </div>
         {agent && (
           <div className="flex flex-wrap gap-2">
-            <Badge>{agent.status.toLowerCase()}</Badge>
+            <Badge variant={agentStatus(agent.status).variant}>{agentStatus(agent.status).label}</Badge>
             <Badge variant="info">{(contract?.autonomyStage ?? 'approval_gated').replace(/_/g, ' ')}</Badge>
             <Badge variant="outline">v{agent.version}</Badge>
           </div>
@@ -630,7 +637,9 @@ export default function AgentPage() {
           <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">
             <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500 mb-2">Can work with</h2>
             <div className="flex flex-wrap gap-1.5">
-              {tools.length ? tools.map((t) => <Badge key={t} variant="outline" size="sm">{toolLabel(t)}</Badge>) : <span className="text-sm text-neutral-500">No tools</span>}
+              {tools.map((t) => <Badge key={t} variant="outline" size="sm">{toolLabel(t)}</Badge>)}
+              {teamAbilities.map((a) => <Badge key={a} variant="info" size="sm">{a}</Badge>)}
+              {!tools.length && !teamAbilities.length && <span className="text-sm text-neutral-500">No tools</span>}
             </div>
           </div>
           <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-4">

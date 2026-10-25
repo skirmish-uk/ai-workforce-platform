@@ -14,7 +14,7 @@ import type { DeploymentJobData } from '../queues'
  * heartbeat. The agent runtime IS the shared worker process; there is no
  * per-agent process to start or stop.
  */
-async function runDeploy(deploymentId: string, agentId: string): Promise<void> {
+export async function runDeploy(deploymentId: string, agentId: string): Promise<void> {
   const agent = await prisma.agent.findUniqueOrThrow({ where: { id: agentId } })
 
   try {

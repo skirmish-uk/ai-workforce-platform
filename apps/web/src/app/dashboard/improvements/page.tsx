@@ -222,7 +222,7 @@ export default function ImprovementsPage() {
                       <span className="font-semibold text-neutral-900 dark:text-neutral-50">{headline(r)}</span>
                       <Badge variant={s.variant}>{s.label}</Badge>
                     </div>
-                    <p className="text-sm text-neutral-700 dark:text-neutral-300">{r.rationale}</p>
+                    <p className={`text-sm text-neutral-700 dark:text-neutral-300 ${isOpen ? '' : 'line-clamp-3'}`}>{r.rationale}</p>
                     {r.risk?.riskIncreases?.length ? (
                       <p className="text-sm text-amber-700 dark:text-amber-400">Adds risk: {r.risk.riskIncreases.join(' ')}</p>
                     ) : null}

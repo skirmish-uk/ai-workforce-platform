@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { AlertTriangle, CheckCircle2, CircleDashed, Loader2, PauseCircle, Send, Sparkles, Stethoscope } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, CircleDashed, Eye, Loader2, PauseCircle, Send, Sparkles, Stethoscope } from 'lucide-react'
 import { Button, formatDateTime } from '@ai-workforce/ui'
 import { KillSwitch } from './KillSwitch'
 
@@ -14,7 +14,7 @@ interface TeamAgent {
   version: number
   stage: string
   model: string
-  health: 'healthy' | 'attention' | 'idle' | 'paused'
+  health: 'healthy' | 'attention' | 'watching' | 'idle' | 'paused'
   reasons: string[]
   metrics: { runs: number; completionRate: number | null; escalationRate: number | null; qualityFlaggedRuns: number; rejectionRate: number | null; costUsd: number }
   openRevision: { id: string; status: string } | null
@@ -50,6 +50,7 @@ interface RunResult {
 const HEALTH = {
   healthy: { label: 'Healthy', icon: CheckCircle2, className: 'text-green-600 dark:text-green-400' },
   attention: { label: 'Needs attention', icon: AlertTriangle, className: 'text-amber-600 dark:text-amber-400' },
+  watching: { label: 'Fixed, being watched', icon: Eye, className: 'text-primary-600 dark:text-primary-400' },
   idle: { label: 'No work this week', icon: CircleDashed, className: 'text-neutral-400' },
   paused: { label: 'Paused', icon: PauseCircle, className: 'text-neutral-400' },
 } as const

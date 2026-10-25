@@ -83,11 +83,20 @@ export async function GET(request: NextRequest) {
           const { contract } = resolveAgentContract(a)
           const m = await getAgentRunMetrics({ tenantId, agentId: a.id, since })
           const lastChange = await prisma.agentRevision.findFirst({ where: { agentId: a.id, status: 'PROMOTED' }, orderBy: { promotedAt: 'desc' }, select: { promotedAt: true, promotedVersion: true, proposedByAgentId: true } })
-          const reasons: string[] = []
-          if (m.runs >= t.minRuns && (m.failureRate ?? 0) >= t.failureRate) reasons.push(`${Math.round((m.failureRate ?? 0) * 100)}% of runs failed`)
-          if (m.qualityFlaggedRuns >= t.qualityFlaggedRuns) reasons.push(`${m.qualityFlaggedRuns} runs promised actions or asked questions in text`)
-          if (m.approvalsDecided >= 3 && (m.humanOverrideRate ?? 0) >= t.rejectionRate) reasons.push(`${Math.round((m.humanOverrideRate ?? 0) * 100)}% of approvals rejected`)
-          if (m.toolCalls >= 5 && (m.toolErrorRate ?? 0) >= t.toolErrorRate) reasons.push(`${Math.round((m.toolErrorRate ?? 0) * 100)}% of tool calls errored`)
+          // Judged on the current version: problems from before a change that went live this week
+          // don't count against it (they show as "fixed, being watched" until it has runs of its own).
+          const changedAt = lastChange?.promotedAt && lastChange.promotedAt > since ? lastChange.promotedAt : null
+          const current = changedAt ? await getAgentRunMetrics({ tenantId, agentId: a.id, since: changedAt }) : m
+          const problems = (x: typeof m): string[] => {
+            const out: string[] = []
+            if (x.runs >= t.minRuns && (x.failureRate ?? 0) >= t.failureRate) out.push(`${Math.round((x.failureRate ?? 0) * 100)}% of runs failed`)
+            if (x.qualityFlaggedRuns >= t.qualityFlaggedRuns) out.push(`${x.qualityFlaggedRuns} runs promised actions or asked questions in text`)
+            if (x.approvalsDecided >= 3 && (x.humanOverrideRate ?? 0) >= t.rejectionRate) out.push(`${Math.round((x.humanOverrideRate ?? 0) * 100)}% of approvals rejected`)
+            if (x.toolCalls >= 5 && (x.toolErrorRate ?? 0) >= t.toolErrorRate) out.push(`${Math.round((x.toolErrorRate ?? 0) * 100)}% of tool calls errored`)
+            return out
+          }
+          const reasons = problems(current)
+          const fixed = changedAt !== null && !reasons.length && problems(m).length > 0
           return {
             id: a.id,
             name: a.name,
@@ -96,7 +105,7 @@ export async function GET(request: NextRequest) {
             version: a.version,
             stage: contract.autonomyStage,
             model: a.modelName,
-            health: a.status === 'PAUSED' ? 'paused' : reasons.length ? 'attention' : m.runs === 0 ? 'idle' : 'healthy',
+            health: a.status === 'PAUSED' ? 'paused' : reasons.length ? 'attention' : fixed ? 'watching' : m.runs === 0 ? 'idle' : 'healthy',
             reasons,
             metrics: {
               runs: m.runs,

@@ -167,8 +167,8 @@ Signed in to the demo business, every dashboard page has a **Demo guide** button
 
 1. Open an agent (e.g. Ava) and type: "Heads up for the team: from 1 December our office hours change to 8:30am to 4:30pm." She saves it as staff knowledge.
 2. **What the team knows**: the note is there, used by every agent. Ask Riley to book something at 4:45pm on a December weekday: he refuses, citing the new hours.
-3. Say the same thing on a voice call ("I'm the owner…"): it arrives as **waiting for you**, unused until you confirm it. Customers can't teach the team rules.
-4. Reject an approval with a reason: it becomes a lesson for that agent, shown on the page.
+3. Say the same thing on a voice call ("I'm the owner…"): it arrives as **waiting for you**, unused until you confirm it. Callers can't be verified, so customers can't teach the team rules.
+4. Reject an approval with a reason: Approvals confirms it is now a lesson for that agent, listed under **What the team knows** ("Lesson for Riley"). The same reason given again stays one lesson.
 
 ### Onboarding from a website
 
@@ -189,11 +189,11 @@ npm run demo:stage-repair    # Jordan answers 3 enquiries; the admin rejects eac
 # on the server: scripts/demo-deploy.sh reset-demo && scripts/demo-deploy.sh stage-repair
 ```
 
-Three rejected approvals out of three crosses the review threshold. On the next 10-minute check the scheduler starts Morgan's automatic repair review by itself, often within a minute or two of staging. Tell it that way ("Morgan noticed on his own"). Check Jordan's card on the Team page before pressing **Review the team now**: if it already says a change is being tested, don't press it, or Morgan will only report that a fix is already in flight. Testing the change (evaluation suite plus replay) takes about 10 minutes, so stage at least 15 minutes before the moment. Then show:
-1. Team page: Jordan "needs attention", Morgan's report.
+Three rejected approvals out of three crosses the review threshold. On the next 10-minute check the scheduler starts Morgan's automatic repair review by itself (rehearsed 25 Oct: 6 minutes after staging). Tell it that way ("Morgan noticed on his own"). Check Jordan's card on the Team page before pressing **Review the team now**: if it already says a change is being tested, don't press it, or Morgan will only report that a fix is already in flight. Testing the change (evaluation suite plus replay) took under 2 minutes on 25 Oct, so the fix is usually live about 8 minutes after staging; stage 10 to 15 minutes before the moment. Then show:
+1. Team page: Jordan "needs attention" while Morgan works, then "Fixed, being watched" once the change is live (health is judged on the current version), and Morgan's report under Recent manager activity.
 2. Improvements page: Morgan's proposed playbook change, with a new test case that reproduces the rejected drafts, the evaluation results and the replay, then promotion as Jordan v2.
 3. Ask Jordan to answer a new enquiry like the staged ones, e.g. `Website form from Tom Nguyen <tom@brightside-cafe.example>: "Hi, we have two cafes and want more people finding us on Google. Can you help, and how does it work?"` The draft offers a call and has no prices. (Avoid enquiries asking for a custom quote: Jordan's rules hand those to a person.)
-4. Roll back on the Improvements page (one click), and Jordan is v1 again.
+4. Roll back on the Improvements page: open Jordan's change, type a short reason, **Roll back**. Jordan is back on his original playbook at once (the page shows a new version number, v3: versions only count up).
 
 The model can take a different path (for example fix a different detail, or ask a person first), so keep a recording of a good rehearsal as a fallback.
 

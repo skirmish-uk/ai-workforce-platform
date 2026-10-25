@@ -53,7 +53,7 @@ export async function POST(
     if (result.status === 'APPROVED') {
       await enqueueApprovalExecution({ approvalId: id })
     }
-    return NextResponse.json({ approvalId: id, status: result.status, queuedExecution: result.status === 'APPROVED' })
+    return NextResponse.json({ approvalId: id, status: result.status, queuedExecution: result.status === 'APPROVED', ...(result.lesson ? { lesson: result.lesson } : {}) })
   } catch (error) {
     if (error instanceof ApprovalError) {
       return NextResponse.json({ error: error.message }, { status: STATUS_BY_CODE[error.code] })

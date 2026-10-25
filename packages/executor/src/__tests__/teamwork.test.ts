@@ -243,12 +243,21 @@ test('a rejected approval with a reason becomes a lesson for that agent', async 
   const llm = scriptedLLM([toolUse([{ name: CRM_UPDATE, input: { id: 'c1', properties: { lifecyclestage: 'customer' } } }], 'Marking as a customer.')])
   const run = await runAgent(f.agentId, 'Mark c1 as a customer', { deps: { createClient: llm.createClient, sleep: noSleep } })
   assert.equal(run.status, 'approval_required', run.error)
-  await decideApproval({ approvalId: run.approvalId!, decision: 'reject', actor: { id: admin.id, role: admin.role, tenantId: f.tenantId }, reason: 'They have not signed yet; only mark customers once the contract is signed.' })
+  const reason = 'They have not signed yet; only mark customers once the contract is signed.'
+  const decided = await decideApproval({ approvalId: run.approvalId!, decision: 'reject', actor: { id: admin.id, role: admin.role, tenantId: f.tenantId }, reason })
   const lesson = await prisma.memory.findFirstOrThrow({ where: { tenantId: f.tenantId } })
+  assert.equal(decided.lesson?.memoryId, lesson.id, 'the decision reports the lesson so the page can say so')
   assert.equal(lesson.agentId, f.agentId)
   assert.equal(lesson.category, 'correction')
   assert.equal(lesson.trust, 'staff')
   assert.match(lesson.content, /contract is signed/)
+
+  // The same mistake turned down again with the same reason stays one lesson.
+  const again = scriptedLLM([toolUse([{ name: CRM_UPDATE, input: { id: 'c2', properties: { lifecyclestage: 'customer' } } }], 'Marking as a customer.')])
+  const run2 = await runAgent(f.agentId, 'Mark c2 as a customer', { deps: { createClient: again.createClient, sleep: noSleep } })
+  const decided2 = await decideApproval({ approvalId: run2.approvalId!, decision: 'reject', actor: { id: admin.id, role: admin.role, tenantId: f.tenantId }, reason })
+  assert.equal(decided2.lesson?.memoryId, lesson.id)
+  assert.equal(await prisma.memory.count({ where: { tenantId: f.tenantId } }), 1)
 
   const llm2 = scriptedLLM([(params) => {
     assert.match(prompt(params), /a lesson for you\) Staff turned down/)

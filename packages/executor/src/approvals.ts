@@ -136,7 +136,7 @@ export async function decideApproval(params: {
   actor: ApprovalActor
   reason?: string
   now?: Date
-}): Promise<{ status: ApprovalStatus; workflowRunId: string | null; kind: ApprovalPayload['kind'] | 'unknown' }> {
+}): Promise<{ status: ApprovalStatus; workflowRunId: string | null; kind: ApprovalPayload['kind'] | 'unknown'; lesson?: { memoryId: string; agentName: string } }> {
   const now = params.now ?? new Date()
   const approval = await prisma.approval.findUnique({ where: { id: params.approvalId } })
   if (!approval) throw new ApprovalError('Approval not found', 'NOT_FOUND')
@@ -190,15 +190,16 @@ export async function decideApproval(params: {
     },
   })
 
+  let lesson: { memoryId: string; agentName: string } | undefined
   if (status === 'REJECTED' && payloadKind.kind === 'tool_call') {
     await settleTaskApproval(approval.id, 'rejected', params.reason).catch(() => undefined)
     if (approval.agentId && params.reason && params.reason.trim().length >= 8) {
-      await learnFromRejection({ tenantId: approval.tenantId, agentId: approval.agentId, approvalId: approval.id, action: approval.action, reason: params.reason, userId: params.actor.id }).catch(() => undefined)
+      lesson = await learnFromRejection({ tenantId: approval.tenantId, agentId: approval.agentId, approvalId: approval.id, action: approval.action, reason: params.reason, userId: params.actor.id }).catch(() => undefined)
     }
   }
 
   const kind = ((approval.input ?? {}) as { kind?: ApprovalPayload['kind'] }).kind ?? 'unknown'
-  return { status, workflowRunId: approval.workflowRunId, kind }
+  return { status, workflowRunId: approval.workflowRunId, kind, ...(lesson ? { lesson } : {}) }
 }
 
 async function expireApproval(id: string, tenantId: string, workflowRunId: string | null, agentId: string | null): Promise<void> {
@@ -224,11 +225,17 @@ async function expireApproval(id: string, tenantId: string, workflowRunId: strin
 /**
  * A person turning down what an agent prepared, with a reason, is the clearest lesson there is:
  * kept as a correction for that agent (trusted: a person wrote it), shown on /dashboard/memory
- * and given to the agent in future runs (./memory.ts).
+ * and given to the agent in future runs (./memory.ts). The same reason given again (e.g. three
+ * drafts turned down for one mistake) stays one lesson.
  */
-async function learnFromRejection(p: { tenantId: string; agentId: string; approvalId: string; action: string; reason: string; userId: string }): Promise<void> {
+async function learnFromRejection(p: { tenantId: string; agentId: string; approvalId: string; action: string; reason: string; userId: string }): Promise<{ memoryId: string; agentName: string }> {
   const reason = redactString(p.reason.trim(), 360)
   const tool = p.action.replace(/^[a-z-]+__/, '').replace(/_/g, ' ')
+  const content = `Staff turned down your request to ${tool}: "${reason}". Take this into account next time.`
+  const agent = await prisma.agent.findUnique({ where: { id: p.agentId }, select: { name: true } })
+  const agentName = agent?.name ?? 'The agent'
+  const existing = await prisma.memory.findFirst({ where: { tenantId: p.tenantId, agentId: p.agentId, category: 'correction', status: 'ACTIVE', content }, select: { id: true } })
+  if (existing) return { memoryId: existing.id, agentName }
   const memory = await prisma.memory.create({
     data: {
       tenantId: p.tenantId,
@@ -236,12 +243,13 @@ async function learnFromRejection(p: { tenantId: string; agentId: string; approv
       category: 'correction',
       trust: 'staff',
       status: 'ACTIVE',
-      content: `Staff turned down your request to ${tool}: "${reason}". Take this into account next time.`,
+      content,
       source: { kind: 'approval_rejected', approvalId: p.approvalId },
       createdById: p.userId,
     },
   })
   await prisma.auditLog.create({ data: { action: 'MEMORY_SAVED', entityType: 'Memory', entityId: memory.id, tenantId: p.tenantId, userId: p.userId, newData: { agentId: p.agentId, category: 'correction', from: 'approval_rejected', approvalId: p.approvalId } } })
+  return { memoryId: memory.id, agentName }
 }
 
 /** Marks every pending approval past its expiry as EXPIRED (called from the scheduler tick). */

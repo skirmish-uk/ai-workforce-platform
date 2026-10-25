@@ -81,17 +81,26 @@ class SandboxCalendar {
     this.includeStartDay = valid && new Date(this.start.getTime() + offsetMinutes(this.offset) * 60_000).getUTCHours() < 9
   }
   /** Business days (Mon–Fri) from the start date, as local calendar dates. */
-  businessDays(count: number): Array<{ y: number; m: number; d: number }> {
+  businessDays(count: number, includeStartDay = this.includeStartDay): Array<{ y: number; m: number; d: number }> {
     const local = new Date(this.start.getTime() + offsetMinutes(this.offset) * 60_000)
     const days: Array<{ y: number; m: number; d: number }> = []
     const cursor = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate()))
-    if (this.includeStartDay) cursor.setUTCDate(cursor.getUTCDate() - 1)
+    if (includeStartDay) cursor.setUTCDate(cursor.getUTCDate() - 1)
     while (days.length < count) {
       cursor.setUTCDate(cursor.getUTCDate() + 1)
       const dow = cursor.getUTCDay()
       if (dow !== 0 && dow !== 6) days.push({ y: cursor.getUTCFullYear(), m: cursor.getUTCMonth() + 1, d: cursor.getUTCDate() })
     }
     return days
+  }
+  /** A time given like timeMin (no offset = Sydney time), as epoch ms; null if missing or invalid. */
+  static parse(iso: string): number | null {
+    if (!iso) return null
+    const t = new Date(offsetOf(iso) ? iso : `${iso}${zoneOffset(SANDBOX_TIME_ZONE, new Date(`${iso}Z`))}`).getTime()
+    return Number.isNaN(t) ? null : t
+  }
+  get startMs(): number {
+    return this.start.getTime()
   }
   at(day: { y: number; m: number; d: number }, hour: number, minute = 0): string {
     const p = (n: number) => String(n).padStart(2, '0')
@@ -160,9 +169,25 @@ export function sandboxExecute(toolName: string, input: unknown): Record<string,
       return message ? { sandbox: true, ...message, body: message.snippet, note: SANDBOX_NOTE } : { sandbox: true, error: 'Message not found', note: SANDBOX_NOTE }
     }
     case 'google-calendar__find_free_time': {
+      // The same sample diary every week (10:00 and 14:00 free on the first day with room, then
+      // 9:30 and 14:00), from the requested day on and only inside the requested window, so
+      // "Tuesday at 10am" finds Tuesday's slots rather than the days after it.
       const cal = new SandboxCalendar(str(args.timeMin))
-      const [first, second] = cal.businessDays(2)
-      return { sandbox: true, slots: [{ start: cal.at(first, 10), end: cal.at(first, 11) }, { start: cal.at(first, 14), end: cal.at(first, 15) }, { start: cal.at(second, 9, 30), end: cal.at(second, 10, 30) }], note: SANDBOX_NOTE }
+      const minutes = typeof args.durationMinutes === 'number' && args.durationMinutes > 0 ? args.durationMinutes : 60
+      const max = SandboxCalendar.parse(str(args.timeMax)) ?? cal.startMs + 14 * 86_400_000
+      const slots: Array<{ start: string; end: string }> = []
+      for (const day of cal.businessDays(15, true)) {
+        const times = slots.length ? [[9, 30], [14, 0]] : [[10, 0], [14, 0]]
+        for (const [h, m] of times) {
+          const start = cal.at(day, h, m)
+          const t = new Date(start).getTime()
+          if (t < cal.startMs || t + minutes * 60_000 > max) continue
+          const endMinute = h * 60 + m + minutes
+          slots.push({ start, end: cal.at(day, Math.floor(endMinute / 60), endMinute % 60) })
+        }
+        if (slots.length >= 3) break
+      }
+      return { sandbox: true, slots: slots.slice(0, 3), note: SANDBOX_NOTE }
     }
     case 'google-calendar__list_events': {
       const cal = new SandboxCalendar(str(args.timeMin))

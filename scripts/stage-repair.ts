@@ -36,8 +36,11 @@ async function main(): Promise<void> {
   const admin = await prisma.user.findFirst({ where: { tenantId: agent.tenantId, role: 'CUSTOMER_ADMIN' }, orderBy: { createdAt: 'asc' } })
   if (!admin) throw new Error('No customer admin in the demo tenant to reject the drafts.')
 
+  // All three drafts first, then the rejections: a rejection with a reason becomes a lesson for
+  // Jordan straight away (docs/TEAMWORK.md), so rejecting as we go would fix the later drafts.
   let rejected = 0
   let cost = 0
+  const runs = []
   for (const input of ENQUIRIES) {
     const run = await runAgent(STAGED_REPAIR_AGENT_ID, input, { trigger: 'api', userId: admin.id })
     cost += run.costUsd ?? 0
@@ -45,14 +48,17 @@ async function main(): Promise<void> {
     const body = JSON.stringify(draft?.input ?? {})
     const quotesPrices = /\$\s?\d/.test(body)
     console.log(`\n• ${input.slice(0, 72)}…\n  status: ${run.status}; draft quotes prices: ${quotesPrices ? 'yes' : 'no'}`)
+    runs.push(run)
+  }
+  for (const run of runs) {
     if (run.status === 'approval_required' && run.approvalId) {
       await decideApproval({ approvalId: run.approvalId, decision: 'reject', actor: { id: admin.id, role: admin.role, tenantId: admin.tenantId }, reason: STAGED_REPAIR_REJECTION })
       rejected++
-      console.log(`  rejected as ${admin.email}: "${STAGED_REPAIR_REJECTION}"`)
     } else {
       console.log(`  no approval to reject (${run.error ?? run.status})`)
     }
   }
+  if (rejected) console.log(`\nRejected ${rejected} as ${admin.email}: "${STAGED_REPAIR_REJECTION}"`)
   console.log(`\n${rejected} of ${ENQUIRIES.length} drafts rejected, $${cost.toFixed(4)}.`)
   console.log(rejected >= 3
     ? 'Ready: Jordan shows "needs attention" on the Team page. Morgan\'s automatic review starts within 10 minutes (worker running), or click "Review the team now".'

@@ -119,7 +119,7 @@ function Material({ material }: { material: unknown }) {
   )
 }
 
-function ApprovalCard({ approval, onDecided }: { approval: Approval; onDecided: () => void }) {
+function ApprovalCard({ approval, onDecided }: { approval: Approval; onDecided: (lesson?: { agentName: string }) => void }) {
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState<'approve' | 'reject' | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -143,7 +143,7 @@ function ApprovalCard({ approval, onDecided }: { approval: Approval; onDecided: 
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
-      onDecided()
+      onDecided(body.lesson)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong')
     } finally {
@@ -238,6 +238,8 @@ function ApprovalCard({ approval, onDecided }: { approval: Approval; onDecided: 
 
 export default function ApprovalsPage() {
   const [tab, setTab] = useState<'waiting' | 'history'>('waiting')
+  /** Who learned from the last rejection, shown until the next decision. */
+  const [lesson, setLesson] = useState<string | null>(null)
   const [approvals, setApprovals] = useState<Approval[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -291,6 +293,11 @@ export default function ApprovalsPage() {
       </div>
 
       {error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{error}</p>}
+      {lesson && (
+        <p className="text-sm rounded-lg border border-violet-200 dark:border-violet-800 bg-violet-50 dark:bg-violet-900/20 text-violet-900 dark:text-violet-200 px-4 py-3" role="status">
+          Rejected. Your reason is now a lesson for {lesson}, used from the next task on. <Link href="/dashboard/memory" className="underline">See what the team knows</Link>
+        </p>
+      )}
 
       {loading ? (
         <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-8 text-center">
@@ -306,7 +313,7 @@ export default function ApprovalsPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {approvals.map((a) => <ApprovalCard key={a.id} approval={a} onDecided={load} />)}
+          {approvals.map((a) => <ApprovalCard key={a.id} approval={a} onDecided={(l) => { setLesson(l ? l.agentName.split(/\s+[-–]\s+/)[0] : null); void load() }} />)}
         </div>
       )}
     </div>

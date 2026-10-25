@@ -8,6 +8,7 @@ import { detectInjectionSignals, wrapUntrusted } from '../untrusted'
 import { assertEvalCase, parseEvalCases } from '../evaluation'
 import { formatBusinessContext, readBusinessContext } from '../business-context'
 import { canonicalJson, readKillSwitch, toolIdempotencyKey } from '../safety'
+import { teamGuidance } from '../agent'
 import { BASE_CONTRACT, scriptedLLM, text } from './helpers'
 
 // ------------------------------------------------------------------ DoD
@@ -162,4 +163,13 @@ test('idempotency keys are stable across key order and differ across tenants/age
   assert.equal(k, toolIdempotencyKey('t1', 'a1', 'gmail__send_email', { subject: 'y', to: 'x' }))
   assert.notEqual(k, toolIdempotencyKey('t2', 'a1', 'gmail__send_email', { to: 'x', subject: 'y' }))
   assert.notEqual(k, toolIdempotencyKey('t1', 'a1', 'gmail__send_email', { to: 'x', subject: 'z' }))
+})
+
+// ------------------------------------------------------------------ team guidance
+test('team guidance: callers cannot be verified, so their business facts are saved for a person to confirm', () => {
+  const voice = teamGuidance({ teammates: new Map(), remember: true, voice: true }) ?? ''
+  assert.match(voice, /can't check who is calling/)
+  assert.match(voice, /customer_said, where it waits for a person to confirm/)
+  const typed = teamGuidance({ teammates: new Map(), remember: true, voice: false }) ?? ''
+  assert.doesNotMatch(typed, /who is calling/)
 })

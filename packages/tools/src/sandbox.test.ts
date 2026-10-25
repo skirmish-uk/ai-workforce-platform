@@ -26,3 +26,12 @@ test('a window starting before the working day includes that day; a time without
   const utc = sandboxExecute('google-calendar__find_free_time', { timeMin: '2026-10-26T13:00:00Z' }) as Slots
   assert.equal(utc.slots[0].start, '2026-10-27T10:00:00+11:00', 'midnight Sydney given in UTC')
 })
+
+test('free time on a named day: slots on that day, only inside the window, sized to the meeting', () => {
+  // Tuesday 3 Nov 2026, 9am to 5pm Sydney: the day itself, not the days after it.
+  const day = sandboxExecute('google-calendar__find_free_time', { timeMin: '2026-11-03T09:00:00+11:00', timeMax: '2026-11-03T17:00:00+11:00', durationMinutes: 30 }) as Slots
+  assert.deepEqual(day.slots, [{ start: '2026-11-03T10:00:00+11:00', end: '2026-11-03T10:30:00+11:00' }, { start: '2026-11-03T14:00:00+11:00', end: '2026-11-03T14:30:00+11:00' }])
+  // Nothing in the window (4:45pm to 5:15pm): no slots rather than slots on other days.
+  const late = sandboxExecute('google-calendar__find_free_time', { timeMin: '2026-11-03T16:45:00+11:00', timeMax: '2026-11-03T17:15:00+11:00', durationMinutes: 30 }) as Slots
+  assert.deepEqual(late.slots, [])
+})

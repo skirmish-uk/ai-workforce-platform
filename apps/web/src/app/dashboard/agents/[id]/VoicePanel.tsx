@@ -1211,6 +1211,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     setError(null)
     setEndedByAgent(false)
     audioContext() // created inside the click, so the browser lets it play sound
+    chime('start') // before the microphone opens, so it isn't heard as the caller
     // The call view is taller (the orb grows): bring the panel up under the page header so all of it shows.
     panel.current?.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
@@ -1302,7 +1303,34 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     }
   }
 
+  /**
+   * A short two-note chime, like a phone app: rising when a call starts, falling when it ends.
+   * Synthesised (no audio files) and played straight to the speakers, outside the agent's voice
+   * chain, so the orb and echo checks never see it.
+   */
+  const chime = (kind: 'start' | 'end') => {
+    const context = ctx.current
+    if (!context || context.state === 'closed') return
+    const notes = kind === 'start' ? [587.33, 880] : [880, 587.33] // D5 → A5, or back down
+    const at = context.currentTime + 0.02
+    notes.forEach((freq, i) => {
+      const start = at + i * 0.16
+      const osc = context.createOscillator()
+      const gain = context.createGain()
+      osc.type = 'sine'
+      osc.frequency.value = freq
+      gain.gain.setValueAtTime(0, start)
+      gain.gain.linearRampToValueAtTime(0.14, start + 0.015)
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.32)
+      osc.connect(gain).connect(context.destination)
+      osc.start(start)
+      osc.stop(start + 0.34)
+    })
+  }
+
   const stopEverything = () => {
+    // Hanging up (either side), not tidying up after a call that never connected.
+    if (inCallRef.current) chime('end')
     dropDraft()
     endAfterSpeech.current = false
     if (endTimer.current) { clearTimeout(endTimer.current); endTimer.current = null }

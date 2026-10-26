@@ -305,6 +305,33 @@ describe('revision pipeline', () => {
 })
 
 describe('manager agent tools', () => {
+  test('the manager reports a platform issue once: an incident for the platform team, nothing changed', async () => {
+    const w = await workforce()
+    const report = { title: 'Voice turns are not told an earlier turn handed over', description: 'Ava handed one request over five times in one call.', agentId: w.agentId, runIds: ['314', '315'], severity: 'medium' }
+    const llm = scriptedLLM([
+      toolUse([{ name: 'platform__report_platform_issue', input: report }]),
+      toolUse([{ name: 'platform__report_platform_issue', input: report }]),
+      text('Reported the hand-off problem to the platform team.'),
+    ])
+    const run = await runAgent(w.managerId, 'Automatic repair review', { deps: deps(llm) })
+    assert.equal(run.status, 'completed', run.error)
+    assert.ok(llm.calls[0].params.tools!.some((t) => t.name === 'platform__report_platform_issue'))
+    const incidents = await prisma.incident.findMany({ where: { tenantId: w.tenantId } })
+    assert.equal(incidents.length, 1, 'the same open issue is not reported twice')
+    assert.equal(incidents[0].source, 'workforce_manager')
+    assert.deepEqual((incidents[0].metadata as { runIds: string[] }).runIds, ['314', '315'])
+    assert.match(JSON.stringify(llm.calls[2].params.messages.at(-1)), /Already reported/)
+    assert.equal(await prisma.agentRevision.count({ where: { tenantId: w.tenantId } }), 0)
+
+    // Dry runs (evaluations) report nothing; ordinary agents aren't offered the tool.
+    const dry = scriptedLLM([toolUse([{ name: 'platform__report_platform_issue', input: { ...report, title: 'Another' } }]), text('Done.')])
+    await runAgent(w.managerId, 'Automatic repair review', { deps: deps(dry), dryRun: true })
+    assert.equal(await prisma.incident.count({ where: { tenantId: w.tenantId } }), 1)
+    const worker = scriptedLLM([text('Done.')])
+    await runAgent(w.agentId, 'Update c1', { deps: deps(worker) })
+    assert.ok(!worker.calls[0].params.tools!.some((t) => t.name === 'platform__report_platform_issue'))
+  })
+
   test('the manager inspects the workforce and submits a proposal; data comes back wrapped as untrusted', async () => {
     const w = await workforce()
     const llm = scriptedLLM([

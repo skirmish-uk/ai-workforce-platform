@@ -14,7 +14,8 @@ import { readAgentSpec } from './spec'
  *
  * - every agent: platform__suggest_improvement (feeds the manager; changes nothing itself)
  * - managers (contract.management.enabled): list/inspect agents, propose a revision,
- *   check a revision. There is deliberately no tool to promote, approve, edit tenant
+ *   check a revision, and report a platform issue (a problem a revision can't fix, for the
+ *   platform team: an Incident in the operator console). There is deliberately no tool to promote, approve, edit tenant
  *   settings or touch kill switches — proposals can only enter the revision pipeline.
  */
 
@@ -23,6 +24,8 @@ export const LIST_AGENTS = 'platform__list_agents'
 export const INSPECT_AGENT = 'platform__inspect_agent'
 export const PROPOSE_CHANGE = 'platform__propose_agent_change'
 export const GET_REVISION = 'platform__get_revision'
+export const REPORT_PLATFORM_ISSUE = 'platform__report_platform_issue'
+const MAX_PLATFORM_ISSUES_PER_RUN = 3
 
 const MAX_SUGGESTIONS_PER_RUN = 3
 
@@ -83,6 +86,26 @@ const MANAGER_TOOLS: LLMTool[] = [
     description: 'Status and results of a revision you proposed (evaluation, replay, approval, promotion, rollback).',
     inputSchema: { type: 'object', properties: { revisionId: { type: 'string' } }, required: ['revisionId'] },
   },
+  {
+    name: REPORT_PLATFORM_ISSUE,
+    description: [
+      "Report a problem whose cause is in the platform itself, not in an agent's definition: for example what a conversation's turns are told about earlier ones,",
+      'how calls, hand-offs or tools behave, or missing information the agent can never see. It goes to the platform team as an incident; it changes nothing.',
+      'Use it when a revision cannot fix the cause (you may still propose a revision that softens the effect). Describe the pattern, the evidence (run ids, what happened',
+      'versus what should have), and your best guess at the cause. Do not use it for an agent\'s own wording or playbook, a disconnected integration, or a business decision.',
+    ].join(' '),
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'One line, e.g. "Voice turns are not told that an earlier turn handed over".' },
+        description: { type: 'string', description: 'The pattern, evidence and suspected cause.' },
+        agentId: { type: 'string', description: 'The agent it showed up on, if any.' },
+        runIds: { type: 'array', items: { type: 'string' }, description: 'Runs that show it.' },
+        severity: { type: 'string', enum: ['low', 'medium', 'high'] },
+      },
+      required: ['title', 'description'],
+    },
+  },
 ]
 
 export function workforceToolsFor(params: { policy: SelfManagementPolicy; contract: AgentContract; isCandidate: boolean }): LLMTool[] {
@@ -127,6 +150,8 @@ export async function executeWorkforceTool(name: string, input: Record<string, u
         return await getRevision(str(input.revisionId), ctx.tenantId)
       case PROPOSE_CHANGE:
         return await proposeChange(input, ctx, count)
+      case REPORT_PLATFORM_ISSUE:
+        return await reportPlatformIssue(input, ctx, count)
       default:
         return { status: 'error', output: { error: `Unknown platform tool ${name}` } }
     }
@@ -266,6 +291,40 @@ async function getRevision(revisionId: string, tenantId: string): Promise<Workfo
     status: 'completed',
     output: { id: rev.id, status: rev.status, changeType: rev.changeType, agentId: rev.agentId, risk: rev.risk, results: rev.results, error: rev.error, approvalId: rev.approvalId, promotedVersion: rev.promotedVersion },
   }
+}
+
+/**
+ * A problem for the platform team (an Incident, source "workforce_manager", in the operator
+ * console). Allowed at every stage: it changes nothing. The same open title within 7 days is
+ * not reported twice; the existing incident is returned instead.
+ */
+async function reportPlatformIssue(input: Record<string, unknown>, ctx: WorkforceToolContext, count: number): Promise<WorkforceToolOutcome> {
+  const title = str(input.title).replace(/\s+/g, ' ').trim().slice(0, 200)
+  const description = str(input.description).trim()
+  if (!title || !description) return { status: 'error', output: { error: 'title and description are required' } }
+  if (count > MAX_PLATFORM_ISSUES_PER_RUN) return { status: 'denied', output: { error: `At most ${MAX_PLATFORM_ISSUES_PER_RUN} platform issues per run` }, reason: 'platform issue limit' }
+  if (ctx.dryRun) return { status: 'simulated', output: { reported: false, note: 'Dry run: issue not reported.' } }
+  const existing = await prisma.incident.findFirst({
+    where: { tenantId: ctx.tenantId, source: 'workforce_manager', title, status: { in: ['OPEN', 'INVESTIGATING', 'IDENTIFIED'] }, createdAt: { gte: new Date(Date.now() - 7 * 86_400_000) } },
+    select: { id: true },
+  })
+  if (existing) return { status: 'completed', output: { reported: false, incidentId: existing.id, note: 'Already reported and still open; nothing new was created.' } }
+  const severity = ({ low: 'LOW', medium: 'MEDIUM', high: 'HIGH' } as const)[str(input.severity) as 'low' | 'medium' | 'high'] ?? 'MEDIUM'
+  const runIds = Array.isArray(input.runIds) ? input.runIds.filter((r): r is string => typeof r === 'string').slice(0, 20) : []
+  const incident = await prisma.incident.create({
+    data: {
+      tenantId: ctx.tenantId,
+      title,
+      description: redactString(description, 4000),
+      severity,
+      source: 'workforce_manager',
+      metadata: { reportedBy: { agentId: ctx.agentId, runId: ctx.runId }, agentId: str(input.agentId) || null, runIds } as never,
+    },
+  })
+  await prisma.auditLog.create({
+    data: { action: 'PLATFORM_ISSUE_REPORTED', entityType: 'Incident', entityId: incident.id, tenantId: ctx.tenantId, newData: { runId: ctx.runId, title, severity, agentId: str(input.agentId) || null, runIds } as never },
+  })
+  return { status: 'completed', output: { reported: true, incidentId: incident.id, note: 'Reported to the platform team as an incident. Carry on with the review.' } }
 }
 
 async function proposeChange(input: Record<string, unknown>, ctx: WorkforceToolContext, count: number): Promise<WorkforceToolOutcome> {

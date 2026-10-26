@@ -23,7 +23,7 @@ import { canonicalJson, readKillSwitch, resolveEffectiveStage } from './safety'
 import { checkSpendCap } from './spend-cap'
 import { runAuthorizedTool, type ToolExecutorFn } from './tool-runner'
 import { wrapUntrusted } from './untrusted'
-import { detectQualitySignals, type QualitySignal } from './quality'
+import { callerWantsToEnd, detectQualitySignals, type QualitySignal } from './quality'
 import { readVoiceConfig } from './voice'
 import { CONVERSATION_MESSAGE_MAX_CHARS, isConversationId } from './conversations'
 import { readSelfManagementPolicy } from './workforce/policy'
@@ -1235,6 +1235,7 @@ class AgentRun {
   ): Promise<RunAgentResult> {
     if (this.finished) return this.finished
     if (!(await this.confirmed())) return this.discard()
+    if (!this.options.dryRun) await this.conversationSignals(status)
     const costUsd = this.costKnown ? this.ownCost : this.usage.input + this.usage.output > 0 ? null : 0
     const result: RunAgentResult = {
       runId: this.runId,
@@ -1336,6 +1337,28 @@ class AgentRun {
     if (status === 'completed' || status === 'partial') agentHeartbeatSafe(this.agent.id)
     if (status === 'failed') agentFailureSafe(this.agent.id, result.error)
     return result
+  }
+
+  /**
+   * Quality signals that only show across a conversation (quality.ts, CONVERSATION_SIGNALS):
+   * handing over a conversation that was already handed over, and not ending a call after the
+   * caller said goodbye. Flagged runs count towards the manager's automatic repair review.
+   */
+  private async conversationSignals(status: RunAgentStatus): Promise<void> {
+    const c = this.options.conversation
+    if (!c || !isConversationId(c.id)) return
+    const add = (signal: QualitySignal) => {
+      if (this.qualitySignals.includes(signal)) return
+      this.qualitySignals = [...this.qualitySignals, signal]
+      this.note(`quality signal: ${signal}`)
+    }
+    if (this.trigger === 'voice' && !this.endCall && !['cancelled', 'failed', 'blocked'].includes(status) && callerWantsToEnd(c.message)) add('missed_end_call')
+    if (status === 'escalated') {
+      const earlier = await prisma.auditLog
+        .count({ where: { tenantId: this.agent.tenantId, entityId: this.agent.id, action: 'AGENT_RUN_ESCALATED', createdAt: { gte: new Date(Date.now() - 6 * 3_600_000) }, newData: { path: ['conversationId'], equals: c.id } } })
+        .catch(() => 0)
+      if (earlier > 0) add('repeated_handover')
+    }
   }
 
   /** A draft the caller talked past: nothing was done; record what it cost (spend caps count it), nothing else. */

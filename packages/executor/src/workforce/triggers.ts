@@ -3,6 +3,7 @@ import type { Prisma } from '@prisma/client'
 import { safeErrorMessage } from '@ai-workforce/domain'
 import { resolveAgentContract } from '../contract'
 import { getAgentRunMetrics, type AgentRunMetrics } from '../metrics'
+import { CONVERSATION_SIGNALS, QUALITY_SIGNAL_LABELS, type QualitySignal } from '../quality'
 import { readKillSwitch } from '../safety'
 import { readSelfManagementPolicy, type SelfManagementPolicy } from './policy'
 
@@ -27,9 +28,21 @@ export interface ManagerTrigger {
 
 const pct = (v: number | null) => `${Math.round((v ?? 0) * 100)}%`
 
+/** What the flagged runs did, by signal; conversation-level ones may need a platform fix, not a revision. */
+export function qualityDetail(flagged: number, counts: Record<string, number>): string {
+  const kinds = Object.entries(counts).filter(([, n]) => n > 0)
+  const what = kinds.length
+    ? kinds.map(([signal, n]) => `${n} ${QUALITY_SIGNAL_LABELS[signal as QualitySignal] ?? signal}`).join('; ')
+    : 'promised actions they did not take or asked questions in their answer instead of with the clarification tool'
+  const platform = kinds.some(([signal]) => CONVERSATION_SIGNALS.has(signal as QualitySignal))
+    ? ' These show across a conversation, so the cause may be how the platform runs conversations (what each turn is told about earlier ones) rather than the agent\'s instructions: if a revision cannot fix the cause, report it with platform__report_platform_issue.'
+    : ''
+  return `${flagged} runs in the last 24 hours were flagged: ${what}.${platform}`
+}
+
 export function detectManagerTriggers(
   input: {
-    agents: Array<{ id: string; name: string; metrics: Pick<AgentRunMetrics, 'runs' | 'failureRate' | 'qualityFlaggedRuns' | 'approvalsDecided' | 'humanOverrideRate' | 'toolCalls' | 'toolErrorRate'> }>
+    agents: Array<{ id: string; name: string; metrics: Pick<AgentRunMetrics, 'runs' | 'failureRate' | 'qualityFlaggedRuns' | 'approvalsDecided' | 'humanOverrideRate' | 'toolCalls' | 'toolErrorRate'> & Partial<Pick<AgentRunMetrics, 'qualitySignalCounts'>> }>
     rollbacks: Array<{ revisionId: string; agentId: string; agentName: string; reason: string }>
     alreadyFired: ReadonlySet<string>
   },
@@ -46,7 +59,7 @@ export function detectManagerTriggers(
       push('failures', a.id, a.name, `${pct(m.failureRate)} of ${m.runs} runs in the last 24 hours failed.`)
     }
     if (m.qualityFlaggedRuns >= thresholds.qualityFlaggedRuns) {
-      push('quality', a.id, a.name, `${m.qualityFlaggedRuns} runs in the last 24 hours promised actions they did not take or asked questions in their answer instead of with the clarification tool.`)
+      push('quality', a.id, a.name, qualityDetail(m.qualityFlaggedRuns, m.qualitySignalCounts ?? {}))
     }
     if (m.approvalsDecided >= 3 && (m.humanOverrideRate ?? 0) >= thresholds.rejectionRate) {
       push('rejections', a.id, a.name, `People rejected ${pct(m.humanOverrideRate)} of its ${m.approvalsDecided} approval requests in the last 24 hours.`)
@@ -75,6 +88,7 @@ export function managerReviewInput(triggers: ManagerTrigger[]): string {
     ...triggers.map((t, i) => `${i + 1}. ${t.agentName} (${t.agentId}): ${t.detail}`),
     '',
     'For each one, inspect the agent and its problem runs. Propose a fix only if the evidence supports it, with an evaluation case that reproduces the problem. If the cause is a connection, a policy decision or anything you cannot fix with a revision, it needs a person.',
+    "If the cause is in the platform itself (how conversations, calls, hand-offs or tools work, or something the agent can't see), report it with platform__report_platform_issue: that goes to the platform team, and you carry on with the other items.",
     'Work through every item before handing anything over: platform__escalate ends your run, so call it at most once, last, naming every item a person must handle. If nothing needs a person, finish with a short report of what you found and did for each item.',
   ].join('\n')
 }

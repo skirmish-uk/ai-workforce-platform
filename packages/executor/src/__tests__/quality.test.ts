@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { detectQualitySignals } from '../quality'
+import { callerWantsToEnd, detectQualitySignals } from '../quality'
 
 test('flags runs that promise or claim actions they never took', () => {
   // The real 13 Oct case: a qualification summary ending in a promise, with only a CRM search.
@@ -28,4 +28,14 @@ test('no signal when the action was taken or put up for approval, or nothing was
   assert.deepEqual(detectQualitySignals('', []), [])
   // A platform tool (hand-off) is not an action on the outside world; promising an email still counts.
   assert.deepEqual(detectQualitySignals("I'll email her after the team replies.", [{ toolName: 'platform__suggest_improvement', status: 'completed' }]), ['announced_without_action'])
+})
+
+test('the caller ending the call: goodbyes and "that\'s all", not a question in the same breath', () => {
+  // What the caller said on 26 Oct while Ava kept handing over instead of ending the call.
+  for (const said of ['Okay, that’s all.', "No, I'm saying like goodbye, like that's all I need.", "I'm saying I would like you to end the call.", 'Thanks, bye!', "No, that's everything, thanks.", "I'm all good, thanks."]) {
+    assert.equal(callerWantsToEnd(said), true, said)
+  }
+  for (const said of ["That's all good, but what about Saturdays?", 'Is that all it includes?', 'Can you tell me about SEO?', "That's it? What about ads?", 'I said goodbye to my old agency last year, so how do we start?']) {
+    assert.equal(callerWantsToEnd(said), false, said)
+  }
 })

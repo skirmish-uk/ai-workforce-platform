@@ -29,6 +29,8 @@ export interface AgentRunMetrics {
   injectionFlaggedRuns: number
   /** Finished runs flagged by quality signals (e.g. promised an action and didn't take it). */
   qualityFlaggedRuns: number
+  /** How many runs had each quality signal (quality.ts). */
+  qualitySignalCounts: Record<string, number>
 }
 
 const rate = (num: number, den: number) => (den > 0 ? num / den : null)
@@ -77,6 +79,7 @@ export async function getAgentRunMetrics(params: { tenantId?: string; agentId?: 
   let fallbackRuns = 0
   let injectionFlagged = 0
   let qualityFlagged = 0
+  const qualitySignalCounts: Record<string, number> = {}
   let runs = 0
 
   for (const row of runRows) {
@@ -93,7 +96,10 @@ export async function getAgentRunMetrics(params: { tenantId?: string; agentId?: 
     }
     if (data.fallbackUsed === true) fallbackRuns++
     if (Array.isArray(data.injectionSignals) && data.injectionSignals.length) injectionFlagged++
-    if (Array.isArray(data.qualitySignals) && data.qualitySignals.length) qualityFlagged++
+    if (Array.isArray(data.qualitySignals) && data.qualitySignals.length) {
+      qualityFlagged++
+      for (const signal of new Set(data.qualitySignals.filter((x): x is string => typeof x === 'string'))) qualitySignalCounts[signal] = (qualitySignalCounts[signal] ?? 0) + 1
+    }
   }
 
   const toolCount = (action: string) => toolRows.find((r) => r.action === action)?._count._all ?? 0
@@ -127,5 +133,6 @@ export async function getAgentRunMetrics(params: { tenantId?: string; agentId?: 
     unknownOutcomes: toolCount('AGENT_TOOL_CALL_UNKNOWN') + toolCount('AGENT_TOOL_CALL_BLOCKED_UNKNOWN_PRIOR'),
     injectionFlaggedRuns: injectionFlagged,
     qualityFlaggedRuns: qualityFlagged,
+    qualitySignalCounts,
   }
 }

@@ -7,7 +7,14 @@ import { getToolRiskProfile } from '@ai-workforce/tools'
  * announced follow-ups it never made). Heuristic and conservative: a signal flags a run
  * for review; it never changes the run's status.
  */
-export type QualitySignal = 'announced_without_action' | 'claimed_without_evidence' | 'asked_in_text'
+export type QualitySignal =
+  | 'announced_without_action'
+  | 'claimed_without_evidence'
+  | 'asked_in_text'
+  /** Handed over again in a conversation that had already been handed over (26 Oct: one request, five hand-offs). */
+  | 'repeated_handover'
+  /** On a call, the caller said goodbye or asked to end it, and the call wasn't ended. */
+  | 'missed_end_call'
 
 const PROMISE = /\b(?:i['’]ll|i will|i am going to|i['’]m going to|let me|now i['’]ll|next,? i['’]ll)\s+(?:now\s+|go ahead and\s+|then\s+)?(?:draft|send|email|write|reply|follow up|update|create|add|log|book|schedule|escalate|forward|label|reach out|set up)\b/i
 const ASKS = /\?\s*(?:\*\*)?\s*$|\b(?:could you|can you|please (?:confirm|provide|share|let me know)|do you want me to|should i|would you like me to)\b[^.!]*\?/i
@@ -51,4 +58,27 @@ export const QUALITY_SIGNAL_LABELS: Record<QualitySignal, string> = {
   announced_without_action: 'said it would do something but did not',
   claimed_without_evidence: 'said it did something with no action to show for it',
   asked_in_text: 'asked the requester questions in its answer instead of using the clarification tool',
+  repeated_handover: 'handed a conversation over to the team again after it had already been handed over',
+  missed_end_call: 'did not end a call after the caller said goodbye or asked to end it',
+}
+
+/**
+ * Signals that only show across a conversation, not in one answer: these are often how the
+ * platform runs a conversation (what each turn is told about earlier ones) rather than the
+ * agent's own instructions, so the manager is told it may need a platform fix.
+ */
+export const CONVERSATION_SIGNALS: ReadonlySet<QualitySignal> = new Set(['repeated_handover', 'missed_end_call'])
+
+const WANTS_TO_END = /\b(?:good ?bye|bye(?: bye)?|cheers,? bye|end (?:the|this) call|hang up|that'?s (?:all|everything|it)(?: i need(?:ed)?| for (?:now|today))?|that'?s all i need(?:ed)?|nothing else|i'?m (?:all )?(?:done|good)(?:,? thanks)?|no,? that'?s (?:all|it|fine|everything))\b/i
+const STILL_ASKING = /\?|\b(?:but|and also|one more|another question|what about|how about|can you|could you)\b/i
+
+/**
+ * Whether what the caller said ends the call: a goodbye, "end the call", "that's all I need".
+ * Not when they go on to ask something in the same breath ("that's all, but what about…?").
+ */
+export function callerWantsToEnd(said: string): boolean {
+  const text = said.replace(/[’]/g, "'").trim()
+  if (!WANTS_TO_END.test(text)) return false
+  const after = text.slice((text.match(WANTS_TO_END)?.index ?? 0) + (text.match(WANTS_TO_END)?.[0].length ?? 0))
+  return !STILL_ASKING.test(after)
 }

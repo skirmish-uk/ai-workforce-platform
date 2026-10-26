@@ -2,7 +2,7 @@ import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { prisma } from '@ai-workforce/db'
 import type { Prisma } from '@prisma/client'
-import { detectManagerTriggers, findDueManagerReviews, managerReviewInput } from '../workforce/triggers'
+import { detectManagerTriggers, findDueManagerReviews, managerReviewInput, qualityDetail } from '../workforce/triggers'
 import { selfManagementPolicySchema } from '../workforce/policy'
 import { BASE_CONTRACT, assertTestDatabase, createAgent, createFixture, type Fixture } from './helpers'
 
@@ -24,6 +24,19 @@ test('triggers fire on failures, quality flags, rejections, tool errors and roll
   assert.deepEqual(t.map((x) => x.key).sort(), ['failures:a1', 'rejections:a2', 'rollback:a4', 'tool_errors:a3'])
   assert.match(t.find((x) => x.kind === 'tool_errors')!.detail, /escalate rather than change the agent/)
   assert.match(managerReviewInput(t), /^Automatic repair review/)
+})
+
+test('a quality trigger says what the runs did, and points conversation problems at the platform', () => {
+  const calls = qualityDetail(5, { repeated_handover: 4, missed_end_call: 2 })
+  assert.match(calls, /4 handed a conversation over to the team again/)
+  assert.match(calls, /2 did not end a call/)
+  assert.match(calls, /platform__report_platform_issue/)
+  const single = qualityDetail(2, { announced_without_action: 2 })
+  assert.match(single, /2 said it would do something but did not/)
+  assert.doesNotMatch(single, /platform__report_platform_issue/)
+  const [t] = detectManagerTriggers({ agents: [{ id: 'a2', name: 'Ava', metrics: { ...quiet, qualityFlaggedRuns: 5, qualitySignalCounts: { repeated_handover: 4 } } }], rollbacks: [], alreadyFired: new Set() }, thresholds)
+  assert.equal(t.kind, 'quality')
+  assert.match(managerReviewInput([t]), /platform__report_platform_issue/)
 })
 
 const fixtures: Fixture[] = []

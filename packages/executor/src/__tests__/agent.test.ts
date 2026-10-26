@@ -557,6 +557,27 @@ describe('voice calls', () => {
     assert.match(result.output ?? '', /Thanks for calling/)
   })
 
+  test('across a call: handing over again, and not ending the call after a goodbye, are flagged', async () => {
+    const f = await fixture()
+    const conversation = (message: string) => ({ id, message })
+    const id = crypto.randomUUID()
+    const escalate = () => scriptedLLM([toolUse([{ name: 'platform__escalate', input: { reason: 'Custom package quote', severity: 'low' } }])])
+    const first = await runAgent(f.agentId, 'I want a custom package', { deps: deps(escalate()), trigger: 'voice', conversation: conversation('I want a custom package') })
+    assert.equal(first.status, 'escalated', first.error)
+    assert.deepEqual(first.qualitySignals, [], 'the first hand-off is fine')
+    // The 26 Oct call: the caller says that's all, and the agent hands over again instead of ending the call.
+    const again = await runAgent(f.agentId, 'Okay, that’s all.', { deps: deps(escalate()), trigger: 'voice', conversation: conversation('Okay, that’s all.') })
+    assert.deepEqual([...again.qualitySignals].sort(), ['missed_end_call', 'repeated_handover'])
+    const [, row] = await auditRows(f.tenantId, 'AGENT_RUN_ESCALATED')
+    assert.deepEqual([...((row.newData as { qualitySignals: string[] }).qualitySignals)].sort(), ['missed_end_call', 'repeated_handover'])
+
+    // Ending the call is not flagged; nor is a hand-off in another conversation.
+    const bye = await runAgent(f.agentId, 'Okay, that’s all.', { deps: deps(scriptedLLM([toolUse([{ name: 'platform__end_call', input: {} }], 'Thanks, bye!')])), trigger: 'voice', conversation: conversation('Okay, that’s all.') })
+    assert.deepEqual(bye.qualitySignals, [])
+    const other = await runAgent(f.agentId, 'I want a custom package', { deps: deps(escalate()), trigger: 'voice', conversation: { id: crypto.randomUUID(), message: 'I want a custom package' } })
+    assert.deepEqual(other.qualitySignals, [])
+  })
+
   test('a draft answer streams while the caller talks, but does nothing and records nothing until confirmed', async () => {
     const f = await fixture({ requiredTools: [CRM_SEARCH], permissions: { [CRM_SEARCH]: 'AUTOMATIC' } })
     // Talked past: the tool never ran, and only the cost is recorded.

@@ -147,7 +147,9 @@ We have three monthly packages. Prices are in Australian dollars, exclude GST, a
 - Starter, $3,000 a month: one core channel for companies starting out with digital marketing.
 - Growth, $7,500 a month: our most popular package, SEO, paid ads, content and LinkedIn together.
 - Enterprise, $15,000 a month: full service across several markets with a dedicated team.
-Every package has a minimum term of 3 months, then continues month to month with 30 days' notice. There are no setup fees. Advertising spend is paid directly to Google, LinkedIn or Meta and is not part of the package price. You can move up a package at any time; moving down starts from the next billing month.
+Every package has a minimum term of 3 months, then continues month to month with 30 days' notice. There are no setup fees. Advertising spend is paid directly to Google, LinkedIn or Meta and is not part of the package price. You can move up a package at any time; moving down starts from the next billing month, with no refund for the current month.
+
+Upgrading part-way through a month: the new package starts straight away. For the rest of that billing month you pay only the difference between the two packages, pro rata, on a one-off invoice (for example, moving from Growth to Enterprise halfway through a month adds about $3,750 plus GST for that month). From the next billing month you pay the new package price. Upgrading doesn't restart your minimum term and has no fee. To upgrade, ask your account manager or reply to your monthly report; it usually starts within two business days.
 
 ## Starter package: $3,000 a month
 Best for: smaller B2B technology companies starting with one channel.

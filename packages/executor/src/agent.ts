@@ -347,9 +347,12 @@ function readModelConfig(config: unknown): { maxTokens?: number; temperature?: n
 /**
  * Voice turns run at low effort (a caller is waiting for the first word): on 20 Oct, Ava's
  * suite passed 20/21 at low effort vs 7/7 x3 at the default medium, and the run was ~1 s faster.
- * Thinking stays on: turning it off (modelConfig.voiceThinking = "off") was faster but Ava
- * stopped using the calendar and cited "the FAQ" (5-6/7). With thinking off, models can also
- * write a tool call as text; VOICE_NOTE is the guard recommended for that case.
+ * Thinking is per agent (modelConfig.voiceThinking = "off"). On 20 Oct turning it off cost Ava
+ * the calendar and she cited "the FAQ" (5-6/7); re-measured 26 Oct on her current suite as call
+ * turns it passed 17/18 either way, with first words 0.78 s median / 1.2 s p90 off against
+ * 2.4 s / 4.2 s on (the thinking, 600-1,300 tokens on harder turns, was most of the wait), so
+ * Ava has it off. With thinking off, models can also write a tool call as text; VOICE_NOTE is
+ * the guard recommended for that case.
  */
 const VOICE_NOTE = 'This turn is spoken on a live call. When you use a tool, you may say a brief sentence first. If no tool can express what the caller asked for, say so instead of guessing. Do not include internal or system XML tags in your response.'
 

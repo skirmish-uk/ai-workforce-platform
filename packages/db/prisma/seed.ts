@@ -289,8 +289,13 @@ const ASSISTANT_VOICE = { enabled: true, greeting: "Hi, I'm Ava, Demo Marketing 
 
 /** Haiku 5.5: same 5/5 suite result as Haiku 4.5 on 18 Oct at about a tenth of the cost, and its 512-token cache minimum covers Ava's prompt. */
 const ASSISTANT_MODEL = 'claude-haiku-5-5'
-/** Room for Haiku 5.5's thinking before the answer: at 600 tokens a hard question could use it all and leave no reply. Answer length is set by the prompt. */
-const ASSISTANT_MODEL_CONFIG = { maxTokens: 2048 }
+/**
+ * Room for Haiku 5.5's thinking before a typed answer: at 600 tokens a hard question could use it
+ * all and leave no reply. Answer length is set by the prompt. On calls thinking is off
+ * (voiceThinking): measured 26 Oct on her suite as call turns, first words 0.78 s median / 1.2 s
+ * p90 without it against 2.4 s / 4.2 s with it, and 17/18 cases passed either way.
+ */
+const ASSISTANT_MODEL_CONFIG = { maxTokens: 2048, voiceThinking: 'off' }
 
 const ASSISTANT_PROMPT = `You are Ava, the AI assistant for Demo Marketing Agency. You answer questions from prospects and clients.
 

@@ -324,6 +324,24 @@ describe('revision pipeline', () => {
 })
 
 describe('manager agent tools', () => {
+  test('inspecting an agent shows the tools the platform gives it, and on calls its call tools and instructions', async () => {
+    // 26 Oct: Morgan reported "Ava has no way to end a call"; platform__end_call is added on calls, outside the contract.
+    const w = await workforce()
+    const inspect = async () => {
+      const llm = scriptedLLM([toolUse([{ name: 'platform__inspect_agent', input: { agentId: w.agentId } }]), text('Done.')])
+      await runAgent(w.managerId, 'Review', { deps: deps(llm) })
+      return JSON.stringify(llm.calls[1].params.messages.at(-1))
+    }
+    const typed = await inspect()
+    assert.match(typed, /platform__escalate/)
+    assert.doesNotMatch(typed, /platform__end_call/)
+    const agent = await prisma.agent.findUniqueOrThrow({ where: { id: w.agentId } })
+    await prisma.agent.update({ where: { id: w.agentId }, data: { config: { ...(agent.config as object), voice: { enabled: true } } } })
+    const onCalls = await inspect()
+    assert.match(onCalls, /platform__end_call/)
+    assert.match(onCalls, /On a live call/)
+  })
+
   test('the manager reports a platform issue once: an incident for the platform team, nothing changed', async () => {
     const w = await workforce()
     const report = { title: 'Voice turns are not told an earlier turn handed over', description: 'Ava handed one request over five times in one call.', agentId: w.agentId, runIds: ['314', '315'], severity: 'medium' }

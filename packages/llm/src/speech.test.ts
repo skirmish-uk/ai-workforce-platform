@@ -21,6 +21,9 @@ import {
   notEnglishSpeech,
   compareTranscription,
   configuredSttProviders,
+  createLiveTranscription,
+  liveTranscriptionAvailable,
+  LIVE_STT_MODEL,
 } from './speech'
 import { LLMConfigError } from './types'
 
@@ -298,4 +301,28 @@ test('hedged: a slow request is tried again and the first answer wins', async ()
   const firstFails = async () => { calls++; const n = calls; await wait(n === 1 ? 40 : 5); if (n === 1) throw new Error('first'); return 'second' }
   assert.equal(await hedged(firstFails, 20), 'second')
   await assert.rejects(hedged(async () => { throw new Error('down') }, 20), /down/)
+})
+
+test('live transcription: a short-lived browser key for a transcription-only session, with the hint and no server turn detection', async () => {
+  let sent: { url: string; headers: Record<string, string>; body: Record<string, any> } | null = null
+  const fetchStub = (async (url: string, init: RequestInit) => {
+    sent = { url, headers: init.headers as Record<string, string>, body: JSON.parse(String(init.body)) }
+    return new Response(JSON.stringify({ value: 'ek_test', expires_at: 1_800_000_000 }), { status: 200 })
+  }) as unknown as typeof fetch
+  const session = await createLiveTranscription({ hint: 'Ava, CloudNine.' }, { fetch: fetchStub, env: { OPENAI_API_KEY: 'sk-test' } })
+  assert.deepEqual(session, { key: 'ek_test', expiresAt: 1_800_000_000, model: LIVE_STT_MODEL, rate: 24_000, url: 'wss://api.openai.com/v1/realtime?intent=transcription' })
+  assert.equal(sent!.url, 'https://api.openai.com/v1/realtime/client_secrets')
+  assert.equal(sent!.headers.Authorization, 'Bearer sk-test')
+  const input = sent!.body.session.audio.input
+  assert.equal(sent!.body.session.type, 'transcription')
+  assert.deepEqual(input.transcription, { model: LIVE_STT_MODEL, language: 'en', prompt: 'Ava, CloudNine.' })
+  assert.equal(input.turn_detection, null)
+  assert.deepEqual(input.format, { type: 'audio/pcm', rate: 24_000 })
+
+  const failing = (async () => new Response(JSON.stringify({ error: { message: 'nope' } }), { status: 401 })) as unknown as typeof fetch
+  await assert.rejects(createLiveTranscription({}, { fetch: failing, env: { OPENAI_API_KEY: 'sk-test' } }), /401.*nope/)
+  await assert.rejects(createLiveTranscription({}, { env: {} }), LLMConfigError)
+  assert.equal(liveTranscriptionAvailable({ OPENAI_API_KEY: 'k' }), true)
+  assert.equal(liveTranscriptionAvailable({ OPENAI_API_KEY: 'k', SPEECH_LIVE_STT: 'off' }), false)
+  assert.equal(liveTranscriptionAvailable({}), false)
 })

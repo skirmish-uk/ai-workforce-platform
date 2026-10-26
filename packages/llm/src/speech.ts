@@ -418,6 +418,66 @@ export function hedged<T>(run: () => Promise<T>, afterMs: number, onHedge?: () =
   })
 }
 
+/**
+ * Live speech-to-text: the browser streams the caller's audio while they speak and gets text
+ * back word by word (docs/VOICE.md, "Live transcription"). Measured 26 Oct: words arrive
+ * 0.4–0.8 s behind the voice, and the whole turn's text 0.5–0.55 s after the page commits it,
+ * against 0.55–2.3 s for transcribing an uploaded recording. $0.017 a minute of audio sent
+ * (the page only sends while someone is talking). SPEECH_LIVE_STT_MODEL overrides the model.
+ */
+export const LIVE_STT_MODEL = 'gpt-live-transcribe'
+/** The live session's audio: 16-bit little-endian mono PCM at this rate. */
+export const LIVE_STT_RATE = 24_000
+
+export interface LiveTranscriptionSession {
+  /** Short-lived key for the browser's WebSocket (never the API key). */
+  key: string
+  /** Unix seconds after which the key can no longer open a connection. */
+  expiresAt: number
+  model: string
+  rate: number
+  url: string
+}
+
+/** Whether live transcription can be offered: an OpenAI key, and not turned off with SPEECH_LIVE_STT=off. */
+export function liveTranscriptionAvailable(env: Record<string, string | undefined> = process.env): boolean {
+  return Boolean(env.OPENAI_API_KEY) && (env.SPEECH_LIVE_STT ?? '').toLowerCase() !== 'off'
+}
+
+/**
+ * A transcription-only realtime session for one call, with a short-lived key the browser
+ * connects with. No turn detection on OpenAI's side: the page's own voice detection decides
+ * when a turn ends and commits it. `hint` is the same names-only list as uploaded turns.
+ */
+export async function createLiveTranscription(options: { hint?: string } = {}, deps: SpeechDeps = {}): Promise<LiveTranscriptionSession> {
+  const env = deps.env ?? process.env
+  const apiKey = env.OPENAI_API_KEY
+  if (!apiKey) throw new LLMConfigError('OPENAI_API_KEY is not configured. Live transcription uses OpenAI.')
+  const model = env.SPEECH_LIVE_STT_MODEL || LIVE_STT_MODEL
+  const res = await (deps.fetch ?? fetch)('https://api.openai.com/v1/realtime/client_secrets', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      // Long enough to open the connection; the session itself then lasts up to an hour.
+      expires_after: { anchor: 'created_at', seconds: 120 },
+      session: {
+        type: 'transcription',
+        audio: {
+          input: {
+            format: { type: 'audio/pcm', rate: LIVE_STT_RATE },
+            noise_reduction: { type: 'near_field' },
+            transcription: { model, language: 'en', ...(options.hint ? { prompt: options.hint } : {}) },
+            turn_detection: null,
+          },
+        },
+      },
+    }),
+  })
+  const body = (await res.json().catch(() => ({}))) as { value?: string; expires_at?: number; error?: { message?: string } }
+  if (!res.ok || !body.value) throw new Error(`Live transcription session failed (${res.status}): ${body.error?.message ?? 'no key returned'}`)
+  return { key: body.value, expiresAt: body.expires_at ?? Math.floor(Date.now() / 1000) + 120, model, rate: LIVE_STT_RATE, url: 'wss://api.openai.com/v1/realtime?intent=transcription' }
+}
+
 /** Streamed speech is raw 16-bit little-endian mono PCM at this rate (both providers' native streaming format). */
 export const SPEECH_PCM_RATE = 24_000
 

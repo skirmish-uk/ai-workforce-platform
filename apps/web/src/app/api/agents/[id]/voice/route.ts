@@ -5,7 +5,7 @@ import { prisma } from '@ai-workforce/db'
 import { safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
 import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
-import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, SPEECH_PCM_RATE, hedged, notEnglishSpeech, soundsLikeEcho, streamSpeech, transcribeAudio, ttsProvider } from '@ai-workforce/llm'
+import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, SPEECH_PCM_RATE, echoesHint, hedged, notEnglishSpeech, soundsLikeEcho, streamSpeech, transcribeAudio, transcriptionHint, ttsProvider } from '@ai-workforce/llm'
 import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
 import { callVocabulary, loadAgent } from './shared'
 import { cachedSpeech, type ReserveSpeech } from './speech-cache'
@@ -71,6 +71,8 @@ async function speakLine(text: string, voice: Voice, reserve: ReserveSpeech) {
 
 /** Short acknowledgements the call plays if the answer hasn't started ~0.6 s after the caller stops. */
 const FILLERS = ['Mm-hm.', 'Okay.', 'Right.', 'Sure.']
+/** Said quietly while the caller is talking at length (live transcription only), the way a listener does. */
+const BACKCHANNELS = ['Mm-hm.', 'Yeah.', 'Right.', 'Uh-huh.']
 
 /**
  * A second transcription request when the first hasn't answered by then (see hedged()):
@@ -103,10 +105,13 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   }
   const reserve = reserverFor(agent.tenantId, tenant?.settings, voice)
   const greeting = voice.greeting ?? defaultGreeting(agent.name)
-  const [spoken, ...fillers] = await Promise.all([speakLine(greeting, voice, reserve), ...FILLERS.map((f) => speakLine(f, voice, reserve))])
+  const backchannelLines = voice.backchannels === false ? [] : BACKCHANNELS
+  const [spoken, ...clips] = await Promise.all([speakLine(greeting, voice, reserve), ...[...FILLERS, ...backchannelLines].map((f) => speakLine(f, voice, reserve))])
+  const fillers = clips.slice(0, FILLERS.length)
+  const backchannels = clips.slice(FILLERS.length)
   // What starting the call cost (greeting and acknowledgements are cached, so usually nothing):
   // counted with the turns when rebuilding the monthly usage.
-  const ttsCharacters = [spoken, ...fillers].reduce((sum, s) => sum + s.characters, 0)
+  const ttsCharacters = [spoken, ...clips].reduce((sum, s) => sum + s.characters, 0)
   void prisma.auditLog
     .create({ data: { action: 'VOICE_CALL_STARTED', entityType: 'Agent', entityId: agent.id, tenantId: agent.tenantId, userId: session.user.id, newData: { ttsCharacters, ttsProvider: voice.provider ?? ttsProvider() } } })
     .catch((error) => console.error('Failed to record call start:', safeErrorMessage(error)))
@@ -116,6 +121,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     speech: spoken.speech,
     ttsError: spoken.ttsError,
     fillers: fillers.flatMap((f) => (f.speech ? [{ pcm: f.speech.pcm }] : [])),
+    backchannels: backchannels.flatMap((f) => (f.speech ? [{ pcm: f.speech.pcm }] : [])),
   })
 }
 
@@ -142,35 +148,51 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const reserve = reserverFor(agent.tenantId, tenantRow?.settings, voice)
     const form = await request.formData()
     const callId = form.get('conversationId')
+    // Either the caller's words, already transcribed live in the page (field "transcript"), or
+    // the recording to transcribe here (field "audio").
+    const liveText = form.get('transcript')
     const file = form.get('audio')
-    if (!(file instanceof Blob)) return NextResponse.json({ error: 'Send the recording as form field "audio"' }, { status: 400 })
-    if (file.size > MAX_AUDIO_BYTES) return NextResponse.json({ error: 'Recording is too long' }, { status: 413 })
-    const audio = Buffer.from(await file.arrayBuffer())
+    if (typeof liveText !== 'string' && !(file instanceof Blob)) return NextResponse.json({ error: 'Send the recording as form field "audio"' }, { status: 400 })
+    if (file instanceof Blob && file.size > MAX_AUDIO_BYTES) return NextResponse.json({ error: 'Recording is too long' }, { status: 413 })
+    const audio = typeof liveText !== 'string' && file instanceof Blob ? Buffer.from(await file.arrayBuffer()) : null
     // Where each turn's time goes (returned to the browser and kept on the VOICE_TURN row).
     const timings: Record<string, number> = { receivedMs: Date.now() - started }
     let mark = Date.now()
     const lap = (name: string) => { const now = Date.now(); timings[name] = now - mark; mark = now }
+    // A names-only hint (never what the agent said: on noise that came back as the transcript).
+    const vocabulary = callVocabulary(agent.name, tenantRow?.name, voice.vocabulary, form.get('history'))
 
     let transcript: string
     let confidence: number | null = null
     let hintRetried = false
-    try {
-      // A names-only hint (never what the agent said: on noise that came back as the transcript).
-      const tenant = tenantRow
-      const vocabulary = callVocabulary(agent.name, tenant?.name, voice.vocabulary, form.get('history'))
-      const heard = await hedged(
-        () => transcribeAudio(audio, { mimeType: file.type || 'audio/webm', language: 'en', vocabulary, provider: voice.sttProvider }),
-        TRANSCRIBE_HEDGE_MS,
-        () => { timings.transcribeHedged = 1 }
-      )
-      transcript = heard.text
-      confidence = heard.confidence
-      hintRetried = heard.hintRetried ?? false
-      lap('transcribeMs')
-    } catch (error) {
-      const status = error instanceof LLMConfigError ? 503 : 502
-      return NextResponse.json({ error: `Could not transcribe the recording: ${safeErrorMessage(error)}` }, { status })
+    // Live turns: how long the page waited for the final text after the caller stopped, and the
+    // seconds of audio streamed (what live transcription bills).
+    const live = typeof liveText === 'string'
+      ? { waitMs: Math.max(0, Math.round(Number(form.get('liveWaitMs')) || 0)), seconds: Math.max(0, Number(form.get('liveSeconds')) || 0) }
+      : null
+    if (live) {
+      transcript = String(liveText).replace(/\s+/g, ' ').trim().slice(0, 2000)
+      timings.liveWaitMs = live.waitMs
+      // On noise a transcriber sometimes reads its hint back; that is nobody speaking.
+      const hint = transcriptionHint(vocabulary)
+      if (hint && echoesHint(transcript, hint)) transcript = ''
+    } else {
+      try {
+        const heard = await hedged(
+          () => transcribeAudio(audio!, { mimeType: (file as Blob).type || 'audio/webm', language: 'en', vocabulary, provider: voice.sttProvider }),
+          TRANSCRIBE_HEDGE_MS,
+          () => { timings.transcribeHedged = 1 }
+        )
+        transcript = heard.text
+        confidence = heard.confidence
+        hintRetried = heard.hintRetried ?? false
+        lap('transcribeMs')
+      } catch (error) {
+        const status = error instanceof LLMConfigError ? 503 : 502
+        return NextResponse.json({ error: `Could not transcribe the recording: ${safeErrorMessage(error)}` }, { status })
+      }
     }
+    const sttUsage = live ? { stt: 'live', liveSeconds: live.seconds } : { stt: 'upload', audioBytes: audio!.length }
 
     // Noise transcribed into another script, or an interruption that was only the agent's own
     // voice from the speakers (or a "mm-hm"): ignored like silence, so the agent never answers itself.
@@ -178,7 +200,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const ignored = notEnglishSpeech(transcript) ? 'not_english' : interrupted && soundsLikeEcho(transcript, agentLines(form.get('history'))) ? 'echo' : null
     if (ignored) {
       timings.totalMs = Date.now() - started
-      recordTurn(agent, session.user.id, { runId: null, status: 'no_speech', ignored, transcript, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: 0, timings })
+      recordTurn(agent, session.user.id, { runId: null, status: 'no_speech', ignored, transcript, confidence, hintRetried, ...sttUsage, ttsCharacters: 0, timings })
       return NextResponse.json({ transcript, confidence, reply: '', status: 'no_speech', ignored, runId: null, timings, speech: null })
     }
 
@@ -190,7 +212,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       // The browser drops a turn with no speech, so don't spend time or money speaking it.
       const spoken = status === 'no_speech' ? { speech: null, characters: 0 } : await speakLine(reply, voice, reserve)
       timings.totalMs = Date.now() - started
-      recordTurn(agent, session.user.id, { runId: null, status, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: spoken.characters, timings })
+      recordTurn(agent, session.user.id, { runId: null, status, confidence, hintRetried, ...sttUsage, ttsCharacters: spoken.characters, timings })
       return NextResponse.json({ transcript, confidence, reply, status, runId: null, timings, rate: SPEECH_PCM_RATE, ...spoken })
     }
 
@@ -374,7 +396,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         timings.totalMs = Date.now() - started
         // endCall: the agent said goodbye; the page hangs up about a second after it finishes speaking.
         send({ type: 'done', status, runId, reply: spokenText, endCall: result?.endCall === true, timings })
-        recordTurn(agent, session.user.id, { runId, status, endCall: result?.endCall === true || undefined, confidence, hintRetried, audioBytes: audio.length, ttsCharacters: characters, ttsModel, ttsError, timings })
+        recordTurn(agent, session.user.id, { runId, status, endCall: result?.endCall === true || undefined, confidence, hintRetried, ...sttUsage, ttsCharacters: characters, ttsModel, ttsError, timings })
         if (!closed) controller.close()
       },
     })

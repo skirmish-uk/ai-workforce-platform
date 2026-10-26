@@ -6,6 +6,8 @@ import { Loader2, Mic, MicOff, PhoneCall, PhoneOff, Play, Volume2 } from 'lucide
 import { WAV_RATE, encodeWav } from './voice-audio'
 import { SpeechDetector, loadSpeechModel } from './speech-detector'
 import { ComparisonResults, TranscriberCompare, compareRecording, type Comparison } from './TranscriberCompare'
+import { LiveTranscriber } from './live-transcriber'
+import { EARLY_COMMIT_MS, endSilenceMs, shouldBackchannel, withoutBackchannels, wordCount } from './live-turn'
 
 interface Turn {
   /** Agent turns: which answer incoming sentences belong to (and its audio, for "Play again"). */
@@ -268,6 +270,27 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const turnsRef = useRef<Turn[]>([])
   /** Groups this call's turns into one conversation in the agent's history; a cleared conversation starts a new one. */
   const conversationId = useRef<string>(crypto.randomUUID())
+  /** Live transcription for this call (live-transcriber.ts); null: each turn is uploaded as a recording. */
+  const liveStt = useRef<LiveTranscriber | null>(null)
+  const liveConnecting = useRef(false)
+  /** What the caller has said so far this turn, shown as they speak. */
+  const [partial, setPartial] = useState('')
+  const partialRef = useRef('')
+  /** "Mm-hm."/"Yeah." in the agent's voice, said quietly while the caller talks at length. */
+  const backchannels = useRef<AudioBuffer[]>([])
+  /** Live turns sent so far; one superseded while its text was coming hands its words to the next. */
+  const liveTurnSeq = useRef(0)
+  const carryOver = useRef('')
+  /**
+   * This turn's parts: committed at each pause of EARLY_COMMIT_MS, so the text is usually back
+   * by the time the turn ends. After a commit the (quiet) audio is held back, and sent on only if
+   * the caller speaks again; the words of earlier parts stay on screen in front of the new ones.
+   */
+  const liveParts = useRef<Array<Promise<{ text: string; seconds: number } | null>>>([])
+  const liveHeld = useRef(false)
+  const liveStash = useRef<Float32Array[]>([])
+  const partialBefore = useRef('')
+  const backchannel = useRef({ lastAt: 0, wordsAt: 0, playedThisTurn: false, pauseFired: false, until: 0, last: -1 })
   const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [] as number[], suspectRatio: 0, voiceHeard: false, heldAt: 0, holdAgainAt: 0, suspectSpeech: false })
 
   const setPhaseBoth = (p: Phase) => { phaseRef.current = p; setPhase(p) }
@@ -576,6 +599,46 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     settleLive(true)
   }
 
+  // ---- live transcription: the caller's words as they say them (live-transcriber.ts)
+  /** Opens (or reopens, after an hour or a dropped connection) live transcription; turns are uploaded meanwhile. */
+  const connectLive = () => {
+    if (liveConnecting.current || liveStt.current?.ready) return
+    liveConnecting.current = true
+    void LiveTranscriber.connect(agentId).then((live) => {
+      liveConnecting.current = false
+      if (!live) return
+      if (!inCallRef.current) { live.close(); return }
+      liveStt.current?.close()
+      live.onPartial = (text) => {
+        if (phaseRef.current !== 'hearing') return
+        const shown = partialBefore.current ? `${partialBefore.current} ${text}` : text
+        partialRef.current = shown
+        setPartial(shown)
+      }
+      liveStt.current = live
+    })
+  }
+  const showPartial = (text: string) => { partialRef.current = text; setPartial(text) }
+
+  /** A quiet "mm-hm" while the caller talks, on its own path: it isn't an answer, so the call stays in "hearing". */
+  const playBackchannel = () => {
+    const context = ctx.current
+    const clips = backchannels.current
+    if (!context || !clips.length) return
+    const b = backchannel.current
+    let pick = Math.floor(Math.random() * clips.length)
+    if (pick === b.last) pick = (pick + 1) % clips.length
+    b.last = pick
+    const node = context.createBufferSource()
+    node.buffer = clips[pick]
+    const gain = context.createGain()
+    gain.gain.value = 0.7 // softer than an answer: a listener's murmur
+    node.connect(gain).connect(playerInput.current ?? playerAnalyser.current!)
+    node.start()
+    b.until = context.currentTime + clips[pick].duration
+    b.playedThisTurn = true
+  }
+
   // ---- one utterance: start recording when speech begins, stop after a pause
   const beginUtterance = (interrupting = false) => {
     if (!stream.current) return
@@ -594,6 +657,20 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       const keep = Math.ceil(((ms / 1000) * rate) / 2048)
       captured.current = preRoll.current.slice(-keep)
       preRoll.current = []
+      showPartial('')
+      backchannel.current = { ...backchannel.current, lastAt: Date.now(), wordsAt: 0, playedThisTurn: false, pauseFired: false }
+      const live = liveStt.current
+      liveTurnSeq.current++ // a turn still waiting for its text is now part of this one
+      liveParts.current = []
+      liveHeld.current = false
+      liveStash.current = []
+      partialBefore.current = ''
+      if (live?.ready) {
+        live.begin()
+        for (const block of captured.current) live.push(block, rate)
+      } else if (inCallRef.current) {
+        connectLive() // for the next turn; this one is uploaded
+      }
       setPhaseBoth('hearing')
       return
     }
@@ -624,8 +701,43 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       const blocks = captured.current
       captured.current = null
       const wav = encodeWav(blocks, capture.current.rate, END_SILENCE_MS - TAIL_MS)
+      const live = liveStt.current
       // About 0.3 s of sound after trimming: a cough or a click, not a sentence.
-      if (wav.size < 44 + WAV_RATE * 0.6) { if (inCallRef.current) setPhaseBoth('listening'); return }
+      const parts = liveParts.current
+      liveParts.current = []
+      liveStash.current = []
+      const held = liveHeld.current
+      liveHeld.current = false
+      if (wav.size < 44 + WAV_RATE * 0.6) { live?.discard(); showPartial(''); if (inCallRef.current) setPhaseBoth('listening'); return }
+      if (live?.ready) {
+        // The words are already in: wait only for the last few, then send the text instead of
+        // the recording. If they don't come (or come back empty), upload the recording as before.
+        setPhaseBoth('thinking')
+        answerDone.current = false // an answer is coming: stay "thinking", not "listening"
+        const playedBackchannel = backchannel.current.playedThisTurn
+        const stoppedAt = Date.now()
+        const seq = ++liveTurnSeq.current
+        // The last part, unless the turn ended while it was already committed (held).
+        if (!held) parts.push(live.commit())
+        void Promise.all(parts).then((results) => {
+          const heard = results.some((r) => r === null) ? null : { text: results.map((r) => r!.text).filter(Boolean).join(' '), seconds: results.reduce((sum, r) => sum + r!.seconds, 0) }
+          const text = heard ? withoutBackchannels(heard.text, playedBackchannel) : ''
+          const go = () => {
+            // The caller carried on talking before this was sent: it opens their next turn.
+            if (seq !== liveTurnSeq.current || !inCallRef.current) { if (text) carryOver.current = `${carryOver.current} ${text}`.trim(); return }
+            const said = `${carryOver.current} ${text}`.trim()
+            carryOver.current = ''
+            if (heard && text) void send(wav, { transcript: said, waitMs: Date.now() - stoppedAt, seconds: heard.seconds })
+            else void send(wav)
+          }
+          // Stopped on "…and", "…um" or a comma: probably still thinking, so give them a moment
+          // more before answering (judged on the finished text; the live words run behind the voice).
+          const more = endSilenceMs(text, END_SILENCE_MS) - END_SILENCE_MS - (Date.now() - stoppedAt)
+          if (more > 0) setTimeout(go, more)
+          else go()
+        })
+        return
+      }
       void send(wav)
       return
     }
@@ -692,6 +804,11 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     if (mutedRef.current) {
       if (p === 'hearing') {
         captured.current = null
+        liveParts.current = []
+        liveHeld.current = false
+        liveStash.current = []
+        liveStt.current?.discard()
+        showPartial('')
         if (recorder.current) { recorder.current.onstop = null; recorder.current.stop(); recorder.current = null }
         setPhaseBoth('listening')
       }
@@ -782,14 +899,42 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       }
     } else if (p === 'hearing') {
       v.peak = Math.max(v.peak, rms)
-      v.silenceMs = rms < Math.max(MIN_SPEECH_LEVEL * 0.8, v.floor * 2.2) ? v.silenceMs + TICK_MS : 0
+      // While our own "mm-hm" plays (and just after), its echo isn't the caller talking.
+      const b = backchannel.current
+      const ownMurmur = ctx.current && ctx.current.currentTime < b.until + 0.2 ? v.echoCoupling * levelOf(playerAnalyser.current) * SPEECH_OVER_ECHO : 0
+      const quiet = rms < Math.max(MIN_SPEECH_LEVEL * 0.8, v.floor * 2.2, ownMurmur)
+      v.silenceMs = quiet ? v.silenceMs + TICK_MS : 0
+      if (!quiet) b.pauseFired = false
       const took = Date.now() - v.startedAt
+      // At a pause, have what's been said so far finished off now; speaking again starts a new part.
+      const live = liveStt.current
+      if (live?.ready && captured.current && capture.current) {
+        if (quiet && !liveHeld.current && v.silenceMs >= EARLY_COMMIT_MS && v.silenceMs < END_SILENCE_MS) {
+          liveHeld.current = true
+          partialBefore.current = partialRef.current
+          liveParts.current.push(live.commit())
+        } else if (!quiet && liveHeld.current) {
+          liveHeld.current = false
+          for (const block of liveStash.current) live.push(block, capture.current.rate)
+          liveStash.current = []
+        }
+      }
+      if (
+        !b.pauseFired && backchannels.current.length && liveStt.current?.ready &&
+        shouldBackchannel({ speakingMs: took, sinceLastMs: Date.now() - b.lastAt, wordsSince: wordCount(partialRef.current) - b.wordsAt, pauseMs: v.silenceMs, partial: partialRef.current })
+      ) {
+        b.pauseFired = true
+        b.lastAt = Date.now()
+        b.wordsAt = wordCount(partialRef.current)
+        playBackchannel()
+      }
       if ((v.silenceMs >= END_SILENCE_MS && took > MIN_UTTERANCE_MS) || took > MAX_UTTERANCE_MS) endUtterance()
     }
   }
 
   // ---- send a turn with the conversation so far
-  const send = async (audio: Blob) => {
+  /** `heardLive`: the caller's words already transcribed as they spoke (sent instead of the recording, which stays in this tab). */
+  const send = async (audio: Blob, heardLive?: { transcript: string; waitMs: number; seconds: number }) => {
     setPhaseBoth('thinking')
     const recordingUrl = URL.createObjectURL(audio)
     recordingUrls.current.push(recordingUrl)
@@ -798,7 +943,13 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       .slice(-8)
       .map((t) => ({ who: t.who === 'you' ? 'caller' : 'agent', text: t.text }))
     const form = new FormData()
-    form.append('audio', audio, 'utterance')
+    if (heardLive) {
+      form.append('transcript', heardLive.transcript)
+      form.append('liveWaitMs', String(heardLive.waitMs))
+      form.append('liveSeconds', heardLive.seconds.toFixed(2))
+    } else {
+      form.append('audio', audio, 'utterance')
+    }
     form.append('history', JSON.stringify(history))
     form.append('conversationId', conversationId.current)
     if (interruptedTurn.current) form.append('interrupted', '1')
@@ -806,7 +957,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     answerDone.current = false
     let heard = false
     // If the answer is slow to start, acknowledge, the way a person says "mm-hm" on a call.
-    const fillerAllowed = !fillerLastTurn.current
+    const fillerAllowed = !fillerLastTurn.current && !backchannel.current.playedThisTurn
     fillerLastTurn.current = false
     setTimeout(() => {
       if (!fillerAllowed || turn !== activeTurn.current || isPlaying() || live.current?.spans.some((s) => s.start !== null) || phaseRef.current !== 'thinking' || !fillers.current.length) return
@@ -826,6 +977,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         // Nothing usable was heard: a plain JSON reply.
         const body: VoiceResponse = await res.json()
         answerDone.current = true
+        showPartial('')
         if (!inCallRef.current || turn !== activeTurn.current) return
         if (body.status === 'no_speech') return // don't make the agent say "sorry?" to background noise
         if (body.rate) rate.current = body.rate
@@ -855,6 +1007,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
           if (!line) continue
           const event = JSON.parse(line) as { type: string; transcript?: string; runId?: string | null; rate?: number; text?: string; data?: string; ttsError?: string; status?: string; endCall?: boolean } & Partial<WordTimes>
           if (event.type === 'heard') {
+            showPartial('')
             if (event.rate) rate.current = event.rate
             // A turn already talked over (the caller started again) is shown, not typed out.
             if (turn === activeTurn.current) startLive(turn)
@@ -938,6 +1091,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
           detector.current?.push(e.data, context.sampleRate)
           if (captured.current) {
             captured.current.push(e.data)
+            if (liveHeld.current) liveStash.current.push(e.data)
+            else liveStt.current?.push(e.data, context.sampleRate)
           } else {
             preRoll.current.push(e.data)
             if (preRoll.current.length > keepBlocks) preRoll.current.shift()
@@ -955,11 +1110,14 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         capture.current = null // older browser: MediaRecorder from the moment speech is detected
       }
 
+      inCallRef.current = true // live transcription connects while the greeting loads
+      connectLive()
       const res = await fetch(`/api/agents/${agentId}/voice`)
-      const body: VoiceResponse & { fillers?: Array<{ pcm: string }> } = await res.json()
+      const body: VoiceResponse & { fillers?: Array<{ pcm: string }>; backchannels?: Array<{ pcm: string }> } = await res.json()
       if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
       if (body.rate) rate.current = body.rate
       fillers.current = (body.fillers ?? []).flatMap((f) => pcmToBuffer(context, f.pcm, rate.current) ?? [])
+      backchannels.current = (body.backchannels ?? []).flatMap((f) => pcmToBuffer(context, f.pcm, rate.current) ?? [])
       inCallRef.current = true
       setInCall(true)
       setMuted(false)
@@ -995,6 +1153,9 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     preRoll.current = []
     stream.current?.getTracks().forEach((t) => t.stop())
     stream.current = null
+    liveStt.current?.close()
+    liveStt.current = null
+    showPartial('')
     cancelAnswer()
     answerDone.current = true
     setPhaseBoth('idle')
@@ -1081,6 +1242,9 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
           className="w-full h-24 [--wave-agent:theme(colors.primary.500)] [--wave-you:theme(colors.rose.500)] dark:[--wave-agent:theme(colors.primary.400)] dark:[--wave-you:theme(colors.rose.400)]"
         />
         <p className="text-sm text-neutral-600 dark:text-neutral-300 min-h-[1.25rem] text-center" role="status" aria-live="polite">{label}</p>
+        {partial && (phase === 'hearing' || phase === 'thinking') && (
+          <p className="max-w-xl text-center text-base text-neutral-900 dark:text-neutral-100" aria-label="What you’re saying">“{partial}”</p>
+        )}
         {!inCall ? (
           <button onClick={startCall} disabled={phase !== 'idle'} className="inline-flex items-center gap-2 rounded-full bg-primary-600 hover:bg-primary-700 disabled:opacity-60 text-white px-6 py-3 text-sm font-medium shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2">
             {phase === 'starting' ? <Loader2 className="w-4 h-4 animate-spin" /> : <PhoneCall className="w-4 h-4" />}{turns.length ? 'Call again' : 'Start call'}

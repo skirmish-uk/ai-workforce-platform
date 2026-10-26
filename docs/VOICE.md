@@ -97,6 +97,16 @@ NDJSON stream: heard → per sentence: say → pcm… (+ words) → said → don
 - **No double hand-off.** When the agent has already explained a hand-off in its own words, the stock "That's one for a colleague…" line isn't added after it. Approvals still always get theirs (it never claims a gated action was done).
 - Replayed against the real model (Haiku 5.5) with the same caller lines as the first call: "No." got "No problem at all."; most answers stopped without a question; after "That's great, thanks." Ava asked "Is there anything else I can help with?"; "No, that's all. Bye!" got "Thanks for calling. Have a great day!" and the call ended.
 
+**Live transcription and backchannels (26 Oct).** The caller's words are transcribed while they speak, instead of the whole turn being uploaded after they stop:
+- **How.** At the start of a call the page asks `POST /api/agents/[id]/voice/live` for a short-lived key (2 minutes to connect; the API key never reaches the browser) and opens a WebSocket to OpenAI's realtime transcription with model `gpt-live-transcribe` (`live-transcriber.ts`). No turn detection on OpenAI's side: the page's own voice detection starts a turn (sending the 0.6 s pre-roll first) and ends it with a commit. Audio is resampled to 24 kHz 16-bit PCM in the page (`live-turn.ts`) and only sent while a turn is being recorded, so silence costs nothing. The same names-only hint as uploaded turns goes in as the session prompt.
+- **What you see.** Your words appear under the call status as you say them, about 0.3–0.6 s behind your voice.
+- **Faster turns.** The page sends the finished text (`transcript` field) instead of the recording, and the server skips speech-to-text. It doesn't wait for the turn to end to ask for that text: at 0.4 s of silence it commits what has been said so far (`EARLY_COMMIT_MS`), holds back the quiet audio after it, and sends that on only if the caller speaks again (their next words become the turn's next part; the parts are joined). So when the turn ends at 0.65 s the text is usually already back. Measured 26 Oct on the live site: committing only at the turn's end, the text arrived 0.51–0.70 s after it; with the early commit, 0.44–0.61 s (the transcriber takes 0.5–0.8 s to finish a part, and the turn ends 0.25 s after the early commit). Uploading instead took upload + 1.17 s on the same question on the live site, and 0.55–2.3 s to transcribe in earlier measurements. The rest of the wait is the model's first sentence and its speech (about 2.7 s on the live site). If a part's text doesn't come within 2.5 s, comes back empty, or the connection is down, the turn is uploaded as before, and the page reconnects for the next one.
+- **Not cutting in.** If the finished text stops mid-thought ("…and", "…um", a trailing comma), the page waits until 1.1 s of silence instead of 0.65 s before sending it; if the caller starts again in that time, it is all one turn. It is judged on the finished text, not the live words: those run ~0.5 s behind the voice, so at a pause they often end mid-phrase only because the last words haven't arrived (judging by them made ordinary turns wait longer).
+- **Backchannels.** When the caller has been talking for 3 s or more (8+ words since the last one) and pauses for 0.35 s mid-turn, the agent says a soft "Mm-hm." / "Yeah." / "Right." / "Uh-huh." in its own voice (cached clips from `GET /voice`, played at 70% of the answer volume). Never after a question, at most one every 4.5 s, and not as the "slow answer" filler on the same turn. Its echo isn't counted as the caller talking, and a picked-up "mm-hm"/"uh-huh" is taken out of the transcript. Tested 26 Oct on the live site with a 16 s explanation in three sentences with 0.6 s pauses: one turn (not cut at the pauses), backchannels at both pauses and not at the closing request ("so I wanted to ask what you'd suggest…"), clean transcript. "I'd like to ask about the Growth package and, um… [0.85 s] …what does it cost per month?" was one turn.
+- **If the caller carries on** while the text of a turn they'd paused on is still coming, those words open their next turn instead of being lost.
+- **Settings.** On by default when `OPENAI_API_KEY` is set. `SPEECH_LIVE_STT=off` turns it off everywhere; `voice.liveTranscription: false` for one agent; `voice.backchannels: false` keeps live text but no "mm-hm"s. `VOICE_TURN` rows record `stt: "live"`, `liveSeconds` (what's billed) and `timings.liveWaitMs`.
+- **Cost.** $0.017 per minute of audio sent (OpenAI pricing page, 26 Oct), about 4× the batch model, but only for the caller's own speech: roughly $0.009 per conversation minute.
+
 ## 2. Turning voice on for an agent
 
 Voice settings live in `Agent.config.voice`, outside the contract: they change how an agent sounds, not what it may do. They're validated by `voiceConfigSchema` in `packages/executor/src/voice.ts`.
@@ -144,6 +154,8 @@ Each environment counts in its own Redis, so the caps don't add up across enviro
 | `OPENAI_API_KEY` | — | Speech-to-text, OpenAI text-to-speech, and document embeddings |
 | `SPEECH_STT_PROVIDER` | `openai` | Speech-to-text provider (only `openai` today) |
 | `SPEECH_STT_MODEL` | `gpt-4o-mini-transcribe` | Transcription model (see "Poor microphones") |
+| `SPEECH_LIVE_STT` | on | `off` sends every turn as a recording instead of transcribing live |
+| `SPEECH_LIVE_STT_MODEL` | `gpt-live-transcribe` | Live transcription model |
 | `DEEPGRAM_API_KEY` | | Deepgram speech-to-text (`nova-3`; `DEEPGRAM_STT_MODEL`, `DEEPGRAM_LANGUAGE` override) |
 | `SPEECHMATICS_API_KEY` | | Speechmatics batch speech-to-text (`enhanced`; `SPEECHMATICS_STT_MODEL`, `SPEECHMATICS_LANGUAGE`, `SPEECHMATICS_API_URL` override) |
 | `SPEECH_TTS_PROVIDER` | `openai` | `openai` or `cartesia` (an agent's `voice.provider` overrides it) |
@@ -158,7 +170,8 @@ Assumptions: about half of each minute is the caller speaking and half the agent
 
 | Part | Estimate (USD/min) | Basis |
 |---|---|---|
-| Speech-to-text (gpt-4o-mini-transcribe) | ~$0.003 | third-party pricing summaries; check OpenAI's pricing page |
+| Speech-to-text, live (gpt-live-transcribe, the default) | ~$0.009 | $0.017 per minute of caller audio (OpenAI, 26 Oct), half of each minute |
+| Speech-to-text, uploaded (gpt-4o-mini-transcribe, the fallback) | ~$0.003 | third-party pricing summaries; check OpenAI's pricing page |
 | Text-to-speech (Cartesia Sonic) | ~$0.017 | ~$0.037 per 1,000 characters on Cartesia's Scale plan (third-party estimate) |
 | Text-to-speech (OpenAI gpt-4o-mini-tts) | not yet checked | check OpenAI's pricing page |
 | Model (Haiku 4.5, ~1,000 input / 60 output tokens per turn) | ~$0.005 | $1 / $5 per million tokens (`packages/llm/src/pricing.ts`). Prompt caching doesn't apply: Haiku 4.5 only caches prompts over 4,096 tokens and Ava's is ~2,500 |

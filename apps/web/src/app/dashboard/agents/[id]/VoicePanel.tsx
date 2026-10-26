@@ -245,6 +245,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const playerGain = useRef<GainNode | null>(null)
 
   const canvas = useRef<HTMLCanvasElement | null>(null)
+  const panel = useRef<HTMLElement | null>(null)
   const ctx = useRef<AudioContext | null>(null)
   /** The agent's voice, for the waveform while it speaks. */
   const playerAnalyser = useRef<AnalyserNode | null>(null)
@@ -1210,6 +1211,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     setError(null)
     setEndedByAgent(false)
     audioContext() // created inside the click, so the browser lets it play sound
+    // The call view is taller (the orb grows): bring the panel up under the page header so all of it shows.
+    panel.current?.scrollIntoView({ block: 'start', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setError('This browser cannot record audio. Try a current Chrome, Edge, Firefox or Safari.')
       return
@@ -1362,8 +1365,9 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
 
   return (
     <section
+      ref={panel}
       aria-label={`Talk to ${first}`}
-      className="rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-gradient-to-b from-primary-50/70 to-white dark:from-primary-950/30 dark:to-neutral-900 p-5 space-y-4"
+      className="scroll-mt-20 rounded-2xl border border-neutral-200 dark:border-neutral-800 bg-gradient-to-b from-primary-50/70 to-white dark:from-primary-950/30 dark:to-neutral-900 p-5 space-y-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">

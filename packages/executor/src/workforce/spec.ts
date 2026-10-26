@@ -214,6 +214,32 @@ export async function loadSkillInfos(tenantId: string, refs: SkillRef[]): Promis
   return { skills, errors }
 }
 
+const versionParts = (v: string) => v.split(/[.-]/).map((p) => Number.parseInt(p, 10) || 0)
+function newerVersion(a: string, b: string): boolean {
+  const [x, y] = [versionParts(a), versionParts(b)]
+  for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) > (y[i] ?? 0)
+  return false
+}
+
+/**
+ * One version of each playbook: a new version replaces the older one of the same name. A
+ * revision that added Ava's playbook 1.1.0 but also kept 1.0.0 gave her both sets of
+ * instructions, listed twice on her page (26 Oct). `skills` lines up with `spec.skills`.
+ */
+export function newestPlaybooks<S extends Pick<AgentSpec, 'skills'>>(spec: S, skills: SkillInfo[]): { spec: S; skills: SkillInfo[]; replaced: string[] } {
+  const best = new Map<string, number>()
+  skills.forEach((s, i) => {
+    const at = best.get(s.name)
+    if (at === undefined || newerVersion(s.version, skills[at].version)) best.set(s.name, i)
+  })
+  const keep = skills.map((s, i) => best.get(s.name) === i)
+  return {
+    spec: { ...spec, skills: spec.skills.filter((_, i) => keep[i]) },
+    skills: skills.filter((_, i) => keep[i]),
+    replaced: skills.filter((_, i) => !keep[i]).map((s) => `${s.name} ${s.version}`),
+  }
+}
+
 export function skillInfoFromRow(row: Pick<Skill, 'id' | 'name' | 'version' | 'requiredTools' | 'evaluationCases'>): SkillInfo {
   return {
     id: row.id,

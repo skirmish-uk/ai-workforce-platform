@@ -110,6 +110,25 @@ describe('revision pipeline', () => {
     assert.ok(await prisma.auditLog.findFirst({ where: { tenantId: w.tenantId, action: 'AGENT_REVISION_PROMOTED', entityId: revisionId } }))
   })
 
+  test('a new version of a playbook replaces the old one, even when the proposal also keeps the old one', async () => {
+    // 26 Oct: Morgan sent answer_client_questions 1.1.0 plus 1.0.0 as an existing playbook, and Ava ended up with both.
+    const w = await workforce()
+    const [link] = await prisma.agentSkill.findMany({ where: { agentId: w.agentId }, include: { skill: true } })
+    const old = link.skill
+    const { revisionId } = await propose(w, {
+      changes: {
+        skills: [
+          { skillId: old.id },
+          { create: { name: old.name, version: '9.9.0', description: 'v2', purpose: old.purpose ?? 'p', instructions: 'Check for duplicates first.', requiredTools: old.requiredTools, constraints: [], evaluationCases: [CASE_OK] } },
+        ],
+      },
+    })
+    const outcome = await processRevision(revisionId, { deps: deps(passingLLM()) })
+    assert.equal(outcome.status, 'PROMOTED', outcome.error)
+    const links = await prisma.agentSkill.findMany({ where: { agentId: w.agentId, enabled: true }, include: { skill: true } })
+    assert.deepEqual(links.map((l) => `${l.skill.name} ${l.skill.version}`), [`${old.name} 9.9.0`])
+  })
+
   test('a candidate that fails evaluation is discarded and the live agent is untouched (new playbooks cleaned up)', async () => {
     const w = await workforce()
     const before = await prisma.agent.findUniqueOrThrow({ where: { id: w.agentId } })

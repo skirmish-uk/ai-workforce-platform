@@ -14,6 +14,7 @@ import {
   applySpec,
   carryOverCases,
   loadSkillInfos,
+  newestPlaybooks,
   materializeSkills,
   mergeSpec,
   readAgentSpec,
@@ -226,8 +227,10 @@ export async function proposeRevision(params: ProposeRevisionParams): Promise<{ 
       let spec = mergeSpec(current?.spec ?? null, changes.data, params.addEvaluationCases ?? [], defaults)
       const loaded = await loadSkillInfos(params.tenantId, spec.skills)
       if (loaded.errors.length) throw new RevisionError('Invalid playbooks', 'INVALID', loaded.errors)
-      if (current) spec = carryOverCases(spec, loaded.skills, suiteOf(current.spec, current.skills))
-      candidate = { spec, skills: loaded.skills }
+      const newest = newestPlaybooks(spec, loaded.skills)
+      spec = newest.spec
+      if (current) spec = carryOverCases(spec, newest.skills, suiteOf(current.spec, current.skills))
+      candidate = { spec, skills: newest.skills }
     } catch (error) {
       if (error instanceof SpecError) throw new RevisionError(error.message, 'INVALID', error.issues)
       throw error

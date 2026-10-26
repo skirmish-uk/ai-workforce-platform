@@ -197,7 +197,7 @@ export function htmlToText(html: string): { title: string; description: string; 
     .replace(/<[^>]+>/g, ' ')
   const text = decodeEntities(body)
     .split('\n')
-    .map((l) => l.replace(/[ \t ]+/g, ' ').trim())
+    .map((l) => l.replace(/[ \t\u00a0]+/g, ' ').trim())
     .filter((l, i, all) => l && l !== '-' && !(l.length < 3 && /^[|•\-–]+$/.test(l)) && all.indexOf(l) === i)
     .join('\n')
   return { title, description, text, links }

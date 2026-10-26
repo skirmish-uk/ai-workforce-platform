@@ -12,7 +12,7 @@ test('private, loopback, link-local and metadata addresses are blocked; public o
 test('only public http(s) web addresses are accepted', () => {
   assert.equal(checkUrl('example.com').toString(), 'https://example.com/')
   for (const bad of ['http://localhost:3000', 'http://127.0.0.1', 'http://169.254.169.254/latest/meta-data', 'file:///etc/passwd', 'http://user:pw@example.com', 'http://example.com:8080', 'http://intranet', 'http://printer.local', 'http://[::1]/']) {
-    assert.throws(() => checkUrl(bad), undefined, bad)
+    assert.throws(() => checkUrl(bad), Error, bad)
   }
 })
 

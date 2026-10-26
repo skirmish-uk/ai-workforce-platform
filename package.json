@@ -17,6 +17,7 @@
     "db:studio": "turbo run db:studio",
     "demo:reset": "tsx scripts/reset-demo.ts",
     "demo:deploy": "tsx scripts/deploy-demo-team.ts",
+    "demo:evaluate": "tsx scripts/evaluate-team.ts",
     "demo:stage-repair": "tsx scripts/stage-repair.ts"
   },
   "devDependencies": {

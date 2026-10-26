@@ -22,5 +22,7 @@ case "${1:-up}" in
   reset-demo) dc run --rm --no-deps setup sh -c "npx tsx scripts/reset-demo.ts" && dc restart worker ;;
   # Self-repair moment: Jordan's three flagged runs (DEMO.md). Run after reset-demo, 10+ min before.
   stage-repair) dc run --rm --no-deps setup sh -c "npx tsx scripts/stage-repair.ts" ;;
-  *) echo "usage: $0 up|logs|ps|down|restart|reset-demo|stage-repair"; exit 1 ;;
+  # Every agent's test suite on the real model (dry runs), recorded as evaluations; extra args pass through.
+  evaluate) shift; dc run --rm --no-deps setup sh -c "npx tsx scripts/evaluate-team.ts $*" ;;
+  *) echo "usage: $0 up|logs|ps|down|restart|reset-demo|stage-repair|evaluate"; exit 1 ;;
 esac

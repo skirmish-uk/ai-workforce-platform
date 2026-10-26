@@ -78,6 +78,9 @@ function wordShares(words: string[]): number[] {
 const CHARS_PER_SECOND = 15
 /** Buffer before the first chunk of a sentence plays, so chunks arriving a little late don't leave gaps. */
 const PLAYBACK_LEAD_S = 0.06
+/** The call-start chime's length, and the pause after it before the agent's greeting. */
+const CHIME_S = 0.5
+const GREETING_PAUSE_S = 0.6
 
 function pcmToBuffer(context: AudioContext, base64: string, rate: number): AudioBuffer | null {
   const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
@@ -484,10 +487,12 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     sources.current.push(entry)
     node.onended = () => { sources.current = sources.current.filter((s) => s !== entry) }
   }
+  /** No agent audio before this (AudioContext time): a pause after the call-start chime. */
+  const quietUntil = useRef(0)
   const schedule = (buffer: AudioBuffer): number => {
     const context = audioContext()
     const now = paused.current ? paused.current.at : context.currentTime
-    const startAt = Math.max(now + (isPlaying() ? 0 : PLAYBACK_LEAD_S), playEnd.current)
+    const startAt = Math.max(now + (isPlaying() ? 0 : PLAYBACK_LEAD_S), playEnd.current, quietUntil.current)
     playEnd.current = startAt + buffer.duration
     if (paused.current) paused.current.queue.push({ buffer, startAt, offset: 0 })
     else startSource(buffer, startAt)
@@ -1313,6 +1318,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     if (!context || context.state === 'closed') return
     const notes = kind === 'start' ? [587.33, 880] : [880, 587.33] // D5 → A5, or back down
     const at = context.currentTime + 0.02
+    // The greeting waits for the chime to finish and a short pause, so the two don't run together.
+    if (kind === 'start') quietUntil.current = at + CHIME_S + GREETING_PAUSE_S
     notes.forEach((freq, i) => {
       const start = at + i * 0.16
       const osc = context.createOscillator()

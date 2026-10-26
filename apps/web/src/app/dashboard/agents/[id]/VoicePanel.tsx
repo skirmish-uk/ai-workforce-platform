@@ -436,6 +436,21 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       g.fillStyle = fill
       g.fill()
       g.shadowBlur = 0
+      // Thinking: a light circling the orb, so there's visible feedback until the answer starts.
+      if (thinking && !agentTalking) {
+        const spin = reduceMotion ? 0 : t / 260
+        const ring = g.createConicGradient(spin, cx, cy)
+        ring.addColorStop(0, light)
+        ring.addColorStop(0.35, color)
+        ring.addColorStop(0.36, 'transparent')
+        ring.addColorStop(1, 'transparent')
+        g.beginPath()
+        g.arc(cx, cy, base * 1.42, 0, Math.PI * 2)
+        g.strokeStyle = ring
+        g.lineWidth = 3
+        g.lineCap = 'round'
+        g.stroke()
+      }
     }
     frame = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(frame)
@@ -917,8 +932,12 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     const analyser = micAnalyser.current
     if (!inCallRef.current || !analyser) return
     // Speaking while its audio plays; listening once it has finished and nothing more is coming.
+    // While thinking, only the answer itself counts: an "Okay." filler leaves it thinking, so the
+    // page still shows that after the filler (it showed "speaking" over silence).
     const playing = isPlaying()
-    if (playing && (phaseRef.current === 'thinking' || phaseRef.current === 'starting' || phaseRef.current === 'listening')) setPhaseBoth('speaking')
+    const l = live.current
+    const answering = !!l && l.turn === activeTurn.current && l.spans.some((s) => s.start !== null)
+    if (playing && (phaseRef.current === 'starting' || phaseRef.current === 'listening' || (phaseRef.current === 'thinking' && answering))) setPhaseBoth('speaking')
     else if (!playing && answerDone.current && (phaseRef.current === 'speaking' || phaseRef.current === 'thinking' || phaseRef.current === 'starting')) setPhaseBoth('listening')
     // Goodbye said and finished: hang up a moment later, unless the caller starts talking again.
     if (endAfterSpeech.current && !playing && answerDone.current && phaseRef.current === 'listening' && !endTimer.current) {
@@ -1372,7 +1391,10 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
           aria-hidden="true"
           className="w-full h-44 [--orb-agent:theme(colors.primary.600)] [--orb-agent-light:theme(colors.primary.200)] [--orb-you:theme(colors.rose.500)] [--orb-you-light:theme(colors.rose.200)] dark:[--orb-agent:theme(colors.primary.500)] dark:[--orb-agent-light:theme(colors.primary.300)] dark:[--orb-you:theme(colors.rose.400)] dark:[--orb-you-light:theme(colors.rose.200)]"
         />
-        <p className="text-sm text-neutral-600 dark:text-neutral-300 min-h-[1.25rem] text-center" role="status" aria-live="polite">{label}</p>
+        <p className="inline-flex items-center gap-2 text-sm text-neutral-600 dark:text-neutral-300 min-h-[1.25rem] text-center" role="status" aria-live="polite">
+          {phase === 'thinking' && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary-600 dark:text-primary-400" aria-hidden="true" />}
+          {label}
+        </p>
         {!inCall ? (
           <button onClick={startCall} disabled={phase !== 'idle'} className="inline-flex items-center gap-2 rounded-full bg-primary-600 hover:bg-primary-700 disabled:opacity-60 text-white px-6 py-3 text-sm font-medium shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2">
             {phase === 'starting' ? <Loader2 className="w-4 h-4 animate-spin" /> : <PhoneCall className="w-4 h-4" />}{turns.length ? 'Call again' : 'Start call'}

@@ -2,7 +2,7 @@ import { Worker } from 'bullmq'
 import { buildTaskInput, finishTask, runAgent, startTask } from '@ai-workforce/executor'
 import { safeErrorMessage } from '@ai-workforce/domain'
 import { getRedisConnection } from '../connection'
-import { enqueueAgentTask, isAgentRunCancelled, type AgentRunJobData } from '../queues'
+import { draftDecision, enqueueAgentTask, isAgentRunCancelled, type AgentRunJobData } from '../queues'
 
 /** A hand-off queued a teammate's task: start it now rather than at the next scheduler sweep. */
 function dispatch(task: { id: string; runId: string; agentId: string }): void {
@@ -40,6 +40,8 @@ export function createAgentWorker(): Worker<AgentRunJobData> {
         conversation: job.data.conversation,
         isCancelled: () => (job.id ? isAgentRunCancelled(job.id) : false),
         onTaskQueued: dispatch,
+        // A voice draft: writes now, acts only once the caller has finished (and said nothing more).
+        hold: job.data.holdKey ? () => draftDecision(job.data.holdKey!, job.id) : undefined,
         // Voice: the web route is listening on this channel to speak each sentence as it lands.
         onTextDelta: job.data.streamChannel
           ? (delta, step) => { void getRedisConnection().publish(job.data.streamChannel!, JSON.stringify({ step, delta })).catch(() => undefined) }

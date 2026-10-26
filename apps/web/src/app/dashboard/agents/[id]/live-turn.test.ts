@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { BACKCHANNEL_PAUSE_MS, Resampler, asking, endSilenceMs, pcm16ToBase64, shouldBackchannel, withoutBackchannels, wordCount } from './live-turn'
+import { BACKCHANNEL_PAUSE_MS, Resampler, asking, endSilenceMs, endsSentence, pcm16ToBase64, sameWords, shouldBackchannel, withoutBackchannels, wordCount } from './live-turn'
 
 test('48 kHz to 24 kHz: half the samples, across block edges, values kept', () => {
   const r = new Resampler(48_000)
@@ -62,4 +62,19 @@ test('our own "mm-hm" picked up by the microphone is taken out of the transcript
   assert.equal(withoutBackchannels('Uh-huh, so what does it cost?', true), 'so what does it cost?')
   assert.equal(withoutBackchannels('Mm-hm, that sounds good', false), 'Mm-hm, that sounds good')
   assert.equal(withoutBackchannels('Yeah, that sounds right', true), 'Yeah, that sounds right')
+})
+
+test('a draft matches the final words when only case, punctuation or spacing differ', () => {
+  assert.equal(sameWords('what does the growth package include', 'What does the Growth package include?'), true)
+  assert.equal(sameWords("We're open,  right?", 'we’re open right'), true)
+  assert.equal(sameWords('What does the Growth package include?', 'What does the Growth package include for cafes?'), false)
+  assert.equal(sameWords('', ''), true)
+})
+
+test('a sentence end: a full stop, question or exclamation mark, even inside closing quotes', () => {
+  assert.equal(endsSentence('What does the Growth package include?'), true)
+  assert.equal(endsSentence('We have been open three years now. '), true)
+  assert.equal(endsSentence('He said “that’s fine.”'), true)
+  assert.equal(endsSentence('We run two cafes,'), false)
+  assert.equal(endsSentence('We run two cafes'), false)
 })

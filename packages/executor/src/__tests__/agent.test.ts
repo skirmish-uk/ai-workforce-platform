@@ -556,4 +556,34 @@ describe('voice calls', () => {
     assert.equal(result.endCall, true)
     assert.match(result.output ?? '', /Thanks for calling/)
   })
+
+  test('a draft answer streams while the caller talks, but does nothing and records nothing until confirmed', async () => {
+    const f = await fixture({ requiredTools: [CRM_SEARCH], permissions: { [CRM_SEARCH]: 'AUTOMATIC' } })
+    // Talked past: the tool never ran, and only the cost is recorded.
+    const tools = fakeTools(() => ({ results: [] }))
+    let asked = 0
+    const draft = await runAgent(f.agentId, 'Can you look up', {
+      deps: deps(scriptedLLM([toolUse([{ name: CRM_SEARCH, input: { query: 'Ann' } }], 'Let me check.')]), tools),
+      trigger: 'voice',
+      conversation: { id: crypto.randomUUID(), message: 'Can you look up' },
+      hold: async () => { asked++; return false },
+    })
+    assert.equal(draft.status, 'cancelled')
+    assert.equal(tools.executed.length, 0)
+    assert.equal(asked, 1)
+    for (const action of ['AGENT_RUN_COMPLETED', 'AGENT_RUN_FAILED', 'AGENT_RUN_FINISHED']) assert.equal((await auditRows(f.tenantId, action)).length, 0, action)
+    const [discarded] = await auditRows(f.tenantId, 'VOICE_DRAFT_DISCARDED')
+    assert.ok(discarded, 'its cost is still recorded')
+    assert.equal((discarded.newData as { conversationId?: string }).conversationId, undefined, 'not part of the conversation')
+
+    // Confirmed: an ordinary run.
+    const kept = await runAgent(f.agentId, 'Can you look up Ann', {
+      deps: deps(scriptedLLM([toolUse([{ name: CRM_SEARCH, input: { query: 'Ann' } }]), text('No Ann on file.')]), tools),
+      trigger: 'voice',
+      hold: async () => true,
+    })
+    assert.equal(kept.status, 'completed', kept.error)
+    assert.equal(tools.executed.length, 1)
+    assert.equal((await auditRows(f.tenantId, 'AGENT_RUN_COMPLETED')).length, 1)
+  })
 })

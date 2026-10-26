@@ -119,4 +119,28 @@ export function withoutBackchannels(text: string, played: boolean): string {
   return text.replace(/(^|[\s,.!?])(mm+-?hm+|uh-?huh)[.,!?]?(?=\s|$)/gi, '$1').replace(/\s{2,}/g, ' ').trim()
 }
 
+/**
+ * A pause this long, after words that end a sentence, starts drafting the answer to what has been
+ * said so far (docs/VOICE.md, "Answering while the caller speaks"): before the turn has ended
+ * (END_SILENCE_MS), so the answer is under way, often already speaking its first sentence, when
+ * the caller turns out to be done. Not mid-sentence: those drafts were nearly always thrown away.
+ */
+export const DRAFT_PAUSE_MS = 250
+
+/**
+ * A sentence end in the live words this long after the caller stopped is the end of what they
+ * said: the words run 0.6–1 s behind the voice (measured 26 Oct), so one that arrives sooner may
+ * have words spoken after it still to come.
+ */
+export const WORDS_CAUGHT_UP_MS = 600
+
+/** Whether the words end a sentence ("…package?", "…three years now."): a turn might be complete. */
+export const endsSentence = (text: string) => /[.?!]["'”’)]*$/.test(text.trim())
+
+/** Whether two transcripts say the same words (case, punctuation and spacing aside). */
+export function sameWords(a: string, b: string): boolean {
+  const words = (s: string) => (s.toLowerCase().replace(/’/g, "'").match(/[\p{L}\p{N}']+/gu) ?? []).join(' ')
+  return words(a) === words(b)
+}
+
 export const wordCount = (text: string) => (text.match(/[\p{L}\p{N}']+/gu) ?? []).length

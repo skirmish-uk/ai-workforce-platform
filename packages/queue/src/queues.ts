@@ -14,6 +14,11 @@ export interface AgentRunJobData {
   conversation?: { id: string; message: string }
   /** A team-case task (packages/executor/src/handoffs.ts): the input is built from the case when the run starts. */
   taskId?: string
+  /**
+   * A voice draft (docs/VOICE.md, "Answering while the caller speaks"): the run waits on this
+   * Redis key before acting or being recorded; draftDecision() reads it.
+   */
+  holdKey?: string
 }
 
 export interface WorkflowRunJobData {
@@ -63,8 +68,29 @@ export async function enqueueWebsiteImport(data: WebsiteImportJobData) {
   return websiteImportQueue.add('website-import', data, { jobId: `website-import-${data.importId}` })
 }
 
-export async function enqueueAgentRun(data: AgentRunJobData) {
-  return agentRunQueue.add('agent-run', data)
+export async function enqueueAgentRun(data: AgentRunJobData, options: { jobId?: string } = {}) {
+  return agentRunQueue.add('agent-run', data, options.jobId ? { jobId: options.jobId } : undefined)
+}
+
+/** How long a voice draft waits for the caller to finish before it is dropped. */
+const DRAFT_WAIT_MS = 30_000
+
+/** A voice draft's go-ahead: the page sets the key to "go" (the caller finished) or "drop" (they kept talking). */
+export async function setDraftDecision(holdKey: string, go: boolean): Promise<void> {
+  await getRedisConnection().set(holdKey, go ? 'go' : 'drop', 'EX', 300)
+}
+
+/** Waits for a voice draft's go-ahead: true on "go"; false on "drop", a cancelled run or no answer in time. */
+export async function draftDecision(holdKey: string, jobId?: string, waitMs = DRAFT_WAIT_MS, pollMs = 20): Promise<boolean> {
+  const redis = getRedisConnection()
+  const until = Date.now() + waitMs
+  while (Date.now() < until) {
+    const value = await redis.get(holdKey)
+    if (value) return value === 'go'
+    if (jobId && (await isAgentRunCancelled(jobId))) return false
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+  }
+  return false
 }
 
 /** A team-case task. Job id == the task's run id, so queueing it twice runs it once. */

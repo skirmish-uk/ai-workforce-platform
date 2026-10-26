@@ -6,8 +6,8 @@ import { safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
 import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
 import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, SPEECH_PCM_RATE, echoesHint, hedged, notEnglishSpeech, soundsLikeEcho, streamSpeech, transcribeAudio, transcriptionHint, ttsProvider } from '@ai-workforce/llm'
-import { enqueueAgentRun, getRedisConnection, waitForAgentRun } from '@ai-workforce/queue'
-import { callVocabulary, loadAgent } from './shared'
+import { draftDecision, enqueueAgentRun, getRedisConnection, requestAgentRunCancel, setDraftDecision, waitForAgentRun } from '@ai-workforce/queue'
+import { callVocabulary, draftKeys, loadAgent } from './shared'
 import { cachedSpeech, type ReserveSpeech } from './speech-cache'
 import { VoiceLimitError, callBlockedBy, reserveSpeech, voiceUsage } from './tts-budget'
 
@@ -133,6 +133,12 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
  * One voice turn: speech-to-text → agent run in the worker (same policy, approvals,
  * kill switches and audit as any run) → spoken reply → text-to-speech. Returns the
  * transcript, the reply text, the run id and the reply audio (base64 mp3).
+ *
+ * A draft (form field "draft", a UUID; docs/VOICE.md, "Answering while the caller speaks"): sent
+ * at a pause in the caller's speech with the words so far. The answer is written straight away
+ * and its first sentence voiced, but the rest of the speech, any tool call and every record wait
+ * for POST ./draft: "go" when the caller finished without saying more (the page then plays this
+ * stream), "drop" when they carried on (nothing is done or recorded but the model's cost).
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const started = Date.now()
@@ -148,6 +154,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const reserve = reserverFor(agent.tenantId, tenantRow?.settings, voice)
     const form = await request.formData()
     const callId = form.get('conversationId')
+    const draftField = form.get('draft')
+    const draft = typeof draftField === 'string' && isConversationId(draftField) ? draftKeys(draftField) : null
     // Either the caller's words, already transcribed live in the page (field "transcript"), or
     // the recording to transcribe here (field "audio").
     const liveText = form.get('transcript')
@@ -198,6 +206,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // voice from the speakers (or a "mm-hm"): ignored like silence, so the agent never answers itself.
     const interrupted = form.get('interrupted') === '1'
     const ignored = notEnglishSpeech(transcript) ? 'not_english' : interrupted && soundsLikeEcho(transcript, agentLines(form.get('history'))) ? 'echo' : null
+    // Nothing worth drafting an answer to: the page waits for the end of the turn instead.
+    if (draft && (ignored || !transcript)) return NextResponse.json({ transcript, status: 'no_speech', draft: 'unusable' })
     if (ignored) {
       timings.totalMs = Date.now() - started
       recordTurn(agent, session.user.id, { runId: null, status: 'no_speech', ignored, transcript, confidence, hintRetried, ...sttUsage, ttsCharacters: 0, timings })
@@ -225,8 +235,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const channel = `voice-stream-${randomUUID()}`
     const subscriber = getRedisConnection().duplicate()
     await subscriber.subscribe(channel)
-    const job = await enqueueAgentRun({ agentId: agent.id, input: withConversation(transcript, form.get('history'), agent.name), userId: session.user.id, trigger: 'voice', streamChannel: channel, conversation: isConversationId(callId) ? { id: callId, message: transcript } : undefined })
+    if (draft) await getRedisConnection().set(draft.owner, `${session.user.id}:${agent.id}`, 'EX', 300)
+    const job = await enqueueAgentRun(
+      { agentId: agent.id, input: withConversation(transcript, form.get('history'), agent.name), userId: session.user.id, trigger: 'voice', streamChannel: channel, conversation: isConversationId(callId) ? { id: callId, message: transcript } : undefined, holdKey: draft?.hold },
+      { jobId: draft?.jobId }
+    )
     const runId = job.id ?? null
+    // A draft goes ahead once the caller has finished without saying more; anything else is final now.
+    const go = draft ? draftDecision(draft.hold) : Promise.resolve(true)
+    if (draft) void go.then((ok) => { if (ok) timings.draftHeldMs = Date.now() - started })
     const encoder = new TextEncoder()
 
     const body = new ReadableStream<Uint8Array>({
@@ -263,6 +280,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           const push = (event: Record<string, unknown>) => { buffered.push(event); waiting.wake?.() }
           void (async () => {
             try {
+              // A draft voices only its first sentence before the caller has finished (what makes
+              // it instant); the rest waits, so a dropped draft costs a sentence of speech at most.
+              if (n > 0 && !(await go)) return
               if (fixed) {
                 const line = await cachedSpeech(text, { voiceId: voice.voiceId, provider: voice.provider }, reserve)
                 characters += line.characters
@@ -362,8 +382,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
         let status = 'timeout'
         let result: RunAgentResult | null = null
+        // A dropped draft ends here: the run discards itself at its next step (the cancel stops it sooner).
+        const dropped = go.then((ok) => (ok ? new Promise<never>(() => undefined) : ('dropped' as const)))
         try {
-          const outcome = runId ? await waitForAgentRun<RunAgentResult>(runId, 45_000, 100) : null
+          const outcome = runId ? await Promise.race([waitForAgentRun<RunAgentResult>(runId, 45_000, 100), dropped]) : null
+          if (outcome === 'dropped') {
+            if (runId) void requestAgentRunCancel(runId).catch(() => undefined)
+            if (!closed) controller.close()
+            return
+          }
           // The last published deltas can land just after the job completes.
           await new Promise((resolve) => setTimeout(resolve, 80))
           if (outcome?.state === 'completed' && outcome.result) {
@@ -398,6 +425,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         send({ type: 'done', status, runId, reply: spokenText, endCall: result?.endCall === true, timings })
         recordTurn(agent, session.user.id, { runId, status, endCall: result?.endCall === true || undefined, confidence, hintRetried, ...sttUsage, ttsCharacters: characters, ttsModel, ttsError, timings })
         if (!closed) controller.close()
+      },
+      // The page stopped listening (a dropped draft, or the caller hung up).
+      cancel() {
+        if (draft) void setDraftDecision(draft.hold, false).catch(() => undefined)
       },
     })
     return new Response(body, {

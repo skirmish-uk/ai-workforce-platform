@@ -9,7 +9,7 @@ import { LIVE_RATE, Resampler, pcm16ToBase64 } from './live-turn'
  * for the whole turn's text. Audio is only sent during a turn, which is what is billed.
  */
 export class LiveTranscriber {
-  /** What has been heard so far this turn, as it arrives. */
+  /** Everything heard so far this turn (across its parts), as it arrives. */
   onPartial: ((text: string) => void) | null = null
   private ws: WebSocket
   private resampler: Resampler | null = null
@@ -17,17 +17,16 @@ export class LiveTranscriber {
   private pendingSamples = 0
   /** 24 kHz samples sent this turn (what's billed, and whether there's anything to commit). */
   private sentSamples = 0
-  private partial = ''
-  /** The turn's item at OpenAI, known from its first words (or the commit). */
-  private item: string | null = null
-  /** Items already committed: their late words belong to a turn that has finished. */
-  private committed = new Set<string>()
+  /** The turn (begin() count); each item at OpenAI (one per committed part) belongs to one. */
+  private turn = 0
+  private itemTurn = new Map<string, number>()
+  /** Live words per item, and this turn's items in the order they were heard. */
+  private texts = new Map<string, string>()
+  private order: string[] = []
   private finals = new Map<string, string>()
-  /** A commit was sent and not yet acknowledged: new words of unknown turn may still be the old turn's. */
-  private acking = false
   private waiting = new Map<string, (text: string) => void>()
-  /** Commits waiting for OpenAI to acknowledge them, oldest first (it acknowledges in order). */
-  private acks: Array<(item: string | null) => void> = []
+  /** Commits waiting for OpenAI to acknowledge them, oldest first (it acknowledges in order), with their turn. */
+  private acks: Array<{ turn: number; settle: (item: string | null) => void }> = []
 
   private constructor(ws: WebSocket) {
     this.ws = ws
@@ -61,13 +60,19 @@ export class LiveTranscriber {
 
   /** A new turn: forget the last one's words and start counting audio afresh. */
   begin(): void {
-    this.resetTurn()
+    this.turn++
+    for (const item of this.order) this.texts.delete(item)
+    this.order = []
+    this.resetPart()
     this.resampler = null
   }
 
-  private resetTurn(): void {
-    this.partial = ''
-    this.item = null
+  /** The turn so far: every part's live words, in order. */
+  private heard(): string {
+    return this.order.map((item) => this.texts.get(item) ?? '').join(' ').replace(/\s+/g, ' ').trim()
+  }
+
+  private resetPart(): void {
     this.sentSamples = 0
     this.pending = []
     this.pendingSamples = 0
@@ -104,26 +109,25 @@ export class LiveTranscriber {
     this.flush()
     const seconds = this.sentSamples / LIVE_RATE
     // Under 0.1 s of audio can't be committed (and isn't a turn).
-    if (this.sentSamples < LIVE_RATE / 10) { this.resetTurn(); return { text: '', seconds: 0 } }
+    if (this.sentSamples < LIVE_RATE / 10) { this.resetPart(); return { text: '', seconds: 0 } }
     if (!this.ready) return null
-    // From here the next turn may start while this one's text is still coming: its words, and
-    // words of a turn not yet identified before the commit is acknowledged, aren't the new turn's.
-    if (this.item) this.committed.add(this.item)
-    this.acking = true
     const done = new Promise<string | null>((resolve) => {
       let settled = false
       const settle = (text: string | null) => { if (!settled) { settled = true; clearTimeout(timer); resolve(text) } }
       // Timed out: stays in the queue (its acknowledgement may still come) but resolves nothing.
       const timer = setTimeout(() => settle(null), timeoutMs)
-      this.acks.push((item) => {
-        if (!item) return settle(null)
-        const final = this.finals.get(item)
-        if (final !== undefined) { this.finals.delete(item); return settle(final) }
-        this.waiting.set(item, settle)
+      this.acks.push({
+        turn: this.turn,
+        settle: (item) => {
+          if (!item) return settle(null)
+          const final = this.finals.get(item)
+          if (final !== undefined) { this.finals.delete(item); return settle(final) }
+          this.waiting.set(item, settle)
+        },
       })
     })
     this.ws.send(JSON.stringify({ type: 'input_audio_buffer.commit' }))
-    this.resetTurn()
+    this.resetPart()
     const text = await done
     return text === null ? null : { text, seconds }
   }
@@ -141,7 +145,7 @@ export class LiveTranscriber {
   }
 
   private fail(): void {
-    for (const ack of this.acks.splice(0)) ack(null)
+    for (const ack of this.acks.splice(0)) ack.settle(null)
     for (const resolve of this.waiting.values()) resolve('')
     this.waiting.clear()
   }
@@ -149,19 +153,29 @@ export class LiveTranscriber {
   private handle(m: { type: string; item_id?: string; delta?: string; transcript?: string; error?: { code?: string; message?: string } }): void {
     switch (m.type) {
       case 'conversation.item.input_audio_transcription.delta': {
-        if (!m.item_id || this.committed.has(m.item_id)) return
-        if (!this.item && this.acking) return
-        this.item ??= m.item_id
-        if (m.item_id !== this.item) return
-        this.partial += m.delta ?? ''
-        this.onPartial?.(this.partial.trim())
+        if (!m.item_id) return
+        // Words of an item not yet acknowledged count for this turn until its commit says otherwise
+        // (a turn's last part can still be arriving when the next turn starts).
+        if (!this.itemTurn.has(m.item_id)) { this.itemTurn.set(m.item_id, this.turn); this.order.push(m.item_id) }
+        if (this.itemTurn.get(m.item_id) !== this.turn) return
+        this.texts.set(m.item_id, (this.texts.get(m.item_id) ?? '') + (m.delta ?? ''))
+        this.onPartial?.(this.heard())
         return
       }
-      case 'input_audio_buffer.committed':
-        if (m.item_id) this.committed.add(m.item_id)
-        this.acking = this.acks.length > 1
-        this.acks.shift()?.(m.item_id ?? null)
+      case 'input_audio_buffer.committed': {
+        const ack = this.acks.shift()
+        if (m.item_id && ack) {
+          this.itemTurn.set(m.item_id, ack.turn)
+          // An earlier turn's part, taken for this one's: give its words back.
+          if (ack.turn !== this.turn && this.order.includes(m.item_id)) {
+            this.order = this.order.filter((item) => item !== m.item_id)
+            this.texts.delete(m.item_id)
+            this.onPartial?.(this.heard())
+          }
+        }
+        ack?.settle(m.item_id ?? null)
         return
+      }
       case 'conversation.item.input_audio_transcription.completed':
       case 'conversation.item.input_audio_transcription.failed': {
         if (!m.item_id) return
@@ -175,8 +189,7 @@ export class LiveTranscriber {
         // A commit refused (e.g. the buffer was too short): that part falls back to uploading.
         // Other errors leave the queue alone; a commit they affect times out instead.
         if (!/commit|buffer/i.test(`${m.error?.code ?? ''} ${m.error?.message ?? ''}`)) return
-        this.acking = this.acks.length > 1
-        this.acks.shift()?.(null)
+        this.acks.shift()?.settle(null)
         return
     }
   }

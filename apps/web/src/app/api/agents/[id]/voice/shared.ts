@@ -38,3 +38,8 @@ export function callVocabulary(agentName: string, tenantName: string | undefined
   } catch { /* a malformed history adds no names */ }
   return [agentName.split(/\s+[-–]\s+/)[0], tenantName, ...(configured ?? []), ...names.slice(-15)]
 }
+
+/** Redis keys of a voice draft (route.ts, "draft"): who started it, its go-ahead, and its run. */
+export function draftKeys(id: string) {
+  return { id, owner: `voice-draft-owner-${id}`, hold: `voice-draft-${id}`, jobId: `voice-draft-${id}` }
+}

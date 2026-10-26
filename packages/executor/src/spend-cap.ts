@@ -34,7 +34,7 @@ async function sumCostSince(tenantId: string, since: Date): Promise<number> {
     SELECT COALESCE(SUM(("newData"->>'costUsd')::numeric), 0)::float AS total
     FROM "AuditLog"
     WHERE "tenantId" = ${tenantId}
-      AND action IN ('AGENT_RUN_COMPLETED', 'AGENT_RUN_FAILED', 'AGENT_RUN_FINISHED', 'AGENT_RUN_ESCALATED')
+      AND action IN ('AGENT_RUN_COMPLETED', 'AGENT_RUN_FAILED', 'AGENT_RUN_FINISHED', 'AGENT_RUN_ESCALATED', 'VOICE_DRAFT_DISCARDED')
       AND "createdAt" >= ${since}
       AND "newData"->>'costUsd' IS NOT NULL
   `

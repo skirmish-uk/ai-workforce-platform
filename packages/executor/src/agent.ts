@@ -93,6 +93,14 @@ export interface RunAgentOptions {
   onTextDelta?: (delta: string, step: number) => void
   /** The dashboard conversation this run belongs to; its id and the person's own words go on the audit row. */
   conversation?: { id: string; message: string }
+  /**
+   * A draft answer started before the caller finished speaking (docs/VOICE.md, "Answering while
+   * the caller speaks"): the model writes (and streams) freely, but before any tool call and
+   * before the run is recorded it waits for this. true: the caller said nothing more, carry on as
+   * a normal run. false: they did, so the draft is thrown away with nothing done and only its cost
+   * recorded (VOICE_DRAFT_DISCARDED), never as a run in the history.
+   */
+  hold?: () => Promise<boolean>
   /** The team-case task this run is doing (./handoffs.ts); its status is updated when the run ends. */
   task?: RunTask
   /** A hand-off queued a task: the worker starts it straight away (the scheduler sweep is the fallback). */
@@ -433,6 +441,7 @@ class AgentRun {
   private budgetUsd = Infinity
   private finished?: RunAgentResult
   private endCall = false
+  private holding?: Promise<boolean>
 
   constructor(
     private readonly agent: Agent & { tenant: { settings: unknown } },
@@ -455,6 +464,13 @@ class AgentRun {
 
   private get rootRunId(): string {
     return this.options.parent?.rootRunId ?? this.runId
+  }
+
+  /** A draft (options.hold): whether it became the real answer. Asked once; always true otherwise. */
+  private confirmed(): Promise<boolean> {
+    if (!this.options.hold) return Promise.resolve(true)
+    this.holding ??= this.options.hold().catch(() => false)
+    return this.holding
   }
 
   private async cancelled(): Promise<boolean> {
@@ -799,7 +815,7 @@ class AgentRun {
         if (toolCallCount > limits.maxToolCalls) {
           return this.finish('failed', { error: `Tool call limit of ${limits.maxToolCalls} reached` })
         }
-        if (await this.cancelled()) return this.finish('cancelled', { error: 'Run cancelled' })
+        if (!(await this.confirmed()) || (await this.cancelled())) return this.finish('cancelled', { error: 'Run cancelled' })
 
         // ---- platform tools
         if (call.name === CLARIFY_TOOL.name) {
@@ -1217,6 +1233,7 @@ class AgentRun {
     extra: Partial<Pick<RunAgentResult, 'output' | 'dod' | 'error' | 'approvalId' | 'pendingTool' | 'clarificationQuestions' | 'escalation'>> & { skipAudit?: boolean } = {}
   ): Promise<RunAgentResult> {
     if (this.finished) return this.finished
+    if (!(await this.confirmed())) return this.discard()
     const costUsd = this.costKnown ? this.ownCost : this.usage.input + this.usage.output > 0 ? null : 0
     const result: RunAgentResult = {
       runId: this.runId,
@@ -1318,6 +1335,20 @@ class AgentRun {
     if (status === 'completed' || status === 'partial') agentHeartbeatSafe(this.agent.id)
     if (status === 'failed') agentFailureSafe(this.agent.id, result.error)
     return result
+  }
+
+  /** A draft the caller talked past: nothing was done; record what it cost (spend caps count it), nothing else. */
+  private async discard(): Promise<RunAgentResult> {
+    const costUsd = this.costKnown ? this.ownCost : this.usage.input + this.usage.output > 0 ? null : 0
+    this.finished = {
+      runId: this.runId, status: 'cancelled', output: null, toolCalls: [], tokensUsed: this.usage, costUsd, childCostUsd: 0,
+      durationMs: Date.now() - this.startedAt, agentVersion: this.agent.version, stage: this.stage, model: this.modelUsed,
+      modelAttempts: this.modelAttempts, iterations: this.iterations, phases: this.phases, proposedActions: [], childRuns: [],
+      contextWarnings: [], injectionSignals: [], qualitySignals: [], reasoning: [], error: 'Draft discarded: the caller kept talking',
+    }
+    if (costUsd) await this.accrueDeploymentCost(costUsd)
+    await this.audit('VOICE_DRAFT_DISCARDED', { trigger: this.trigger, model: this.modelUsed, tokensUsed: this.usage, costUsd, durationMs: this.finished.durationMs })
+    return this.finished
   }
 
   private conversationFields(): Record<string, unknown> {

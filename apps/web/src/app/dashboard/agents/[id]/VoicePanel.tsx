@@ -7,7 +7,7 @@ import { WAV_RATE, encodeWav } from './voice-audio'
 import { SpeechDetector, loadSpeechModel } from './speech-detector'
 import { ComparisonResults, TranscriberCompare, compareRecording, type Comparison } from './TranscriberCompare'
 import { LiveTranscriber } from './live-transcriber'
-import { EARLY_COMMIT_MS, endSilenceMs, shouldBackchannel, withoutBackchannels, wordCount } from './live-turn'
+import { DRAFT_PAUSE_MS, EARLY_COMMIT_MS, WORDS_CAUGHT_UP_MS, endSilenceMs, endsSentence, sameWords, shouldBackchannel, withoutBackchannels, wordCount } from './live-turn'
 
 interface Turn {
   /** Agent turns: which answer incoming sentences belong to (and its audio, for "Play again"). */
@@ -273,9 +273,18 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   /** Live transcription for this call (live-transcriber.ts); null: each turn is uploaded as a recording. */
   const liveStt = useRef<LiveTranscriber | null>(null)
   const liveConnecting = useRef(false)
-  /** What the caller has said so far this turn, shown as they speak. */
-  const [partial, setPartial] = useState('')
+  /** What the caller has said so far this turn: times the backchannels and drafts; not shown (it distracted from talking). */
   const partialRef = useRef('')
+  /** When the live words last changed. */
+  const partialAt = useRef(0)
+  /** After the caller stops: called with each update of their words until the turn is sent. */
+  const wordsAfterTurn = useRef<((text: string) => void) | null>(null)
+  /**
+   * The answer being drafted to the words so far, started at the caller's last pause (docs/VOICE.md,
+   * "Answering while the caller speaks"). Played if those words turn out to be the whole turn;
+   * dropped as soon as the caller says anything more.
+   */
+  const draft = useRef<{ id: string; text: string; seconds: number; response: Promise<Response | null>; abort: AbortController } | null>(null)
   /** "Mm-hm."/"Yeah." in the agent's voice, said quietly while the caller talks at length. */
   const backchannels = useRef<AudioBuffer[]>([])
   /** Live turns sent so far; one superseded while its text was coming hands its words to the next. */
@@ -289,7 +298,6 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const liveParts = useRef<Array<Promise<{ text: string; seconds: number } | null>>>([])
   const liveHeld = useRef(false)
   const liveStash = useRef<Float32Array[]>([])
-  const partialBefore = useRef('')
   const backchannel = useRef({ lastAt: 0, wordsAt: 0, playedThisTurn: false, pauseFired: false, until: 0, last: -1 })
   const vad = useRef({ floor: 0.01, loudTicks: 0, silenceMs: 0, startedAt: 0, peak: 0, echoCoupling: INITIAL_ECHO_COUPLING, playerLevel: 0, held: false, holdTicks: 0, suspectAt: 0, played: [] as number[], suspectRatio: 0, voiceHeard: false, heldAt: 0, holdAgainAt: 0, suspectSpeech: false })
 
@@ -352,11 +360,14 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     return ctx.current
   }
 
-  // ---- waveform: the caller's mic while listening/hearing, the agent's voice while speaking
+  // ---- the orb: a circle that swells and ripples with the caller's mic while listening/hearing
+  // and with the agent's voice while speaking, breathes while thinking, rests when idle.
   useEffect(() => {
     let frame = 0
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
     const data = new Uint8Array(512)
+    /** Smoothed overall level and four bands (low → high), so the orb moves fluidly, not per frame. */
+    const smooth = { level: 0, bands: [0, 0, 0, 0] }
     const draw = (t: number) => {
       frame = requestAnimationFrame(draw)
       revealRef.current()
@@ -371,32 +382,60 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       const style = getComputedStyle(c)
       const agentTalking = isPlaying()
       const p = agentTalking ? 'speaking' : phaseRef.current
-      const source = p === 'speaking' ? playerAnalyser.current : p === 'hearing' || p === 'listening' ? micAnalyser.current : null
-      g.fillStyle = p === 'hearing' || p === 'listening' ? style.getPropertyValue('--wave-you') : style.getPropertyValue('--wave-agent')
-      const bars = Math.max(24, Math.floor(w / 7))
-      const bw = Math.max(2, w / bars - 3)
-      let levels: number[]
-      if (source && (p !== 'listening' || !mutedRef.current)) {
+      const you = p === 'hearing' || p === 'listening'
+      const source = p === 'speaking' ? playerAnalyser.current : you ? micAnalyser.current : null
+      let level = 0
+      let bands = [0, 0, 0, 0]
+      if (source && !(you && mutedRef.current)) {
         source.getByteFrequencyData(data)
-        const half = Math.ceil(bars / 2)
-        const usable = Math.floor(data.length * 0.45)
-        const side = Array.from({ length: half }, (_, i) => data[Math.floor((i / half) * usable)] / 255)
-        levels = [...side.slice().reverse(), ...side].slice(0, bars)
-        if (p === 'listening') levels = levels.map((v) => Math.max(0.05, v * 0.6))
-      } else {
-        const thinking = p === 'thinking' || p === 'starting'
-        levels = Array.from({ length: bars }, (_, i) => {
-          if (reduceMotion) return 0.06
-          if (thinking) return 0.08 + 0.35 * Math.max(0, Math.sin((i / bars) * Math.PI * 2 - t / 220)) ** 6
-          return 0.05 + 0.03 * Math.sin(i / 3 + t / 900)
+        // Speech sits in the lower part of the spectrum; four bands across it.
+        const usable = Math.floor(data.length * 0.4)
+        bands = bands.map((_, b) => {
+          let sum = 0
+          const from = Math.floor((b / 4) * usable), to = Math.floor(((b + 1) / 4) * usable)
+          for (let i = from; i < to; i++) sum += data[i]
+          return sum / Math.max(1, to - from) / 255
         })
+        level = Math.min(1, (bands[0] * 0.4 + bands[1] * 0.3 + bands[2] * 0.2 + bands[3] * 0.1) * 1.8)
+        if (p === 'listening') level *= 0.6
       }
-      levels.forEach((v, i) => {
-        const bh = Math.max(3, v * (h - 8))
-        g.beginPath()
-        g.roundRect(i * (w / bars) + 1.5, (h - bh) / 2, bw, bh, bw / 2)
-        g.fill()
-      })
+      // Rise quickly, fall gently.
+      smooth.level += (level - smooth.level) * (level > smooth.level ? 0.35 : 0.12)
+      smooth.bands = smooth.bands.map((v, i) => v + (bands[i] - v) * 0.2)
+      const thinking = p === 'thinking' || p === 'starting'
+      const breath = reduceMotion ? 0 : thinking ? 0.06 * (0.5 + 0.5 * Math.sin(t / 380)) : 0.015 * Math.sin(t / 1400)
+      const size = Math.min(w, h)
+      const base = size * 0.3
+      const r = base * (1 + breath + (reduceMotion ? 0.1 : 0.32) * smooth.level)
+      const cx = w / 2, cy = h / 2
+      // A soft edge that ripples with the voice: a few slow waves around the rim.
+      g.beginPath()
+      const steps = 120
+      for (let i = 0; i <= steps; i++) {
+        const a = (i / steps) * Math.PI * 2
+        let wobble = 0
+        if (!reduceMotion) {
+          smooth.bands.forEach((v, k) => { wobble += v * Math.sin(a * (k + 2) + t / (600 - k * 90) + k * 1.7) })
+          wobble = wobble * 0.035 + (thinking ? 0.012 * Math.sin(a * 3 - t / 300) : 0)
+        }
+        const rr = r * (1 + wobble)
+        const x = cx + rr * Math.cos(a), y = cy + rr * Math.sin(a)
+        if (i === 0) g.moveTo(x, y)
+        else g.lineTo(x, y)
+      }
+      g.closePath()
+      const color = style.getPropertyValue(you ? '--orb-you' : '--orb-agent').trim()
+      const light = style.getPropertyValue(you ? '--orb-you-light' : '--orb-agent-light').trim()
+      // Light drifting across the orb, like sky in a bubble.
+      const drift = reduceMotion ? 0 : t / 2600
+      const fill = g.createRadialGradient(cx + r * 0.35 * Math.cos(drift), cy - r * 0.35 + r * 0.15 * Math.sin(drift), r * 0.05, cx, cy, r * 1.05)
+      fill.addColorStop(0, light)
+      fill.addColorStop(1, color)
+      g.shadowColor = color
+      g.shadowBlur = 12 + 30 * smooth.level
+      g.fillStyle = fill
+      g.fill()
+      g.shadowBlur = 0
     }
     frame = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(frame)
@@ -611,14 +650,78 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       liveStt.current?.close()
       live.onPartial = (text) => {
         if (phaseRef.current !== 'hearing') return
-        const shown = partialBefore.current ? `${partialBefore.current} ${text}` : text
-        partialRef.current = shown
-        setPartial(shown)
+        partialRef.current = text
+        partialAt.current = Date.now()
+      }
+      const onWords = live.onPartial
+      live.onPartial = (text) => {
+        if (phaseRef.current === 'thinking' && wordsAfterTurn.current) { partialRef.current = text; partialAt.current = Date.now(); wordsAfterTurn.current(text); return }
+        onWords(text)
       }
       liveStt.current = live
     })
   }
-  const showPartial = (text: string) => { partialRef.current = text; setPartial(text) }
+  const clearPartial = () => { partialRef.current = '' }
+
+  /** The call so far and its ids, as every turn (and draft) sends them. */
+  const turnForm = () => {
+    const history = turnsRef.current
+      .filter((t) => t.text && !t.text.startsWith('('))
+      .slice(-8)
+      .map((t) => ({ who: t.who === 'you' ? 'caller' : 'agent', text: t.text }))
+    const form = new FormData()
+    form.append('history', JSON.stringify(history))
+    form.append('conversationId', conversationId.current)
+    if (interruptedTurn.current) form.append('interrupted', '1')
+    return form
+  }
+
+  /** Starts drafting the answer to `text` (the words so far, at a pause). */
+  const startDraft = (text: string, seconds: number) => {
+    const id = crypto.randomUUID()
+    const abort = new AbortController()
+    const form = turnForm()
+    form.append('transcript', text)
+    form.append('draft', id)
+    form.append('liveWaitMs', '0')
+    form.append('liveSeconds', seconds.toFixed(2))
+    const response = fetch(`/api/agents/${agentId}/voice`, { method: 'POST', body: form, signal: abort.signal })
+      .then((res) => {
+        if (res.ok && (res.headers.get('content-type') ?? '').includes('ndjson')) return res
+        void res.body?.cancel()
+        return null
+      })
+      .catch(() => null)
+    draft.current = { id, text, seconds, response, abort }
+  }
+
+  const decideDraft = (id: string, go: boolean) =>
+    fetch(`/api/agents/${agentId}/voice/draft`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, go }) }).then((r) => r.ok, () => false)
+
+  /** The caller said more (or the call moved on): the draft is thrown away, having done nothing. */
+  const dropDraft = () => {
+    const d = draft.current
+    if (!d) return
+    draft.current = null
+    void d.response.then((res) => { if (res) void decideDraft(d.id, false) })
+    d.abort.abort()
+  }
+
+  /**
+   * The draft, if it answers exactly `text` (the whole turn): it goes ahead and its stream is
+   * played. null otherwise (and any draft is dropped).
+   */
+  const takeDraft = (text: string): Promise<Response | null> | null => {
+    const d = draft.current
+    if (!d || !sameWords(d.text, text)) { dropDraft(); return null }
+    draft.current = null
+    return d.response.then(async (res) => {
+      if (!res) return null
+      if (await decideDraft(d.id, true)) return res
+      d.abort.abort()
+      return null
+    })
+  }
 
   /** A quiet "mm-hm" while the caller talks, on its own path: it isn't an answer, so the call stays in "hearing". */
   const playBackchannel = () => {
@@ -648,6 +751,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     interruptedTurn.current = interrupting
     // Talking again before the answer has finished arriving: the caller has moved on.
     cancelAnswer()
+    dropDraft()
+    wordsAfterTurn.current = null
     vad.current.startedAt = Date.now()
     vad.current.silenceMs = 0
     vad.current.peak = 0
@@ -657,14 +762,13 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       const keep = Math.ceil(((ms / 1000) * rate) / 2048)
       captured.current = preRoll.current.slice(-keep)
       preRoll.current = []
-      showPartial('')
+      clearPartial()
       backchannel.current = { ...backchannel.current, lastAt: Date.now(), wordsAt: 0, playedThisTurn: false, pauseFired: false }
       const live = liveStt.current
       liveTurnSeq.current++ // a turn still waiting for its text is now part of this one
       liveParts.current = []
       liveHeld.current = false
       liveStash.current = []
-      partialBefore.current = ''
       if (live?.ready) {
         live.begin()
         for (const block of captured.current) live.push(block, rate)
@@ -708,7 +812,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       liveStash.current = []
       const held = liveHeld.current
       liveHeld.current = false
-      if (wav.size < 44 + WAV_RATE * 0.6) { live?.discard(); showPartial(''); if (inCallRef.current) setPhaseBoth('listening'); return }
+      if (wav.size < 44 + WAV_RATE * 0.6) { live?.discard(); clearPartial(); if (inCallRef.current) setPhaseBoth('listening'); return }
       if (live?.ready) {
         // The words are already in: wait only for the last few, then send the text instead of
         // the recording. If they don't come (or come back empty), upload the recording as before.
@@ -717,18 +821,45 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         const playedBackchannel = backchannel.current.playedThisTurn
         const stoppedAt = Date.now()
         const seq = ++liveTurnSeq.current
+        const seconds = (stoppedAt - vad.current.startedAt) / 1000
         // The last part, unless the turn ended while it was already committed (held).
         if (!held) parts.push(live.commit())
+        let sent = false
+        const sendOnce = (transcript: string, waitMs: number, liveSeconds: number) => {
+          if (sent) return
+          sent = true
+          wordsAfterTurn.current = null
+          // The answer drafted at the last pause, if it answers exactly these words, is already under way.
+          void send(wav, { transcript, waitMs, seconds: liveSeconds }, takeDraft(transcript) ?? undefined)
+        }
+        // The live words are the final text as it arrives, so the turn can go as soon as they end
+        // a sentence ("…package?"), ~0.25 s before the transcriber confirms them. Only a sentence end
+        // that arrived WORDS_CAUGHT_UP_MS after the caller stopped: the words run up to ~1 s behind
+        // the voice, so an earlier one ("…Newtown.") may have more words still coming after it. Not
+        // after "…and"/"…um" (endSilenceMs), nor when an earlier turn's words are to be added (carryOver).
+        const spokeUntil = stoppedAt - END_SILENCE_MS
+        const whole = (text: string) =>
+          !carryOver.current && seq === liveTurnSeq.current && wordCount(text) > 0 && endSilenceMs(text, END_SILENCE_MS) === END_SILENCE_MS && endsSentence(text)
+        const sofar = withoutBackchannels(partialRef.current, playedBackchannel)
+        if (partialAt.current - spokeUntil >= WORDS_CAUGHT_UP_MS && whole(sofar)) {
+          sendOnce(sofar, 0, seconds)
+          return
+        }
+        wordsAfterTurn.current = (text) => {
+          const words = withoutBackchannels(text, playedBackchannel)
+          if (Date.now() - spokeUntil >= WORDS_CAUGHT_UP_MS && whole(words)) sendOnce(words, Date.now() - stoppedAt, seconds)
+        }
         void Promise.all(parts).then((results) => {
           const heard = results.some((r) => r === null) ? null : { text: results.map((r) => r!.text).filter(Boolean).join(' '), seconds: results.reduce((sum, r) => sum + r!.seconds, 0) }
           const text = heard ? withoutBackchannels(heard.text, playedBackchannel) : ''
           const go = () => {
+            if (sent) return
             // The caller carried on talking before this was sent: it opens their next turn.
             if (seq !== liveTurnSeq.current || !inCallRef.current) { if (text) carryOver.current = `${carryOver.current} ${text}`.trim(); return }
             const said = `${carryOver.current} ${text}`.trim()
             carryOver.current = ''
-            if (heard && text) void send(wav, { transcript: said, waitMs: Date.now() - stoppedAt, seconds: heard.seconds })
-            else void send(wav)
+            if (heard && text) sendOnce(said, Date.now() - stoppedAt, heard.seconds)
+            else { sent = true; wordsAfterTurn.current = null; dropDraft(); void send(wav) }
           }
           // Stopped on "…and", "…um" or a comma: probably still thinking, so give them a moment
           // more before answering (judged on the finished text; the live words run behind the voice).
@@ -808,7 +939,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         liveHeld.current = false
         liveStash.current = []
         liveStt.current?.discard()
-        showPartial('')
+        clearPartial()
         if (recorder.current) { recorder.current.onstop = null; recorder.current.stop(); recorder.current = null }
         setPhaseBoth('listening')
       }
@@ -911,7 +1042,6 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       if (live?.ready && captured.current && capture.current) {
         if (quiet && !liveHeld.current && v.silenceMs >= EARLY_COMMIT_MS && v.silenceMs < END_SILENCE_MS) {
           liveHeld.current = true
-          partialBefore.current = partialRef.current
           liveParts.current.push(live.commit())
         } else if (!quiet && liveHeld.current) {
           liveHeld.current = false
@@ -928,21 +1058,24 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         b.wordsAt = wordCount(partialRef.current)
         playBackchannel()
       }
+      // Draft the answer at a pause; the caller saying more drops it (a new one starts at the next pause).
+      if (liveStt.current?.ready && captured.current) {
+        const sofar = withoutBackchannels(partialRef.current, b.playedThisTurn)
+        if (draft.current && !sameWords(draft.current.text, sofar)) dropDraft()
+        if (!draft.current && quiet && v.silenceMs >= DRAFT_PAUSE_MS && wordCount(sofar) >= 2 && endsSentence(sofar)) startDraft(sofar, took / 1000)
+      }
       if ((v.silenceMs >= END_SILENCE_MS && took > MIN_UTTERANCE_MS) || took > MAX_UTTERANCE_MS) endUtterance()
     }
   }
 
   // ---- send a turn with the conversation so far
   /** `heardLive`: the caller's words already transcribed as they spoke (sent instead of the recording, which stays in this tab). */
-  const send = async (audio: Blob, heardLive?: { transcript: string; waitMs: number; seconds: number }) => {
+  /** `drafted`: the answer drafted at the last pause, already under way (falls back to a normal turn if it failed). */
+  const send = async (audio: Blob, heardLive?: { transcript: string; waitMs: number; seconds: number }, drafted?: Promise<Response | null>) => {
     setPhaseBoth('thinking')
     const recordingUrl = URL.createObjectURL(audio)
     recordingUrls.current.push(recordingUrl)
-    const history = turnsRef.current
-      .filter((t) => t.text && !t.text.startsWith('('))
-      .slice(-8)
-      .map((t) => ({ who: t.who === 'you' ? 'caller' : 'agent', text: t.text }))
-    const form = new FormData()
+    const form = turnForm()
     if (heardLive) {
       form.append('transcript', heardLive.transcript)
       form.append('liveWaitMs', String(heardLive.waitMs))
@@ -950,9 +1083,6 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     } else {
       form.append('audio', audio, 'utterance')
     }
-    form.append('history', JSON.stringify(history))
-    form.append('conversationId', conversationId.current)
-    if (interruptedTurn.current) form.append('interrupted', '1')
     const turn = ++activeTurn.current
     answerDone.current = false
     let heard = false
@@ -968,7 +1098,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       schedule(fillers.current[pick])
     }, FILLER_AFTER_MS)
     try {
-      const res = await fetch(`/api/agents/${agentId}/voice`, { method: 'POST', body: form })
+      const res = (drafted && (await drafted)) || (await fetch(`/api/agents/${agentId}/voice`, { method: 'POST', body: form }))
       if (!res.ok) {
         const body: VoiceResponse = await res.json().catch(() => ({}))
         throw new Error(body.error ?? `Request failed (${res.status})`)
@@ -977,7 +1107,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         // Nothing usable was heard: a plain JSON reply.
         const body: VoiceResponse = await res.json()
         answerDone.current = true
-        showPartial('')
+        clearPartial()
         if (!inCallRef.current || turn !== activeTurn.current) return
         if (body.status === 'no_speech') return // don't make the agent say "sorry?" to background noise
         if (body.rate) rate.current = body.rate
@@ -1007,7 +1137,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
           if (!line) continue
           const event = JSON.parse(line) as { type: string; transcript?: string; runId?: string | null; rate?: number; text?: string; data?: string; ttsError?: string; status?: string; endCall?: boolean } & Partial<WordTimes>
           if (event.type === 'heard') {
-            showPartial('')
+            clearPartial()
             if (event.rate) rate.current = event.rate
             // A turn already talked over (the caller started again) is shown, not typed out.
             if (turn === activeTurn.current) startLive(turn)
@@ -1138,6 +1268,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   }
 
   const stopEverything = () => {
+    dropDraft()
     endAfterSpeech.current = false
     if (endTimer.current) { clearTimeout(endTimer.current); endTimer.current = null }
     inCallRef.current = false
@@ -1155,7 +1286,7 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     stream.current = null
     liveStt.current?.close()
     liveStt.current = null
-    showPartial('')
+    clearPartial()
     cancelAnswer()
     answerDone.current = true
     setPhaseBoth('idle')
@@ -1239,12 +1370,9 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
         <canvas
           ref={canvas}
           aria-hidden="true"
-          className="w-full h-24 [--wave-agent:theme(colors.primary.500)] [--wave-you:theme(colors.rose.500)] dark:[--wave-agent:theme(colors.primary.400)] dark:[--wave-you:theme(colors.rose.400)]"
+          className="w-full h-44 [--orb-agent:theme(colors.primary.600)] [--orb-agent-light:theme(colors.primary.200)] [--orb-you:theme(colors.rose.500)] [--orb-you-light:theme(colors.rose.200)] dark:[--orb-agent:theme(colors.primary.500)] dark:[--orb-agent-light:theme(colors.primary.300)] dark:[--orb-you:theme(colors.rose.400)] dark:[--orb-you-light:theme(colors.rose.200)]"
         />
         <p className="text-sm text-neutral-600 dark:text-neutral-300 min-h-[1.25rem] text-center" role="status" aria-live="polite">{label}</p>
-        {partial && (phase === 'hearing' || phase === 'thinking') && (
-          <p className="max-w-xl text-center text-base text-neutral-900 dark:text-neutral-100" aria-label="What you’re saying">“{partial}”</p>
-        )}
         {!inCall ? (
           <button onClick={startCall} disabled={phase !== 'idle'} className="inline-flex items-center gap-2 rounded-full bg-primary-600 hover:bg-primary-700 disabled:opacity-60 text-white px-6 py-3 text-sm font-medium shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2">
             {phase === 'starting' ? <Loader2 className="w-4 h-4 animate-spin" /> : <PhoneCall className="w-4 h-4" />}{turns.length ? 'Call again' : 'Start call'}

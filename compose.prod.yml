@@ -76,9 +76,42 @@ services:
       setup: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
 
+  # Nightly database backups with a restore test (scripts/ops/backup.sh, docs/DEPLOY.md
+  # "Backups and alerts"): kept in the `backups` volume, BACKUP_KEEP_DAYS days.
+  backup:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    entrypoint: ["sh", "/ops/backup.sh", "loop"]
+    environment:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.production}
+      PGDATABASE: ai_workforce
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+      BACKUP_HOUR_UTC: ${BACKUP_HOUR_UTC:-16}
+    volumes: [backups:/backups, ./scripts/ops:/ops:ro]
+    networks: [internal]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  # Uptime and backup checks every minute, alerting ALERT_WEBHOOK_URL (scripts/ops/monitor.sh).
+  monitor:
+    image: curlimages/curl:8.11.1
+    restart: unless-stopped
+    user: root
+    entrypoint: ["sh", "/ops/monitor.sh"]
+    environment:
+      DOMAIN: ${DOMAIN}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      BACKUP_MAX_AGE_HOURS: ${BACKUP_MAX_AGE_HOURS:-26}
+    volumes: [backups:/backups:ro, ./scripts/ops:/ops:ro]
+    networks: [internal]
+    depends_on: [web, backup]
+
 volumes:
   postgres:
   redis:
+  backups:
 
 networks:
   internal:

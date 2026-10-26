@@ -24,5 +24,10 @@ case "${1:-up}" in
   stage-repair) dc run --rm --no-deps setup sh -c "npx tsx scripts/stage-repair.ts" ;;
   # Every agent's test suite on the real model (dry runs), recorded as evaluations; extra args pass through.
   evaluate) shift; dc run --rm --no-deps setup sh -c "npx tsx scripts/evaluate-team.ts $*" ;;
-  *) echo "usage: $0 up|logs|ps|down|restart|reset-demo|stage-repair|evaluate"; exit 1 ;;
+  # Backups (scripts/ops/backup.sh): one now, restore the latest into a scratch database and check it, list, logs.
+  backup-now) dc exec backup sh /ops/backup.sh once ;;
+  restore-test) dc exec backup sh /ops/backup.sh restore-test ;;
+  backups) dc exec backup sh -c 'ls -lh /backups' ;;
+  backup-logs) dc logs --tail=50 backup monitor ;;
+  *) echo "usage: $0 up|logs|ps|down|restart|reset-demo|stage-repair|evaluate|backup-now|restore-test|backups|backup-logs"; exit 1 ;;
 esac

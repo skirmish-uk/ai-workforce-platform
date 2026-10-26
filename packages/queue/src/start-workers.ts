@@ -1,5 +1,6 @@
 import './load-env'
-import { globalWatchdog } from '@ai-workforce/monitoring'
+import { WORKER_HEARTBEAT_EVERY_MS, WORKER_HEARTBEAT_KEY, globalWatchdog, recordError } from '@ai-workforce/monitoring'
+import { getRedisConnection } from './connection'
 import { createAgentWorker } from './workers/agent.worker'
 import { createApprovalWorker } from './workers/approval.worker'
 import { createDeploymentWorker } from './workers/deployment.worker'
@@ -35,8 +36,15 @@ async function main(): Promise<void> {
   for (const worker of workers) {
     worker.on('failed', (job, err) => {
       console.error(`[${worker.name}] job ${job?.id ?? 'unknown'} failed:`, err)
+      // An Incident in the operator console, one per kind of error (packages/monitoring/src/errors.ts).
+      void recordError({ source: 'worker', where: worker.name, error: err })
     })
   }
+
+  // Health checks read this: without the worker nothing runs, though the site still looks up.
+  const beat = () => void getRedisConnection().set(WORKER_HEARTBEAT_KEY, String(Date.now()), 'EX', 300).catch(() => undefined)
+  beat()
+  const heartbeat = setInterval(beat, WORKER_HEARTBEAT_EVERY_MS)
 
   globalWatchdog.startMonitoring()
   const schedulerHandle = startScheduler()
@@ -48,6 +56,7 @@ async function main(): Promise<void> {
   const shutdown = async () => {
     console.log('Shutting down workers...')
     clearInterval(schedulerHandle)
+    clearInterval(heartbeat)
     globalWatchdog.stopMonitoring()
     await Promise.all(workers.map((worker) => worker.close()))
     process.exit(0)

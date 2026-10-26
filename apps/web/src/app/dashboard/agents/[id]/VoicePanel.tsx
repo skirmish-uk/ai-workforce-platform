@@ -232,6 +232,9 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
   const [turns, setTurns] = useState<Turn[]>([])
   const [phase, setPhase] = useState<Phase>('idle')
   const [inCall, setInCall] = useState(false)
+  /** When the call connected, for the call timer; and the seconds since, updated each second. */
+  const [callStartedAt, setCallStartedAt] = useState<number | null>(null)
+  const [callSeconds, setCallSeconds] = useState(0)
   const [muted, setMuted] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
@@ -359,6 +362,12 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     void ctx.current.resume()
     return ctx.current
   }
+
+  useEffect(() => {
+    if (!inCall || callStartedAt === null) return
+    const timer = setInterval(() => setCallSeconds(Math.floor((Date.now() - callStartedAt) / 1000)), 1000)
+    return () => clearInterval(timer)
+  }, [inCall, callStartedAt])
 
   // ---- the orb: a circle that swells and ripples with the caller's mic while listening/hearing
   // and with the agent's voice while speaking, breathes while thinking, rests when idle.
@@ -1269,6 +1278,8 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       backchannels.current = (body.backchannels ?? []).flatMap((f) => pcmToBuffer(context, f.pcm, rate.current) ?? [])
       inCallRef.current = true
       setInCall(true)
+      setCallStartedAt(Date.now())
+      setCallSeconds(0)
       setMuted(false)
       answerDone.current = true
       const turn = ++activeTurn.current
@@ -1386,10 +1397,17 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
       </div>
 
       <div className="flex flex-col items-center gap-3">
+        {/* A call: the agent's name and the call timer above an orb that grows to fill the panel. */}
+        <div className={`text-center transition-all duration-500 ${phase !== 'idle' ? 'opacity-100 max-h-20' : 'opacity-0 max-h-0 overflow-hidden'}`} aria-hidden={phase === 'idle'}>
+          <p className="text-xl font-semibold text-neutral-900 dark:text-neutral-50">{first}</p>
+          <p className="text-sm tabular-nums text-neutral-500 dark:text-neutral-400">
+            {inCall ? `${Math.floor(callSeconds / 60)}:${String(callSeconds % 60).padStart(2, '0')}` : 'Calling…'}
+          </p>
+        </div>
         <canvas
           ref={canvas}
           aria-hidden="true"
-          className="w-full h-44 [--orb-agent:theme(colors.primary.600)] [--orb-agent-light:theme(colors.primary.200)] [--orb-you:theme(colors.rose.500)] [--orb-you-light:theme(colors.rose.200)] dark:[--orb-agent:theme(colors.primary.500)] dark:[--orb-agent-light:theme(colors.primary.300)] dark:[--orb-you:theme(colors.rose.400)] dark:[--orb-you-light:theme(colors.rose.200)]"
+          className={`w-full transition-[height] duration-700 ease-out ${phase !== 'idle' ? 'h-80' : 'h-40'} [--orb-agent:theme(colors.primary.600)] [--orb-agent-light:theme(colors.primary.200)] [--orb-you:theme(colors.rose.500)] [--orb-you-light:theme(colors.rose.200)] dark:[--orb-agent:theme(colors.primary.500)] dark:[--orb-agent-light:theme(colors.primary.300)] dark:[--orb-you:theme(colors.rose.400)] dark:[--orb-you-light:theme(colors.rose.200)]`}
         />
         <p className="inline-flex items-center gap-2 text-sm text-neutral-600 dark:text-neutral-300 min-h-[1.25rem] text-center" role="status" aria-live="polite">
           {phase === 'thinking' && <Loader2 className="w-3.5 h-3.5 animate-spin text-primary-600 dark:text-primary-400" aria-hidden="true" />}
@@ -1400,12 +1418,18 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
             {phase === 'starting' ? <Loader2 className="w-4 h-4 animate-spin" /> : <PhoneCall className="w-4 h-4" />}{turns.length ? 'Call again' : 'Start call'}
           </button>
         ) : (
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            <button onClick={() => setMuted((m) => !m)} aria-pressed={muted} className={`inline-flex items-center gap-2 rounded-full px-5 py-3 text-sm font-medium border focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 ${muted ? 'bg-amber-100 border-amber-300 text-amber-900 dark:bg-amber-900/30 dark:border-amber-700 dark:text-amber-200' : 'bg-white dark:bg-neutral-800 border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-200'}`}>
-              {muted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}{muted ? 'Unmute' : 'Mute'}
+          <div className="flex items-start justify-center gap-10 pt-1">
+            <button onClick={() => setMuted((m) => !m)} aria-pressed={muted} className="group flex flex-col items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 focus:outline-none">
+              <span className={`flex items-center justify-center w-14 h-14 rounded-full border shadow-sm transition-colors group-focus-visible:ring-2 group-focus-visible:ring-primary-400 ${muted ? 'bg-amber-100 border-amber-300 text-amber-900 dark:bg-amber-900/30 dark:border-amber-700 dark:text-amber-200' : 'bg-white hover:bg-neutral-50 dark:bg-neutral-800 dark:hover:bg-neutral-700 border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-200'}`}>
+                {muted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+              </span>
+              {muted ? 'Unmute' : 'Mute'}
             </button>
-            <button onClick={stopEverything} className="inline-flex items-center gap-2 rounded-full bg-rose-600 hover:bg-rose-700 text-white px-6 py-3 text-sm font-medium shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-rose-400 focus-visible:ring-offset-2">
-              <PhoneOff className="w-4 h-4" />End call
+            <button onClick={stopEverything} className="group flex flex-col items-center gap-1.5 text-xs text-neutral-600 dark:text-neutral-300 focus:outline-none">
+              <span className="flex items-center justify-center w-14 h-14 rounded-full bg-rose-600 group-hover:bg-rose-700 text-white shadow-md transition-colors group-focus-visible:ring-2 group-focus-visible:ring-rose-400 group-focus-visible:ring-offset-2">
+                <PhoneOff className="w-6 h-6" />
+              </span>
+              End call
             </button>
           </div>
         )}

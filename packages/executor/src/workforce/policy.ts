@@ -37,6 +37,11 @@ export const selfManagementPolicySchema = z
         failureRate: z.number().min(0).max(1).default(0.3),
         /** Completed runs flagged by quality signals (promised actions not taken, questions in text). */
         qualityFlaggedRuns: z.number().int().min(1).max(1000).default(2),
+        /**
+         * Runs flagged with a conversation signal (handed over again, didn't end the call when asked):
+         * one is enough. A caller met it directly, and it often points at a platform bug.
+         */
+        conversationFlaggedRuns: z.number().int().min(1).max(1000).default(1),
         /** Share of an agent's decided approvals that people rejected (needs at least 3 decisions). */
         rejectionRate: z.number().min(0).max(1).default(0.5),
         /** Tool call error rate (needs at least 5 calls); often a broken connection. */

@@ -58,7 +58,8 @@ export function detectManagerTriggers(
     if (m.runs >= thresholds.minRuns && (m.failureRate ?? 0) >= thresholds.failureRate) {
       push('failures', a.id, a.name, `${pct(m.failureRate)} of ${m.runs} runs in the last 24 hours failed.`)
     }
-    if (m.qualityFlaggedRuns >= thresholds.qualityFlaggedRuns) {
+    const conversationFlagged = Math.max(0, ...Object.entries(m.qualitySignalCounts ?? {}).filter(([signal]) => CONVERSATION_SIGNALS.has(signal as QualitySignal)).map(([, n]) => n))
+    if (m.qualityFlaggedRuns >= thresholds.qualityFlaggedRuns || conversationFlagged >= thresholds.conversationFlaggedRuns) {
       push('quality', a.id, a.name, qualityDetail(m.qualityFlaggedRuns, m.qualitySignalCounts ?? {}))
     }
     if (m.approvalsDecided >= 3 && (m.humanOverrideRate ?? 0) >= thresholds.rejectionRate) {

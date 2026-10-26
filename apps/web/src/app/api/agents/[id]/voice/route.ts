@@ -4,7 +4,7 @@ import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { safeErrorMessage } from '@ai-workforce/domain'
 import { randomUUID } from 'node:crypto'
-import { defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
+import { callerWantsToEnd, defaultGreeting, isConversationId, readVoiceConfig, resolveAgentContract, spokenReply, type RunAgentResult } from '@ai-workforce/executor'
 import { LLMConfigError, MAX_AUDIO_BYTES, MIN_TRANSCRIPT_CONFIDENCE, SPEECH_PCM_RATE, echoesHint, hedged, notEnglishSpeech, soundsLikeEcho, streamSpeech, transcribeAudio, transcriptionHint, ttsProvider } from '@ai-workforce/llm'
 import { draftDecision, enqueueAgentRun, getRedisConnection, requestAgentRunCancel, setDraftDecision, waitForAgentRun } from '@ai-workforce/queue'
 import { callVocabulary, draftKeys, loadAgent } from './shared'
@@ -22,8 +22,10 @@ const OUTCOME_NOTES: Record<string, string> = {
 
 /**
  * A call is a conversation: each turn's run gets the recent exchanges (sent by the browser as
- * form field "history": [{who: 'caller'|'agent', text}]) so "what about Saturdays?" makes sense.
- * Bounded: the last 8 exchanges, 400 characters each.
+ * form field "history": [{who: 'caller'|'agent', text, outcome?}]) so "what about Saturdays?"
+ * makes sense. Bounded: the last 8 lines, 400 characters each. What older turns did is kept
+ * even when their words aren't: a hand-off 5 exchanges back dropped out of the window, and Ava
+ * handed it over again on "Okay, that's all" (26 Oct).
  */
 function withConversation(transcript: string, rawHistory: FormDataEntryValue | null, agentName: string): string {
   let history: Array<{ who?: unknown; text?: unknown; outcome?: unknown }> = []
@@ -31,14 +33,16 @@ function withConversation(transcript: string, rawHistory: FormDataEntryValue | n
     history = typeof rawHistory === 'string' ? JSON.parse(rawHistory) : []
   } catch { /* ignore a malformed history: the turn still works on its own */ }
   const first = agentName.split(/\s+[-–]\s+|\s+/)[0] || 'You'
-  const lines = (Array.isArray(history) ? history : [])
-    .filter((h) => (h.who === 'caller' || h.who === 'agent') && typeof h.text === 'string' && h.text.trim())
+  const said = (Array.isArray(history) ? history : []).filter((h) => (h.who === 'caller' || h.who === 'agent') && typeof h.text === 'string' && h.text.trim())
+  const earlier = [...new Set(said.slice(0, -8).flatMap((h) => (h.who === 'agent' && OUTCOME_NOTES[String(h.outcome)] ? [OUTCOME_NOTES[String(h.outcome)].trim()] : [])))]
+  const lines = said
     .slice(-8)
     .map((h) => `${h.who === 'caller' ? 'Caller' : first}: ${String(h.text).replace(/\s+/g, ' ').trim().slice(0, 400)}${h.who === 'agent' ? OUTCOME_NOTES[String(h.outcome)] ?? '' : ''}`)
   // How to talk on a call (length, tone, wrapping up) is in the agent's prompt for voice turns
   // (VOICE_STYLE); here only what has been said.
   if (!lines.length) return transcript
-  return `The call so far, most recent last:\n${lines.join('\n')}\n\nThe caller just said: "${transcript}"`
+  const before = earlier.length ? `Earlier in the call (not shown): ${earlier.join(' ')}\n` : ''
+  return `The call so far, most recent last:\n${before}${lines.join('\n')}\n\nThe caller just said: "${transcript}"`
 }
 
 /** The agent's last two lines in the call (from "history"), to recognise its own echo. */
@@ -423,13 +427,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         // Approvals always get the stock line: it never claims a gated action was done. Stock
         // lines are cached; clarifying questions are the agent's own words, so they aren't.
         else say(spokenReply(result), status !== 'needs_clarification')
+        // The caller said they're done ("Okay, that's all") but the agent handed something over or
+        // asked for approval instead of saying goodbye (those end its turn, so it can't also end the
+        // call): say goodbye and end the call anyway, as asked.
+        const closing = result?.endCall !== true && (status === 'escalated' || status === 'approval_required') && callerWantsToEnd(transcript)
+        if (closing) say('Thanks for calling. Have a great day!', true)
+        const endCall = result?.endCall === true || closing
 
         await ordered
         lap('speakMs')
         timings.totalMs = Date.now() - started
         // endCall: the agent said goodbye; the page hangs up about a second after it finishes speaking.
-        send({ type: 'done', status, runId, reply: spokenText, endCall: result?.endCall === true, timings })
-        recordTurn(agent, session.user.id, { runId, status, endCall: result?.endCall === true || undefined, confidence, hintRetried, ...sttUsage, ttsCharacters: characters, ttsModel, ttsError, timings })
+        send({ type: 'done', status, runId, reply: spokenText, endCall, timings })
+        recordTurn(agent, session.user.id, { runId, status, endCall: endCall || undefined, closedAfterHandOff: closing || undefined, confidence, hintRetried, ...sttUsage, ttsCharacters: characters, ttsModel, ttsError, timings })
         if (!closed) controller.close()
       },
       // The page stopped listening (a dropped draft, or the caller hung up).

@@ -37,6 +37,11 @@ test('a quality trigger says what the runs did, and points conversation problems
   const [t] = detectManagerTriggers({ agents: [{ id: 'a2', name: 'Ava', metrics: { ...quiet, qualityFlaggedRuns: 5, qualitySignalCounts: { repeated_handover: 4 } } }], rollbacks: [], alreadyFired: new Set() }, thresholds)
   assert.equal(t.kind, 'quality')
   assert.match(managerReviewInput([t]), /platform__report_platform_issue/)
+  // One caller left hanging is enough to start a review; one ordinary flag is not.
+  const once = detectManagerTriggers({ agents: [{ id: 'a2', name: 'Ava', metrics: { ...quiet, qualityFlaggedRuns: 1, qualitySignalCounts: { missed_end_call: 1, repeated_handover: 1 } } }], rollbacks: [], alreadyFired: new Set() }, thresholds)
+  assert.deepEqual(once.map((x) => x.key), ['quality:a2'])
+  const ordinary = detectManagerTriggers({ agents: [{ id: 'a2', name: 'Ava', metrics: { ...quiet, qualityFlaggedRuns: 1, qualitySignalCounts: { announced_without_action: 1 } } }], rollbacks: [], alreadyFired: new Set() }, thresholds)
+  assert.deepEqual(ordinary, [])
 })
 
 const fixtures: Fixture[] = []

@@ -23,6 +23,10 @@ test('spoken replies never claim a gated action happened', () => {
   assert.match(spokenReply({ status: 'approval_required', output: 'I sent the email.' }), /passed that to the team to approve/)
   assert.equal(spokenReply({ status: 'needs_clarification', output: null, clarificationQuestions: ['Which office?'] }), 'Which office?')
   assert.match(spokenReply({ status: 'escalated', output: null }), /passed it on/)
+  // A call back is promised only when the hand-off says how to reach the caller.
+  assert.doesNotMatch(spokenReply({ status: 'escalated', output: null }), /get back to you|follow up/)
+  assert.match(spokenReply({ status: 'escalated', output: null, escalation: { reason: 'Custom package\nContact: name: Jamie, phone: 0412 555 019', severity: 'low', destination: 'x' } }), /get back to you on the details you gave/)
+  assert.doesNotMatch(spokenReply({ status: 'approval_required', output: null }), /confirm with you/)
   assert.match(spokenReply({ status: 'failed', output: 'partial text' }), /can’t help with that right now/)
 })
 

@@ -23,7 +23,7 @@ import { canonicalJson, readKillSwitch, resolveEffectiveStage } from './safety'
 import { checkSpendCap } from './spend-cap'
 import { runAuthorizedTool, type ToolExecutorFn } from './tool-runner'
 import { wrapUntrusted } from './untrusted'
-import { callerWantsToEnd, detectQualitySignals, type QualitySignal } from './quality'
+import { callerWantsToEnd, detectQualitySignals, hasContactDetails, type QualitySignal } from './quality'
 import { readVoiceConfig } from './voice'
 import { CONVERSATION_MESSAGE_MAX_CHARS, isConversationId } from './conversations'
 import { readSelfManagementPolicy } from './workforce/policy'
@@ -229,10 +229,18 @@ const ESCALATION_REASON_MAX_CHARS = 6000
 
 const ESCALATE_TOOL: LLMTool = {
   name: 'platform__escalate',
-  description: 'Hand the task to a human: out of scope, high risk, policy unclear, or persistent failures. Ends the run.',
+  description: 'Hand the task to a human: out of scope, high risk, policy unclear, or persistent failures. Ends the run. When someone should get back to the person, include how to reach them in contact.',
   inputSchema: {
     type: 'object',
-    properties: { reason: { type: 'string' }, severity: { type: 'string', enum: ['low', 'medium', 'high'] } },
+    properties: {
+      reason: { type: 'string' },
+      severity: { type: 'string', enum: ['low', 'medium', 'high'] },
+      contact: {
+        type: 'object',
+        description: 'Who to get back to and how, as the person gave them.',
+        properties: { name: { type: 'string' }, phone: { type: 'string' }, email: { type: 'string' } },
+      },
+    },
     required: ['reason'],
   },
 }
@@ -263,6 +271,7 @@ You're talking with someone on the phone, not writing to them. Sound like a frie
 - If they ask you to repeat something, say it again more simply, not word for word. If they ask for more detail than you have, say so plainly and offer to pass it to the team.
 - Short replies like "no", "okay" or "that's fine" just need a short reply. Don't recap.
 - Say numbers, prices and times the way people say them aloud. No lists, headings, symbols or links.
+- Passing something to the team for them to get back to the caller (a quote, a custom package, a callback): they need a way to reach the caller. If you don't already have the caller's name and a phone number or email from this call, ask for them first, in one short question, and hand it over once you have them, with them in contact, saying in one sentence how the team will get back to them ("Thanks, Jamie, I've passed that on and the team will call you on that number."). Only say the team will get back to them when you have a way to reach them; if they'd rather not give details, tell them how to contact the team instead.
 - In the call so far, "[Done: …]" after one of your lines means that really happened (the request is with the team). Don't hand the same thing over again or say it wasn't sent; if they ask, tell them it's with the team.
 - Wrapping up: when their questions seem dealt with (they say thanks, "that's great", "that's all"), you can check once, lightly, whether there's anything else. Once they say they're done or say goodbye, say a short, warm goodbye in one sentence and call ${END_CALL_TOOL.name}. Don't ask "anything else?" again after they've said no.`
 
@@ -832,7 +841,11 @@ class AgentRun {
           return this.assess(response.content?.trim() ? response.content : 'Thanks for calling. Have a great day!')
         }
         if (call.name === ESCALATE_TOOL.name) {
-          const reason = typeof call.input.reason === 'string' && call.input.reason.trim() ? call.input.reason : 'Agent requested human help'
+          const given = typeof call.input.reason === 'string' && call.input.reason.trim() ? call.input.reason : 'Agent requested human help'
+          // How to reach the person goes in the hand-off itself, where whoever picks it up reads it.
+          const contact = call.input.contact && typeof call.input.contact === 'object' ? (call.input.contact as Record<string, unknown>) : {}
+          const contactLine = ['name', 'phone', 'email'].flatMap((k) => (typeof contact[k] === 'string' && contact[k].trim() ? [`${k}: ${String(contact[k]).trim()}`] : [])).join(', ')
+          const reason = contactLine ? `${given}\nContact: ${contactLine}` : given
           const severity = typeof call.input.severity === 'string' ? call.input.severity : 'medium'
           return this.finish('escalated', {
             // The hand-off is what the person acts on: keep a full findings list (Casey's sweeps run to ~2,000 chars).
@@ -1235,7 +1248,7 @@ class AgentRun {
   ): Promise<RunAgentResult> {
     if (this.finished) return this.finished
     if (!(await this.confirmed())) return this.discard()
-    if (!this.options.dryRun) await this.conversationSignals(status)
+    if (!this.options.dryRun) await this.conversationSignals(status, extra.escalation)
     const costUsd = this.costKnown ? this.ownCost : this.usage.input + this.usage.output > 0 ? null : 0
     const result: RunAgentResult = {
       runId: this.runId,
@@ -1344,7 +1357,7 @@ class AgentRun {
    * handing over a conversation that was already handed over, and not ending a call after the
    * caller said goodbye. Flagged runs count towards the manager's automatic repair review.
    */
-  private async conversationSignals(status: RunAgentStatus): Promise<void> {
+  private async conversationSignals(status: RunAgentStatus, escalation?: RunAgentResult['escalation']): Promise<void> {
     const c = this.options.conversation
     if (!c || !isConversationId(c.id)) return
     const add = (signal: QualitySignal) => {
@@ -1353,6 +1366,8 @@ class AgentRun {
       this.note(`quality signal: ${signal}`)
     }
     if (this.trigger === 'voice' && !this.endCall && !['cancelled', 'failed', 'blocked'].includes(status) && callerWantsToEnd(c.message)) add('missed_end_call')
+    // The team can only get back to a caller they can reach: the call (or the hand-off) must have a number or email.
+    if (this.trigger === 'voice' && status === 'escalated' && !hasContactDetails(`${this.input}\n${escalation?.reason ?? ''}`)) add('handover_without_contact')
     if (status === 'escalated') {
       const earlier = await prisma.auditLog
         .count({ where: { tenantId: this.agent.tenantId, entityId: this.agent.id, action: 'AGENT_RUN_ESCALATED', createdAt: { gte: new Date(Date.now() - 6 * 3_600_000) }, newData: { path: ['conversationId'], equals: c.id } } })

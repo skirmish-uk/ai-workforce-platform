@@ -561,10 +561,11 @@ describe('voice calls', () => {
     const f = await fixture()
     const conversation = (message: string) => ({ id, message })
     const id = crypto.randomUUID()
-    const escalate = () => scriptedLLM([toolUse([{ name: 'platform__escalate', input: { reason: 'Custom package quote', severity: 'low' } }])])
+    const escalate = () => scriptedLLM([toolUse([{ name: 'platform__escalate', input: { reason: 'Custom package quote', severity: 'low', contact: { name: 'Sam', phone: '0412 345 678' } } }])])
     const first = await runAgent(f.agentId, 'I want a custom package', { deps: deps(escalate()), trigger: 'voice', conversation: conversation('I want a custom package') })
     assert.equal(first.status, 'escalated', first.error)
     assert.deepEqual(first.qualitySignals, [], 'the first hand-off is fine')
+    assert.match(first.escalation!.reason, /\nContact: name: Sam, phone: 0412 345 678$/, 'how to reach the caller goes in the hand-off')
     // The 26 Oct call: the caller says that's all, and the agent hands over again instead of ending the call.
     const again = await runAgent(f.agentId, 'Okay, that’s all.', { deps: deps(escalate()), trigger: 'voice', conversation: conversation('Okay, that’s all.') })
     assert.deepEqual([...again.qualitySignals].sort(), ['missed_end_call', 'repeated_handover'])
@@ -576,6 +577,15 @@ describe('voice calls', () => {
     assert.deepEqual(bye.qualitySignals, [])
     const other = await runAgent(f.agentId, 'I want a custom package', { deps: deps(escalate()), trigger: 'voice', conversation: { id: crypto.randomUUID(), message: 'I want a custom package' } })
     assert.deepEqual(other.qualitySignals, [])
+  })
+
+  test('a hand-off on a call with no way to reach the caller is flagged; the call or the hand-off giving one is not', async () => {
+    const f = await fixture()
+    const run = (input: string, contact?: Record<string, string>) =>
+      runAgent(f.agentId, input, { deps: deps(scriptedLLM([toolUse([{ name: 'platform__escalate', input: { reason: 'Custom package', ...(contact ? { contact } : {}) } }])])), trigger: 'voice', conversation: { id: crypto.randomUUID(), message: input } })
+    assert.deepEqual((await run('I want a custom package')).qualitySignals, ['handover_without_contact'])
+    assert.deepEqual((await run('I want a custom package', { name: 'Sam', email: 'sam@example.test' })).qualitySignals, [])
+    assert.deepEqual((await run('I want a custom package. I am Sam, my number is 0412 345 678.')).qualitySignals, [])
   })
 
   test('a draft answer streams while the caller talks, but does nothing and records nothing until confirmed', async () => {

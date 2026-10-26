@@ -15,6 +15,8 @@ export type QualitySignal =
   | 'repeated_handover'
   /** On a call, the caller said goodbye or asked to end it, and the call wasn't ended. */
   | 'missed_end_call'
+  /** On a call, handed over with no phone number or email for the team to get back to the caller. */
+  | 'handover_without_contact'
 
 const PROMISE = /\b(?:i['’]ll|i will|i am going to|i['’]m going to|let me|now i['’]ll|next,? i['’]ll)\s+(?:now\s+|go ahead and\s+|then\s+)?(?:draft|send|email|write|reply|follow up|update|create|add|log|book|schedule|escalate|forward|label|reach out|set up)\b/i
 const ASKS = /\?\s*(?:\*\*)?\s*$|\b(?:could you|can you|please (?:confirm|provide|share|let me know)|do you want me to|should i|would you like me to)\b[^.!]*\?/i
@@ -60,6 +62,7 @@ export const QUALITY_SIGNAL_LABELS: Record<QualitySignal, string> = {
   asked_in_text: 'asked the requester questions in its answer instead of using the clarification tool',
   repeated_handover: 'handed a conversation over to the team again after it had already been handed over',
   missed_end_call: 'did not end a call after the caller said goodbye or asked to end it',
+  handover_without_contact: 'handed a call over to the team without a phone number or email to get back to the caller',
 }
 
 /**
@@ -67,7 +70,12 @@ export const QUALITY_SIGNAL_LABELS: Record<QualitySignal, string> = {
  * platform runs a conversation (what each turn is told about earlier ones) rather than the
  * agent's own instructions, so the manager is told it may need a platform fix.
  */
-export const CONVERSATION_SIGNALS: ReadonlySet<QualitySignal> = new Set(['repeated_handover', 'missed_end_call'])
+export const CONVERSATION_SIGNALS: ReadonlySet<QualitySignal> = new Set(['repeated_handover', 'missed_end_call', 'handover_without_contact'])
+
+/** Whether the text holds a way to reach someone: an email address or a phone number (8+ digits). */
+export function hasContactDetails(text: string): boolean {
+  return /[^\s@]+@[^\s@]+\.[a-z]{2,}/i.test(text) || /(?:\+?\d[\d ()-]{6,}\d)/.test(text.replace(/(?<=\d)[ -](?=\d)/g, ''))
+}
 
 const WANTS_TO_END = /\b(?:good ?bye|bye(?: bye)?|cheers,? bye|end (?:the|this) call|hang up|that'?s (?:all|everything|it)(?: i need(?:ed)?| for (?:now|today))?|that'?s all i need(?:ed)?|nothing else|i'?m (?:all )?(?:done|good)(?:,? thanks)?|no,? that'?s (?:all|it|fine|everything))\b/i
 const STILL_ASKING = /\?|\b(?:but|and also|one more|another question|what about|how about|can you|could you)\b/i

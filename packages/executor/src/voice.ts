@@ -95,7 +95,7 @@ export function defaultGreeting(agentName: string): string {
  * What the agent says out loud for each way a run can end. Never claims an action
  * happened: an approval-gated action is described as passed on, not done.
  */
-export function spokenReply(result: Pick<RunAgentResult, 'status' | 'output' | 'clarificationQuestions'>): string {
+export function spokenReply(result: Pick<RunAgentResult, 'status' | 'output' | 'clarificationQuestions'> & Partial<Pick<RunAgentResult, 'escalation'>>): string {
   const output = result.output?.trim() ?? ''
   switch (result.status) {
     case 'completed':
@@ -104,9 +104,13 @@ export function spokenReply(result: Pick<RunAgentResult, 'status' | 'output' | '
     case 'needs_clarification':
       return result.clarificationQuestions?.length ? result.clarificationQuestions.join(' ') : output || 'Could you tell me a bit more?'
     case 'approval_required':
-      return 'I’ve passed that to the team to approve, and someone will confirm with you shortly.'
+      // Never promises that someone will get back to them: the caller may not have said how to reach them.
+      return 'I’ve passed that to the team to approve.'
     case 'escalated':
-      return 'That’s one for a colleague. I’ve passed it on, and someone will follow up with you.'
+      // Only a hand-off that says how to reach the caller (agent.ts adds "Contact: …") promises a call back.
+      return /\nContact: /.test(result.escalation?.reason ?? '')
+        ? 'Thanks, I’ve passed that on, and the team will get back to you on the details you gave.'
+        : 'That’s one for the team, so I’ve passed it on.'
     case 'cancelled':
     case 'blocked':
     case 'failed':

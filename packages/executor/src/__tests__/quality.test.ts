@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { callerWantsToEnd, detectQualitySignals } from '../quality'
+import { callerWantsToEnd, detectQualitySignals, hasContactDetails } from '../quality'
 
 test('flags runs that promise or claim actions they never took', () => {
   // The real 13 Oct case: a qualification summary ending in a promise, with only a CRM search.
@@ -38,4 +38,9 @@ test('the caller ending the call: goodbyes and "that\'s all", not a question in 
   for (const said of ["That's all good, but what about Saturdays?", 'Is that all it includes?', 'Can you tell me about SEO?', "That's it? What about ads?", 'I said goodbye to my old agency last year, so how do we start?']) {
     assert.equal(callerWantsToEnd(said), false, said)
   }
+})
+
+test('contact details: an email or a phone number, not prices, dates or package names', () => {
+  for (const text of ['sam@acme.com.au', 'call me on 0412 345 678', '+61 2 9876 5432', '(02) 9876-5432']) assert.equal(hasContactDetails(text), true, text)
+  for (const text of ['Growth is $7,500 a month', 'Enterprise at $15,000', 'by 26 October 2026', 'I want a custom package', 'we have 25 staff']) assert.equal(hasContactDetails(text), false, text)
 })

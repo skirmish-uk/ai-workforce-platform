@@ -14,13 +14,19 @@ import { VoiceLimitError, callBlockedBy, reserveSpeech, voiceUsage } from './tts
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
+/** What an earlier turn of the call did, after its words: the agent can't otherwise tell a hand-off it made from one it only mentioned. */
+const OUTCOME_NOTES: Record<string, string> = {
+  escalated: ' [Done: this was handed over to the team on this call.]',
+  approval_required: ' [Done: this was passed to the team for approval on this call.]',
+}
+
 /**
  * A call is a conversation: each turn's run gets the recent exchanges (sent by the browser as
  * form field "history": [{who: 'caller'|'agent', text}]) so "what about Saturdays?" makes sense.
  * Bounded: the last 8 exchanges, 400 characters each.
  */
 function withConversation(transcript: string, rawHistory: FormDataEntryValue | null, agentName: string): string {
-  let history: Array<{ who?: unknown; text?: unknown }> = []
+  let history: Array<{ who?: unknown; text?: unknown; outcome?: unknown }> = []
   try {
     history = typeof rawHistory === 'string' ? JSON.parse(rawHistory) : []
   } catch { /* ignore a malformed history: the turn still works on its own */ }
@@ -28,7 +34,7 @@ function withConversation(transcript: string, rawHistory: FormDataEntryValue | n
   const lines = (Array.isArray(history) ? history : [])
     .filter((h) => (h.who === 'caller' || h.who === 'agent') && typeof h.text === 'string' && h.text.trim())
     .slice(-8)
-    .map((h) => `${h.who === 'caller' ? 'Caller' : first}: ${String(h.text).replace(/\s+/g, ' ').trim().slice(0, 400)}`)
+    .map((h) => `${h.who === 'caller' ? 'Caller' : first}: ${String(h.text).replace(/\s+/g, ' ').trim().slice(0, 400)}${h.who === 'agent' ? OUTCOME_NOTES[String(h.outcome)] ?? '' : ''}`)
   // How to talk on a call (length, tone, wrapping up) is in the agent's prompt for voice turns
   // (VOICE_STYLE); here only what has been said.
   if (!lines.length) return transcript

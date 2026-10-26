@@ -692,7 +692,9 @@ export function VoicePanel({ agentId, agentName, onShowRun, onTurnDone }: { agen
     const history = turnsRef.current
       .filter((t) => t.text && !t.text.startsWith('('))
       .slice(-8)
-      .map((t) => ({ who: t.who === 'you' ? 'caller' : 'agent', text: t.text }))
+      // What a turn did, not only what was said: without it the agent took its own "I've passed
+      // it on" for a promise and handed the same request over again every turn (26 Oct).
+      .map((t) => ({ who: t.who === 'you' ? 'caller' : 'agent', text: t.text, outcome: t.who === 'agent' && (t.status === 'escalated' || t.status === 'approval_required') ? t.status : undefined }))
     const form = new FormData()
     form.append('history', JSON.stringify(history))
     form.append('conversationId', conversationId.current)

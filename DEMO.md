@@ -146,8 +146,10 @@ curl -b demo_cookies.txt -X POST http://127.0.0.1:3000/api/agents \
 | Agent | Starts at | Try |
 |---|---|---|
 | Riley - Meeting Scheduler | approval_gated: every invite waits in Approvals | "Book a 30-minute discovery call with Maria Gonzalez (maria@cloudnine-analytics.example) tomorrow at 10am" |
-| Iris - Inbox Triage | recommend: reports categories and labels, changes nothing | "Triage my unread inbox" |
+| Iris - Inbox Triage | limited (since 27 Oct): applies labels herself and the team is told afterwards; anything that sends still waits for approval | "Triage my unread inbox" |
 | Casey - CRM Hygiene | recommend: reports problems and fixes, changes nothing | "Run a CRM hygiene check" (finds the duplicate Tom Lee record) |
+
+**Sarah** is also at `limited` since 27 Oct: she creates and updates CRM records herself, and every email she drafts still waits in Approvals. Both moves were Workforce Manager revisions that passed their test suites at 100% on the real model and were approved by a person; `npm run demo:reset` keeps them, `--full` goes back to the seeded stages.
 
 All three are also reachable through Morgan's "Ask the team". Their test suites (4, 3 and 3 cases) passed against `claude-haiku-5-5` on 13 Oct 2026, and again on 18 Oct (`npx tsx scripts/run-evals.ts --all`).
 
@@ -159,7 +161,7 @@ Signed in to the demo business, every dashboard page has a **Demo guide** button
 
 ### The team working together (Team cases)
 
-1. **Team cases** → **New enquiry from the website (Sarah)**. Watch the case live: Sarah qualifies Daniel from Stackwise, drafts the reply and the CRM record (held for approval) and hands the booking to Riley, who prepares the invite with Alex Chen (from what the team knows). About a minute in all.
+1. **Team cases** → **New enquiry from the website (Sarah)**. Watch the case live: Sarah qualifies Daniel from Stackwise, creates the CRM record herself, drafts the reply (held for approval) and hands the booking to Riley, who prepares the invite with Alex Chen (from what the team knows). About a minute in all.
 2. **Sort this morning's inbox (Iris)**: Iris hands the CloudNine lead to Sarah and the urgent legal email to a person. If an agent stops to ask something, answer it in the case and it carries on.
 3. Approve the waiting actions on **Approvals**; the case turns Done.
 

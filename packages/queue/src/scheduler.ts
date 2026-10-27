@@ -3,6 +3,8 @@ import { prisma } from '@ai-workforce/db'
 import type { AgentStatus, Prisma, Schedule } from '@prisma/client'
 import { expireStaleApprovals, queuedTasks, findDueManagerReviews, notifyAgentActions, notifyHandovers, notifyPendingApprovals, findPendingRevisionIds, resolveAgentContract, watchPromotedRevisions } from '@ai-workforce/executor'
 import { agentRunQueue, enqueueAgentTask, enqueueRevision, type AgentRunJobData } from './queues'
+import { getRedisConnection } from './connection'
+import { holdLead, processLeaderId, releaseLead } from './leader'
 
 const POLL_INTERVAL_MS = 60_000
 
@@ -148,26 +150,50 @@ export async function dispatchQueuedTasks(): Promise<number> {
 const MANAGER_CHECK_INTERVAL_MS = 10 * 60_000
 let lastManagerCheck = 0
 
+/** null until the first check, so a standby worker also says so once. */
+let leading: boolean | null = null
+
+/**
+ * The scheduler tick, run only by the worker holding the lead (leader.ts): with several workers,
+ * one does it. The lead lasts 2.5 ticks, so a dead leader is replaced within about 2.5 minutes.
+ */
 export function startScheduler(intervalMs = POLL_INTERVAL_MS): NodeJS.Timeout {
   return setInterval(() => {
-    dispatchDueSchedules().catch((error) => console.error('Scheduler tick failed:', error))
-    expireStaleApprovals().catch((error) => console.error('Approval expiry sweep failed:', error))
-    notifyPendingApprovals()
-      .then((r) => r.approvals && console.log(`Approval emails: ${r.approvals} new approval(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
-      .catch((error) => console.error('Approval notification sweep failed:', error))
-    notifyAgentActions()
-      .then((r) => r.actions && console.log(`Action emails (NOTIFY level): ${r.actions} action(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
-      .catch((error) => console.error('Action notification sweep failed:', error))
-    notifyHandovers()
-      .then((r) => r.handovers && console.log(`Handover emails: ${r.handovers} handover(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
-      .catch((error) => console.error('Handover notification sweep failed:', error))
-    dispatchQueuedTasks().catch((error) => console.error('Task dispatch failed:', error))
-    dispatchRevisions().catch((error) => console.error('Revision dispatch failed:', error))
-    watchPromotedRevisions().catch((error) => console.error('Revision watch failed:', error))
-    // Checking every tenant's metrics is heavier than the rest of the tick: every 10 minutes is enough.
-    if (Date.now() - lastManagerCheck >= MANAGER_CHECK_INTERVAL_MS) {
-      lastManagerCheck = Date.now()
-      dispatchManagerReviews().catch((error) => console.error('Manager review dispatch failed:', error))
-    }
+    holdLead(getRedisConnection(), processLeaderId, Math.round(intervalMs * 2.5))
+      .then((lead) => {
+        if (lead !== leading) console.log(lead ? `Scheduler: this worker (${processLeaderId}) now leads the tick.` : 'Scheduler: another worker leads the tick; this one stands by.')
+        leading = lead
+        if (lead) tick()
+      })
+      .catch((error) => console.error('Scheduler leader check failed:', error))
   }, intervalMs)
+}
+
+/** Lets another worker take the tick over straight away (on shutdown). */
+export async function stopScheduler(handle: NodeJS.Timeout): Promise<void> {
+  clearInterval(handle)
+  if (leading === true) await releaseLead(getRedisConnection(), processLeaderId).catch(() => undefined)
+  leading = false
+}
+
+function tick(): void {
+  dispatchDueSchedules().catch((error) => console.error('Scheduler tick failed:', error))
+  expireStaleApprovals().catch((error) => console.error('Approval expiry sweep failed:', error))
+  notifyPendingApprovals()
+    .then((r) => r.approvals && console.log(`Approval emails: ${r.approvals} new approval(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
+    .catch((error) => console.error('Approval notification sweep failed:', error))
+  notifyAgentActions()
+    .then((r) => r.actions && console.log(`Action emails (NOTIFY level): ${r.actions} action(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
+    .catch((error) => console.error('Action notification sweep failed:', error))
+  notifyHandovers()
+    .then((r) => r.handovers && console.log(`Handover emails: ${r.handovers} handover(s), ${r.emailsSent} email(s) sent, ${r.skipped} skipped, ${r.failed} failed`))
+    .catch((error) => console.error('Handover notification sweep failed:', error))
+  dispatchQueuedTasks().catch((error) => console.error('Task dispatch failed:', error))
+  dispatchRevisions().catch((error) => console.error('Revision dispatch failed:', error))
+  watchPromotedRevisions().catch((error) => console.error('Revision watch failed:', error))
+  // Checking every tenant's metrics is heavier than the rest of the tick: every 10 minutes is enough.
+  if (Date.now() - lastManagerCheck >= MANAGER_CHECK_INTERVAL_MS) {
+    lastManagerCheck = Date.now()
+    dispatchManagerReviews().catch((error) => console.error('Manager review dispatch failed:', error))
+  }
 }

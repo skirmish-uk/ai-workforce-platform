@@ -9,7 +9,7 @@ import { createEvaluationWorker } from './workers/evaluation.worker'
 import { createRevisionWorker } from './workers/revision.worker'
 import { createWorkflowWorker } from './workers/workflow.worker'
 import { createWebsiteWorker } from './workers/website.worker'
-import { startScheduler } from './scheduler'
+import { startScheduler, stopScheduler } from './scheduler'
 
 /**
  * Standalone worker process. Run with `npm run start --workspace @ai-workforce/queue`
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     console.log('Shutting down workers...')
-    clearInterval(schedulerHandle)
+    await stopScheduler(schedulerHandle)
     clearInterval(heartbeat)
     globalWatchdog.stopMonitoring()
     await Promise.all(workers.map((worker) => worker.close()))

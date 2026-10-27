@@ -10,7 +10,7 @@ Cloudflare → host :80/:443 → nginx-proxy ─(rproxy network, VIRTUAL_HOST)�
 | Service | Role |
 |---|---|
 | `web` | Next.js (`next start`). The only service on `rproxy`; `VIRTUAL_HOST`/`LETSENCRYPT_HOST` = `$DOMAIN,www.$DOMAIN`, `VIRTUAL_PORT=3000` |
-| `worker` | BullMQ workers + scheduler (`packages/queue/src/start-workers.ts`). Nothing runs without it |
+| `worker` | BullMQ workers + scheduler (`packages/queue/src/start-workers.ts`). Nothing runs without it. Can be scaled (`--scale worker=2`): only one worker at a time runs the scheduler tick (a Redis lead, `packages/queue/src/leader.ts`), handed over at the next tick when it stops, within ~2.5 min if it dies |
 | `setup` | One-off on every `up`: `prisma db push` (never drops data) + the idempotent seed |
 | `postgres` | `pgvector/pgvector:pg16`, volume `postgres` |
 | `redis` | `redis:7-alpine` with AOF, volume `redis` (separate from any Redis on the host) |

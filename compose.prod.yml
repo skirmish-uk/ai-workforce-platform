@@ -71,7 +71,10 @@ services:
 
   worker:
     <<: *app
-    command: ["npx", "tsx", "packages/queue/src/start-workers.ts"]
+    # node itself, not npx: npx exits on SIGTERM without passing it on, so the worker never
+    # finished its jobs or handed the scheduler lead over (packages/queue/src/leader.ts).
+    command: ["node", "--import", "tsx", "packages/queue/src/start-workers.ts"]
+    stop_grace_period: 30s
     depends_on:
       setup: { condition: service_completed_successfully }
       redis: { condition: service_healthy }

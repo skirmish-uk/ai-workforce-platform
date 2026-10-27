@@ -53,3 +53,8 @@ backups/
 
 # ONNX Runtime files copied from node_modules by apps/web/scripts/copy-vad-runtime.mjs
 apps/web/public/vad/ort*
+
+# Personal, local only
+.claude_session
+opencode
+rag_agent_transcript.txt

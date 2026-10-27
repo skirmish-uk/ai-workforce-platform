@@ -16,7 +16,7 @@ Written 27 Oct 2026. Everything here needs your accounts, your money, your judge
 ## Accounts and providers (each one unlocks a feature that is already built)
 
 - [ ] **Business domain and mailbox** (`w1-domain`): domain, Zoho Mail Lite, MX/SPF/DKIM/DMARC records.
-  **Then:** the email connector for any mailbox (IMAP/SMTP, task 5) can be tested against it.
+  **Then:** connect it under Integrations → Other email (built 27 Oct; turn on IMAP access in Zoho first and use an app password). Claude can then run the first real-provider test and move a test agent onto it.
 - [ ] **SMTP provider** (Zoho, Postmark, SES…): put `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `EMAIL_FROM` in `.env.production`.
   **Then:** approval and "agent did something" emails switch on. Give an admin user a real address, because the demo users are never mailed.
 - [ ] **Google Cloud project in testing mode** (`w3-gcp`): Gmail and Calendar APIs, consent screen, your test accounts as test users. Add `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`. The steps are in `docs/GOOGLE_CONNECT.md`.
@@ -42,4 +42,4 @@ Written 27 Oct 2026. Everything here needs your accounts, your money, your judge
 
 - [ ] **Morgan's weekly review schedule** is seeded *inactive*. Turn it on only after you've read a few of his proposals by hand.
 - [ ] **Raising any agent's autonomy** is always your click in Approvals. Sarah and Iris went to `limited` on 27 Oct; Casey is still at `recommend`.
-- [ ] **Go-ahead for the next build items:** task 5 (IMAP/SMTP email connector) and task 6 (dry runs on 1 and 4 Nov).
+- [ ] **Go-ahead for task 6:** dry runs on 1 and 4 Nov.

@@ -3,6 +3,7 @@ import {
   calendarAdapter,
   hubspotAdapter,
   driveAdapter,
+  emailAdapter,
   type IntegrationAdapter,
   type IntegrationAction,
 } from '@ai-workforce/integrations'
@@ -22,7 +23,7 @@ export interface RegisteredTool {
   action: IntegrationAction
 }
 
-const ADAPTERS: IntegrationAdapter[] = [gmailAdapter, calendarAdapter, hubspotAdapter, driveAdapter]
+const ADAPTERS: IntegrationAdapter[] = [gmailAdapter, calendarAdapter, hubspotAdapter, driveAdapter, emailAdapter]
 
 export function slugify(name: string): string {
   return name

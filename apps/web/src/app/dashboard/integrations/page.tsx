@@ -6,6 +6,7 @@ import { Plus, Search, Plug, CheckCircle, AlertCircle, Settings, FlaskConical, U
 import Link from 'next/link'
 import { Button, Badge } from '@ai-workforce/ui'
 import { formatDate } from '@ai-workforce/ui'
+import { EmailCard } from './EmailCard'
 
 interface Integration {
   id: string
@@ -184,6 +185,8 @@ export default function IntegrationsPage() {
       )}
 
       {google && <GoogleCard status={google} onDisconnect={disconnectGoogle} busy={busy} />}
+
+      <EmailCard onChanged={fetchIntegrations} />
 
       <form onSubmit={(e) => { e.preventDefault(); setPagination(prev => ({ ...prev, page: 1 })); fetchIntegrations(); }} className="flex gap-4">
         <div className="relative flex-1 max-w-md">

@@ -35,3 +35,10 @@ test('free time on a named day: slots on that day, only inside the window, sized
   const late = sandboxExecute('google-calendar__find_free_time', { timeMin: '2026-11-03T16:45:00+11:00', timeMax: '2026-11-03T17:15:00+11:00', durationMinutes: 30 }) as Slots
   assert.deepEqual(late.slots, [])
 })
+
+test('a sandbox IMAP mailbox shows the same fictional inbox as sandbox Gmail, and changes nothing', () => {
+  const inbox = sandboxExecute('email__list_emails', { query: 'is:unread' }) as { messages: Array<{ subject: string }> }
+  assert.deepEqual(inbox.messages.map((m) => m.subject), (sandboxExecute('gmail__list_emails', { query: 'is:unread' }) as typeof inbox).messages.map((m) => m.subject))
+  assert.match(String((sandboxExecute('email__move_email', { id: 'INBOX:1', folder: 'archive' }) as { result: string }).result), /would have been moved/)
+  assert.ok((sandboxExecute('email__list_folders', {}) as { folders: unknown[] }).folders.length > 0)
+})

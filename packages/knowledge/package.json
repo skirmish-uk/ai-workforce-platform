@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@ai-workforce/db": "^0.0.1",
+    "@ai-workforce/domain": "^0.0.1",
     "openai": "^7.21.0"
   },
   "devDependencies": {

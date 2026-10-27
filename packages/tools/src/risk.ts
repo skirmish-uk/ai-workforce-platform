@@ -45,6 +45,21 @@ const PROFILES: Record<string, ToolRiskProfile> = {
     sideEffects: 'Sends an email to external recipients as the connected account. Cannot be recalled.',
   },
 
+  // Any mailbox over IMAP/SMTP (packages/integrations/src/email.ts): the same actions as Gmail,
+  // plus filing into folders.
+  email__list_emails: READ,
+  email__get_email: READ,
+  email__search_emails: READ,
+  email__list_folders: READ,
+  email__create_draft: { risk: 'draft', idempotent: false, sideEffects: 'Saves an unsent draft in the mailbox\'s Drafts folder.' },
+  email__modify_labels: { risk: 'write_reversible', idempotent: true, sideEffects: 'Adds/removes labels (flags) on a message.' },
+  email__move_email: { risk: 'write_reversible', idempotent: false, sideEffects: 'Moves a message to another folder (can be moved back).' },
+  email__send_email: {
+    risk: 'external_communication',
+    idempotent: false,
+    sideEffects: 'Sends an email to external recipients as the connected mailbox. Cannot be recalled.',
+  },
+
   // Google Calendar — creating/updating events emails invitations to attendees.
   'google-calendar__list_events': READ,
   'google-calendar__get_event': READ,

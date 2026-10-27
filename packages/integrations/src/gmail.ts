@@ -11,8 +11,8 @@ const GMAIL_SCOPES = [
 
 /** Header values must be a single line, or a value like "Hi\r\nBcc: x@y" would inject extra headers. */
 const noLineBreaks = (v: string) => !/[\r\n]/.test(v)
-const headerValue = z.string().refine(noLineBreaks, { message: 'must not contain line breaks' })
-const subjectValue = z.string().min(1).refine(noLineBreaks, { message: 'must not contain line breaks' })
+export const headerValue = z.string().refine(noLineBreaks, { message: 'must not contain line breaks' })
+export const subjectValue = z.string().min(1).refine(noLineBreaks, { message: 'must not contain line breaks' })
 
 interface MimeInput {
   to: string[]

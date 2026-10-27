@@ -120,9 +120,13 @@ const SANDBOX_NOTE = 'Sandbox connection: fictional demo data. Nothing real was 
 function simulatedWrite(toolName: string, input: Record<string, unknown>): Record<string, unknown> {
   const id = `sbx_${createHash('sha256').update(toolName + JSON.stringify(input)).digest('hex').slice(0, 10)}`
   const what: Record<string, string> = {
+    email__send_email: 'The email would have been sent.',
+    email__create_draft: 'A draft would have been created.',
+    email__modify_labels: 'The labels would have been changed.',
     gmail__send_email: 'The email would have been sent.',
     gmail__create_draft: 'A draft would have been created.',
     gmail__modify_labels: 'The labels would have been changed.',
+    email__move_email: 'The email would have been moved.',
     'google-calendar__create_event': 'The event would have been created and invitations sent.',
     'google-calendar__update_event': 'The event would have been updated and attendees notified.',
     'google-calendar__delete_event': 'The event would have been deleted.',
@@ -131,7 +135,7 @@ function simulatedWrite(toolName: string, input: Record<string, unknown>): Recor
     'hubspot-crm__create_deal': 'The deal would have been created.',
     'hubspot-crm__create_company': 'The company would have been created.',
   }
-  return { sandbox: true, id, ...(toolName === 'gmail__send_email' ? { threadId: `t-${id}` } : {}), result: what[toolName] ?? 'The action would have run.', note: SANDBOX_NOTE }
+  return { sandbox: true, id, ...(toolName === 'gmail__send_email' || toolName === 'email__send_email' ? { threadId: `t-${id}` } : {}), result: what[toolName] ?? 'The action would have run.', note: SANDBOX_NOTE }
 }
 
 /** Executes a tool against the sandbox dataset. `input` has already been validated. */
@@ -141,7 +145,10 @@ export function sandboxExecute(toolName: string, input: unknown): Record<string,
 
   if (getToolRiskProfile(toolName).risk !== 'read') return simulatedWrite(toolName, args)
 
-  switch (toolName) {
+  // A sandbox mailbox over IMAP shows the same sample inbox as sandbox Gmail.
+  switch (toolName === 'email__list_folders' ? toolName : toolName.replace(/^email__/, 'gmail__')) {
+    case 'email__list_folders':
+      return { sandbox: true, folders: ['INBOX', 'Sent', 'Drafts', 'Archive', 'Junk', 'Trash'].map((path) => ({ path, name: path, specialUse: path === 'INBOX' ? null : path })), note: SANDBOX_NOTE }
     case 'hubspot-crm__search_contacts': {
       const filters = Array.isArray(args.filters) ? (args.filters as Array<{ propertyName: string; value: string }>) : []
       const results = CONTACTS.filter((c) =>

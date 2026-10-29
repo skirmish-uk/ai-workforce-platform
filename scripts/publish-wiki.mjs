@@ -113,7 +113,9 @@ if (!git(dir, 'status', '--porcelain')) {
   console.log('The wiki is already up to date.')
   process.exit(0)
 }
-git(dir, 'commit', '-q', '-m', `Update from docs/ (${ref} ${git(ROOT, 'rev-parse', '--short', 'HEAD')})`)
+// The clone doesn't inherit this repository's local identity (user.name/email in .git/config).
+const identity = ['user.name', 'user.email'].flatMap((k) => ['-c', `${k}=${git(ROOT, 'config', k)}`])
+git(dir, ...identity, 'commit', '-q', '-m', `Update from docs/ (${ref} ${git(ROOT, 'rev-parse', '--short', 'HEAD')})`)
 git(dir, 'push', '-q', 'origin', 'HEAD')
 console.log(`Published ${pages.length} pages + Home and sidebar: https://github.com/${slug}/wiki`)
 fs.rmSync(dir, { recursive: true, force: true })

@@ -1,6 +1,6 @@
 # Things only you can do
 
-Written 27 Oct 2026. Everything here needs your accounts, your money, your judgement or another person. Claude can do the code side of each one once you've done your part (noted under **Then**). Progress on the bigger items is also tracked in the launch plan: https://claude.ai/artifact/A3TaaXNL9CHNKnF8mwXKhB
+Written 27 Oct 2026, updated 29 Oct. Everything here needs your accounts, your money, your judgement or another person. Claude can do the code side of each one once you've done your part (noted under **Then**). Progress on the bigger items is also tracked in the launch plan: https://claude.ai/artifact/A3TaaXNL9CHNKnF8mwXKhB
 
 ## Before the showcase (30 Oct) and the dry runs (1 and 4 Nov)
 
@@ -37,6 +37,17 @@ Written 27 Oct 2026. Everything here needs your accounts, your money, your judge
 - [ ] **Lawyer** (`w7-legal` → `w7-legal-final`): privacy policy, terms and DPA under the Australian Privacy Principles, published on the site. Include voice: AI disclosure, call-recording consent by state, transcripts (`v-legal`).
 - [ ] **Insurance** (`w7-insurance` → `w7-insurance-bound`): professional indemnity and cyber quotes, then cover in place.
 - [ ] **Design partners** (`w7-partners` → `w7-partners-signed`): outreach to 2–3 agencies; sign #1 with goals, a time-saved metric and a weekly feedback call, before the pilot on 9 Nov.
+
+## Before taking a client's money (Claude builds these; tracked in the launch plan's "Path to paying clients")
+
+- [ ] **Make BUSINESS_MODEL.md match the product** (`r-bm`). It says "Production Ready" and sells SSO, SOC 2, HIPAA, Salesforce/SAP/Oracle connectors and industry skill packs, none of which exist, plus six verticals when every agent so far is for a marketing agency. Your call what to cut and what to put on the roadmap.
+- [ ] **Card checkout and billing portal** (`r-checkout`): Stripe Checkout and Stripe's customer portal. Today a subscription needs a card id that no screen collects. Needs the Stripe test keys first.
+- [ ] **Enforce plan limits and rate limits** (`r-limits`): the per-plan limits in `packages/billing/src/entitlements.ts` are checked nowhere.
+- [ ] **Bill usage** (`r-usage`): voice minutes over 300 and agents over the plan.
+- [ ] **Customer data export and deletion** (`r-export`), which the privacy policy will promise.
+- [ ] **Self-serve sign-up** (`w13-selfserve`): there is no sign-up page yet.
+
+The pilot partner can be invoiced by hand, so none of these block the pilot on 9 Nov.
 
 ## Decisions for you (Claude won't do these on its own)
 

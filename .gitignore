@@ -16,6 +16,7 @@ out/
 .env
 .env.local
 .env.*.local
+.env.production
 
 # testing
 coverage/
@@ -44,3 +45,16 @@ pnpm-debug.log*
 
 # generated
 ai-workforce-platform-demo.tar.gz
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+backups/
+
+# ONNX Runtime files copied from node_modules by apps/web/scripts/copy-vad-runtime.mjs
+apps/web/public/vad/ort*
+
+# Personal, local only
+.claude_session
+opencode
+rag_agent_transcript.txt

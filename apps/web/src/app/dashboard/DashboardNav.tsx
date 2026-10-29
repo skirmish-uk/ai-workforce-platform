@@ -1,10 +1,10 @@
 'use client'
 
-import { ReactNode, useState } from 'react'
+import { ReactNode, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useSession, signOut } from 'next-auth/react'
-import { Menu, X, LogOut, User, Settings, Bot, Brain, BookOpen, Zap, Shield, BarChart2, LayoutDashboard, Building2, Users, Building } from 'lucide-react'
+import { Menu, X, LogOut, User, Settings, Bot, Brain, BookOpen, Zap, Shield, BarChart2, LayoutDashboard, Building2, Users, Building, CheckCircle2, Sparkles, Network, Workflow, Lightbulb } from 'lucide-react'
 import clsx from 'clsx'
 
 interface NavItem {
@@ -35,6 +35,11 @@ const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   LogOut,
   User,
   Settings,
+  CheckCircle2,
+  Sparkles,
+  Network,
+  Workflow,
+  Lightbulb,
 }
 
 export function DashboardNav({ 
@@ -45,6 +50,7 @@ export function DashboardNav({
   const pathname = usePathname()
   const { data: session } = useSession()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const headerHidden = useHideOnScrollDown()
 
   const user = session?.user
   const tenantName = user?.tenantSlug || 'Platform'
@@ -108,7 +114,7 @@ export function DashboardNav({
           {/* Navigation */}
           <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto" aria-label="Main">
             {navigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'))
               return (
                 <Link
                   key={item.name}
@@ -121,13 +127,13 @@ export function DashboardNav({
                   )}
                   aria-current={isActive ? 'page' : undefined}
                 >
-                  <Icon iconName={item.icon} />
+                  {Icon(item.icon)}
                   {item.name}
                 </Link>
               )
             })}
             {['PLATFORM_ADMIN', 'PLATFORM_OPERATOR'].includes(user?.role || '') && adminNavigation.map((item) => {
-              const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+              const isActive = pathname === item.href || (item.href !== '/dashboard' && pathname.startsWith(item.href + '/'))
               return (
                 <Link
                   key={item.name}
@@ -140,7 +146,7 @@ export function DashboardNav({
                   )}
                   aria-current={isActive ? 'page' : undefined}
                 >
-                  <Icon iconName={item.icon} />
+                  {Icon(item.icon)}
                   {item.name}
                 </Link>
               )
@@ -181,7 +187,7 @@ export function DashboardNav({
       {/* Main content */}
       <div className="lg:pl-64">
         {/* Top bar */}
-        <header className="sticky top-0 z-30 h-16 bg-white/80 dark:bg-neutral-900/80 backdrop-blur-sm border-b border-neutral-200 dark:border-neutral-800">
+        <header className={clsx('sticky top-0 z-30 h-16 motion-safe:transition-transform motion-safe:duration-200', headerHidden && '-translate-y-full', 'bg-white/80 dark:bg-neutral-900/80 backdrop-blur-sm border-b border-neutral-200 dark:border-neutral-800')}>
           <div className="flex items-center justify-between h-full px-4 sm:px-6 lg:px-8">
             <button
               className="lg:hidden p-2 rounded-lg text-neutral-500 hover:text-neutral-700 dark:hover:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800"
@@ -208,4 +214,42 @@ export function DashboardNav({
       </div>
     </div>
   )
+}
+
+/**
+ * The top bar gets out of the way once the page is scrolled down past it (more room for a
+ * long conversation, e.g. a call with Ava) and comes back after a short scroll up or at the top.
+ */
+function useHideOnScrollDown(): boolean {
+  const [hidden, setHidden] = useState(false)
+  useEffect(() => {
+    const BAR = 64
+    let last = window.scrollY
+    let upBy = 0
+    let frame = 0
+    const update = () => {
+      frame = 0
+      const y = window.scrollY
+      if (y <= BAR) {
+        setHidden(false)
+        upBy = 0
+      } else if (y > last) {
+        setHidden(true)
+        upBy = 0
+      } else {
+        upBy += last - y
+        if (upBy > BAR) setHidden(false)
+      }
+      last = y
+    }
+    const onScroll = () => {
+      if (!frame) frame = requestAnimationFrame(update)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => {
+      window.removeEventListener('scroll', onScroll)
+      if (frame) cancelAnimationFrame(frame)
+    }
+  }, [])
+  return hidden
 }

@@ -46,6 +46,7 @@ The **AI Workforce Platform** is a multi-tenant SaaS platform that enables busin
 | **Professional Services** | Custom agent development, onboarding, training | $200/hr |
 | **Premium Integrations** | Enterprise connectors (Salesforce, SAP, Oracle) | $199/mo each |
 | **Dedicated Infrastructure** | Single-tenant deployment, custom SLAs | Custom pricing |
+| **Voice / AI Receptionist** | Agents that talk: browser voice now, phone answering after the first pilot (see 1.4) | A$199/mo incl. 300 voice minutes, then A$0.49/min (draft) |
 
 #### Revenue Projections (Year 1)
 
@@ -55,6 +56,37 @@ The **AI Workforce Platform** is a multi-tenant SaaS platform that enables busin
 | **Avg. Contract Value** | $8,400/yr | $12,000/yr | $18,000/yr |
 | **ARR** | $420k | $1.2M | $3.6M |
 | **Gross Margin** | 78% | 82% | 85% |
+
+### 1.4 Voice: Knowledge Assistant and AI Receptionist
+
+**What it is.** Any agent can be given a voice. The first is a **Knowledge Assistant** (demo: "Ava") that answers prospects' and clients' questions from the business's own documents (services, prices, hours, process, policies) and hands everything else to a person. The next step is an **AI Receptionist** that answers the business's phone with the same knowledge, takes messages and books follow-ups through the normal approval flow. Technical design: `docs/VOICE.md`.
+
+**Why customers pay for it.** Missed and after-hours calls are lost leads, and the same questions take up staff time every day.
+
+| Vertical | What the voice agent handles |
+|---|---|
+| Real estate | Listing questions, inspection times, buyer and tenant enquiries after hours |
+| Law firms | Office information and new-matter intake routed to a lawyer (never legal advice) |
+| Insurance | Policy and claims-process questions, routing claims to the right person |
+| Marketing agencies | Service, process and package questions from prospects (the demo) |
+
+**Pricing (draft, AUD).** Voice is the only part of the product whose cost scales per minute (speech-to-text, text-to-speech, model, and later phone lines), so it is sold as an add-on with included minutes rather than inside the flat tiers:
+
+| | Price | Notes |
+|---|---|---|
+| Voice add-on | A$199/mo | 300 voice minutes included, any plan |
+| Extra minutes | A$0.49/min | |
+| Phone number (when phone launches) | to be set | carrier cost per number and per minute not yet checked |
+
+**Cost and margin (estimates, to be replaced with pilot data).** Browser voice costs about US$0.025–0.03 per minute (transcription ~US$0.003, Cartesia speech ~US$0.017, model ~US$0.005; assumptions and sources in `docs/VOICE.md` §4), about A$0.045/min at roughly A$1.50 per US$1 (check the current rate). That puts 300 included minutes at about A$14 in cost (≈93% margin). Phone calls add telephony and a real-time voice platform. A cautious US$0.15/min all-in (≈A$0.23) would give ≈66% margin on included minutes and ≈53% on overage, so phone pricing is revisited once real costs are measured. Every voice turn records its usage (`VOICE_TURN` audit rows) so pricing can be set from real data.
+
+**Requirements before selling it.**
+- Callers are told they are talking to an AI (enforced: a voice agent's greeting must say so).
+- Cloned voices only with the voice owner's written consent (enforced: recorded consent is required in the agent's settings). Stock voices by default.
+- Call-recording consent rules (vary by Australian state) and privacy-policy coverage for transcripts, checked by a lawyer before phone launch.
+- No actions mid-call: the voice agent takes the request and the action waits for approval as usual.
+
+**Roadmap.** Knowledge Assistant with browser voice: in the 30 Oct showcase. AI Receptionist (phone): after the first pilot.
 
 ### 1.3 Unit Economics
 
@@ -240,6 +272,7 @@ interface Skill {
 - Search API with filtering
 
 **Supported Formats**: PDF, Markdown, Text, HTML
+**Voice**: agents with voice enabled answer spoken questions from the same knowledge (see 1.4 and `docs/VOICE.md`)
 **Chunking Strategy**: Semantic chunking with overlap
 **Embedding Model**: Configurable (OpenAI, Cohere, local)
 

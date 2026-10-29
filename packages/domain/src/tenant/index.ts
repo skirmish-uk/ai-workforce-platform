@@ -175,7 +175,7 @@ export async function deleteTenant(tenantId: string, actorId: string) {
 export async function getTenantStats(tenantId: string) {
   const [users, agents, skills, workflows, integrations, subscription] = await Promise.all([
     prisma.user.count({ where: { tenantId } }),
-    prisma.agent.count({ where: { tenantId } }),
+    prisma.agent.count({ where: { tenantId, isCandidate: false } }),
     prisma.skill.count({ where: { tenantId } }),
     prisma.workflow.count({ where: { tenantId } }),
     prisma.integration.count({ where: { tenantId, isActive: true } }),

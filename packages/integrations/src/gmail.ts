@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { google } from 'googleapis'
-import { BaseIntegrationAdapter, IntegrationAction, IntegrationConfig, OAuthCredentials } from './base'
+import { BaseIntegrationAdapter, IntegrationAction, IntegrationConfig, OAuthCredentials, fromGoogleTokens, toGoogleCredentials } from './base'
 
 const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
@@ -8,6 +8,41 @@ const GMAIL_SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
   'https://www.googleapis.com/auth/gmail.labels',
 ]
+
+/** Header values must be a single line, or a value like "Hi\r\nBcc: x@y" would inject extra headers. */
+const noLineBreaks = (v: string) => !/[\r\n]/.test(v)
+export const headerValue = z.string().refine(noLineBreaks, { message: 'must not contain line breaks' })
+export const subjectValue = z.string().min(1).refine(noLineBreaks, { message: 'must not contain line breaks' })
+
+interface MimeInput {
+  to: string[]
+  cc?: string[]
+  bcc?: string[]
+  subject: string
+  body: string
+  bodyHtml?: string
+  inReplyTo?: string
+}
+
+/** RFC 2822 message for the Gmail API, base64url-encoded without padding. */
+export function buildMimeMessage({ to, cc, bcc, subject, body, bodyHtml, inReplyTo }: MimeInput): string {
+  const messageParts = [
+    `To: ${to.join(', ')}`,
+    cc?.length ? `Cc: ${cc.join(', ')}` : '',
+    bcc?.length ? `Bcc: ${bcc.join(', ')}` : '',
+    `Subject: ${subject}`,
+    // Threading headers so the reply joins the conversation in the recipient's client too,
+    // not only in the sender's Gmail (which threadId alone handles).
+    inReplyTo ? `In-Reply-To: ${inReplyTo}` : '',
+    inReplyTo ? `References: ${inReplyTo}` : '',
+    'MIME-Version: 1.0',
+    bodyHtml
+      ? `Content-Type: multipart/alternative; boundary="boundary"\n\n--boundary\nContent-Type: text/plain; charset="UTF-8"\n\n${body}\n\n--boundary\nContent-Type: text/html; charset="UTF-8"\n\n${bodyHtml}\n\n--boundary--`
+      : `Content-Type: text/plain; charset="UTF-8"\n\n${body}`,
+  ].filter(Boolean).join('\n')
+
+  return Buffer.from(messageParts).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
 
 export class GmailAdapter extends BaseIntegrationAdapter {
   readonly provider = 'google'
@@ -28,11 +63,12 @@ export class GmailAdapter extends BaseIntegrationAdapter {
         to: z.array(z.string().email()),
         cc: z.array(z.string().email()).optional(),
         bcc: z.array(z.string().email()).optional(),
-        subject: z.string().min(1),
+        subject: subjectValue,
         body: z.string(),
         bodyHtml: z.string().optional(),
         threadId: z.string().optional(),
-        inReplyTo: z.string().optional(),
+        /** Message-ID of the email being replied to, e.g. "<abc@mail.example.com>". */
+        inReplyTo: headerValue.optional(),
       }),
       outputSchema: z.object({
         id: z.string(),
@@ -41,20 +77,8 @@ export class GmailAdapter extends BaseIntegrationAdapter {
       }),
       execute: async (input, credentials) => {
         const gmail = this.createGmailClient(credentials)
-        const { to, cc, bcc, subject, body, bodyHtml, threadId, inReplyTo } = input as any
-
-        const messageParts = [
-          `To: ${to.join(', ')}`,
-          cc ? `Cc: ${cc.join(', ')}` : '',
-          bcc ? `Bcc: ${bcc.join(', ')}` : '',
-          `Subject: ${subject}`,
-          'MIME-Version: 1.0',
-          bodyHtml
-            ? `Content-Type: multipart/alternative; boundary="boundary"\n\n--boundary\nContent-Type: text/plain; charset="UTF-8"\n\n${body}\n\n--boundary\nContent-Type: text/html; charset="UTF-8"\n\n${bodyHtml}\n\n--boundary--`
-            : `Content-Type: text/plain; charset="UTF-8"\n\n${body}`,
-        ].filter(Boolean).join('\n')
-
-        const encodedMessage = Buffer.from(messageParts).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+        const { threadId } = input as any
+        const encodedMessage = buildMimeMessage(input as MimeInput)
 
         const requestBody: any = { raw: encodedMessage }
         if (threadId) requestBody.threadId = threadId
@@ -166,7 +190,7 @@ export class GmailAdapter extends BaseIntegrationAdapter {
         to: z.array(z.string().email()),
         cc: z.array(z.string().email()).optional(),
         bcc: z.array(z.string().email()).optional(),
-        subject: z.string().min(1),
+        subject: subjectValue,
         body: z.string(),
         bodyHtml: z.string().optional(),
       }),
@@ -179,20 +203,7 @@ export class GmailAdapter extends BaseIntegrationAdapter {
       }),
       execute: async (input, credentials) => {
         const gmail = this.createGmailClient(credentials)
-        const { to, cc, bcc, subject, body, bodyHtml } = input as any
-
-        const messageParts = [
-          `To: ${to.join(', ')}`,
-          cc ? `Cc: ${cc.join(', ')}` : '',
-          bcc ? `Bcc: ${bcc.join(', ')}` : '',
-          `Subject: ${subject}`,
-          'MIME-Version: 1.0',
-          bodyHtml
-            ? `Content-Type: multipart/alternative; boundary="boundary"\n\n--boundary\nContent-Type: text/plain; charset="UTF-8"\n\n${body}\n\n--boundary\nContent-Type: text/html; charset="UTF-8"\n\n${bodyHtml}\n\n--boundary--`
-            : `Content-Type: text/plain; charset="UTF-8"\n\n${body}`,
-        ].filter(Boolean).join('\n')
-
-        const encodedMessage = Buffer.from(messageParts).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+        const encodedMessage = buildMimeMessage(input as MimeInput)
 
         const response = await gmail.users.drafts.create({
           userId: 'me',
@@ -241,11 +252,7 @@ export class GmailAdapter extends BaseIntegrationAdapter {
       process.env.GOOGLE_REDIRECT_URI
     )
 
-    oauth2Client.setCredentials({
-      access_token: credentials.access_token,
-      refresh_token: credentials.refresh_token,
-      expiry_date: credentials.expires_at,
-    })
+    oauth2Client.setCredentials(toGoogleCredentials(credentials))
 
     return google.gmail({ version: 'v1', auth: oauth2Client })
   }
@@ -273,13 +280,7 @@ export class GmailAdapter extends BaseIntegrationAdapter {
     )
 
     const { tokens } = await oauth2Client.getToken(code)
-    return {
-      access_token: tokens.access_token!,
-      refresh_token: tokens.refresh_token,
-      expires_at: tokens.expiry_date,
-      token_type: tokens.token_type,
-      scope: tokens.scope,
-    }
+    return fromGoogleTokens(tokens)
   }
 
   async refreshToken(refreshToken: string): Promise<OAuthCredentials> {
@@ -292,13 +293,7 @@ export class GmailAdapter extends BaseIntegrationAdapter {
     oauth2Client.setCredentials({ refresh_token: refreshToken })
     const { credentials } = await oauth2Client.refreshAccessToken()
 
-    return {
-      access_token: credentials.access_token!,
-      refresh_token: credentials.refresh_token,
-      expires_at: credentials.expiry_date,
-      token_type: credentials.token_type,
-      scope: credentials.scope,
-    }
+    return fromGoogleTokens(credentials)
   }
 
   async validateCredentials(credentials: Record<string, unknown>): Promise<boolean> {

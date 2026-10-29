@@ -21,6 +21,9 @@ export default async function HomePage() {
             <span className="text-xl font-bold text-neutral-900 dark:text-neutral-50">AI Workforce</span>
           </div>
           <nav className="flex items-center gap-4">
+            <Link href="/demo" className="text-sm font-medium text-primary-600 hover:text-primary-700">
+              Demo
+            </Link>
             <Link href="/auth/signin" className="text-sm font-medium text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100">
               Sign in
             </Link>
@@ -49,7 +52,7 @@ export default async function HomePage() {
               Request a Demo
             </Link>
             <Link
-              href="#features"
+              href="/demo"
               className="w-full sm:w-auto px-8 py-3 border-2 border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 text-lg font-medium rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-900 transition-colors"
             >
               See How It Works

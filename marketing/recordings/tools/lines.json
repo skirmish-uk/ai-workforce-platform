@@ -1,0 +1,18 @@
+{
+ "narrator": {
+  "intro": "This is the AI Workforce Platform: a team of AI employees for a small business. Everything you're about to see is running live, on real models.",
+  "home": "Back on the home page, everything the team just did is already counted, from the audit trail: tasks finished, time saved, what each task costs, often less than a cent, and anything still waiting for a person.",
+  "cases": "Here's work moving through the team. A new enquiry comes in from the website. Sarah, the sales agent, qualifies the lead, drafts a reply and a CRM record, and hands the booking to Riley, who already knows Alex takes discovery calls. The whole case takes about a minute.",
+  "approvals": "Nothing goes out without a person's say-so. Every email, booking and record change waits here, with the exact content and the reason it needs approval. Reject one with a reason, and that reason becomes a lesson the agent remembers next time.",
+  "memory": "The team also learns the business. Tell one agent something once, and every agent uses it straight away. Anything a customer says waits for staff to confirm, so customers can't teach the team new rules.",
+  "voice": "Ava takes voice calls too. She answers from the business's own documents, offers real free times, and she always says she's an AI. Let's call her.",
+  "improvements": "The team improves itself. Morgan, the manager, reviews how everyone's going and proposes fixes. The platform tests every change against the live version, and only promotes it if it scores at least as well. Rolling back is one click.",
+  "onboarding": "Getting started takes minutes. Paste a business's website, and about a minute later the team knows its services, prices, hours and FAQs, lists what's missing, and suggests which agents to set up.",
+  "safety": "And people stay in control. One button stops every agent at once, backed by spend caps, approval levels, and an audit trail for every action.",
+  "outro": "That's the AI Workforce Platform. AI employees that work as a team, learn your business, and never act without your say-so."
+ },
+ "caller": {
+  "ask": "Hi there! What's included in the Growth package?",
+  "bye": "Perfect, that's everything I needed. Thanks so much, bye!"
+ }
+}

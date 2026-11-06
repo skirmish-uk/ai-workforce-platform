@@ -27,6 +27,7 @@ interface SwitchResult {
 
 const PRESETS = [
   { id: 'zoho', label: 'Zoho Mail (business)', imap: 'imappro.zoho.com', smtp: 'smtppro.zoho.com', smtpPort: 465, hint: 'Accounts outside the US data centre use regional servers (for example imappro.zoho.eu). Zoho shows yours under Settings → Mail Accounts → IMAP. Turn IMAP access on there, and use an app password if two-step sign-in is on.' },
+  { id: 'zoho-au', label: 'Zoho Mail (business, Australia)', imap: 'imappro.zoho.com.au', smtp: 'smtppro.zoho.com.au', smtpPort: 465, hint: 'For accounts in Zoho’s Australian data centre (you sign in at mail.zoho.com.au). Turn IMAP access on under Settings → Mail Accounts → IMAP, and use an app password if two-step sign-in is on.' },
   { id: 'zoho-free', label: 'Zoho Mail (free)', imap: 'imap.zoho.com', smtp: 'smtp.zoho.com', smtpPort: 465, hint: 'Check Zoho’s Settings → Mail Accounts → IMAP for your exact servers, and turn IMAP access on there.' },
   { id: 'fastmail', label: 'Fastmail', imap: 'imap.fastmail.com', smtp: 'smtp.fastmail.com', smtpPort: 465, hint: 'Use an app password (Settings → Privacy & Security → Integrations → App passwords), not your login password.' },
   { id: 'yahoo', label: 'Yahoo Mail', imap: 'imap.mail.yahoo.com', smtp: 'smtp.mail.yahoo.com', smtpPort: 465, hint: 'Yahoo needs an app password (Account security → Generate app password).' },

@@ -18,7 +18,8 @@ business per hour. **Disconnect** deletes the stored password.
 Provider notes:
 - **Zoho Mail:** turn on IMAP access (Settings → Mail Accounts → IMAP). Business accounts use
   `imappro.zoho.com` / `smtppro.zoho.com` in the US data centre; other data centres have their own
-  (e.g. `imappro.zoho.eu`), shown on that same settings page. Use an app password if two-step
+  (`imappro.zoho.com.au` for Australia, its own preset; `imappro.zoho.eu`…), shown on that same
+  settings page. Use an app password if two-step
   sign-in is on.
 - **Fastmail, Yahoo:** an app password is required.
 - **"Keep a copy of sent email in Sent":** most hosts don't file mail sent over SMTP; turn it off

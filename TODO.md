@@ -1,11 +1,11 @@
 # Things only you can do
 
-Written 27 Oct 2026, updated 29 Oct. Everything here needs your accounts, your money, your judgement or another person. Claude can do the code side of each one once you've done your part (noted under **Then**). Progress on the bigger items is also tracked in the launch plan: https://claude.ai/artifact/A3TaaXNL9CHNKnF8mwXKhB
+Written 27 Oct 2026, updated 6 Nov. Everything here needs your accounts, your money, your judgement or another person. Claude can do the code side of each one once you've done your part (noted under **Then**). Progress on the bigger items is also tracked in the launch plan: https://claude.ai/artifact/A3TaaXNL9CHNKnF8mwXKhB
 
 ## Before the showcase (30 Oct) and the dry runs (1 and 4 Nov)
 
 - [ ] **Turn on alerts.** Pick an ntfy topic (e.g. `https://ntfy.sh/<something-long-and-random>`), install the ntfy app and subscribe to it, then add `ALERT_WEBHOOK_URL=<that url>` to `/srv/demo/.env.production` and run `scripts/demo-deploy.sh restart`. A Slack or Discord webhook works too. Until then, "site down", "backup missed" and "new server error" alerts only go to the server logs.
-- [ ] **Add an outside uptime check** (free tier on UptimeRobot or Better Stack) on `https://khkewhglkw.site/api/health`. Give it the site's Basic auth login (`demo` + the site password). The built-in monitor runs on the same server, so it can't tell you when the whole server is down.
+- [ ] **Add an outside uptime check** (free tier on UptimeRobot or Better Stack) on `https://khkewhglkw.site/api/health`. `/api/health` doesn't need the site password (checked 6 Nov). The built-in monitor runs on the same server, so it can't tell you when the whole server is down.
 - [ ] **Listen to Ava on a real microphone** at least once (Talk panel on her agent page): greeting, a question, interrupting her, hanging up.
 - [ ] **Rehearse the full showcase twice, timed** (launch plan `w5-rehearse`), using the in-app Demo guide, with a plan for a slow approval email. Run `npm run demo:reset` on the server before each one (`scripts/demo-deploy.sh reset-demo`).
 - [ ] **Re-record the self-repair fallback video with a voice-over.** `marketing/recordings/self-repair-fallback.mp4` is still the old silent one.
@@ -28,10 +28,12 @@ Written 27 Oct 2026, updated 29 Oct. Everything here needs your accounts, your m
   **Then:** one real subscription end to end, then refund it.
 - [ ] **Off-server backup storage:** an S3-compatible bucket (Backblaze B2, Cloudflare R2…) and an access key.
   **Then:** nightly backups get copied off the VPS. Today they only live on the VPS (14 days, restore-tested).
-- [ ] **Cartesia plan** with enough characters for the demos and pilot. Live is capped at 200k characters a month platform-wide and 150k for the demo tenant.
+- [x] **Cartesia plan:** Pro, 100K credits a month (6 Nov). Live caps lowered to match: 95,000 characters a month platform-wide (`CARTESIA_MONTHLY_CHARACTER_LIMIT`) and 90,000 for the demo tenant. October used 58,746. Upgrade the plan before raising them.
 - [ ] **Twilio number**, only when you want the AI Receptionist phone prototype (`v-reception`).
 
 ## Business (people outside the team, start early)
+
+Company setup, the lawyer and insurance are being handled by someone else (6 Nov).
 
 - [ ] **Company setup** (`w6-company`): Pty Ltd and ABN, business bank, Stripe Australia account.
 - [ ] **Lawyer** (`w7-legal` → `w7-legal-final`): privacy policy, terms and DPA under the Australian Privacy Principles, published on the site. Include voice: AI disclosure, call-recording consent by state, transcripts (`v-legal`).

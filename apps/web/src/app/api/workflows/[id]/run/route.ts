@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { hasPermission, canAccessTenant } from '@ai-workforce/domain'
+import { enqueueWorkflowRun } from '@ai-workforce/queue'
 import { UserRole } from '@prisma/client'
 
 export async function POST(
@@ -52,6 +53,10 @@ export async function POST(
         newData: { workflowId: workflow.id, input },
       },
     })
+
+    // Execution happens off the request path: a worker process picks this up and
+    // drives WorkflowRun through RUNNING -> COMPLETED/FAILED/APPROVAL_REQUIRED.
+    await enqueueWorkflowRun({ workflowRunId: run.id })
 
     return NextResponse.json({ runId: run.id, status: 'PENDING' }, { status: 201 })
   } catch (error) {

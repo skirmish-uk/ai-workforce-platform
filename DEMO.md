@@ -37,7 +37,7 @@ Open **http://127.0.0.1:3000** in your browser
 
 **What to See**:
 1. **Dashboard** - Your agency's metrics (1 active agent, 2 skills, 3 knowledge docs)
-2. **Agents** → "Sarah - Sales Assistant" (DRAFT status)
+2. **Agents** → "Sarah - Sales Assistant" (live: deployed through the validation gate)
    - Click to configure: role, mission, system prompt, model
    - Skills tab: 2 skills attached (lead_follow_up, email_triage)
    - Knowledge tab: 3 docs attached
@@ -135,23 +135,86 @@ curl -b demo_cookies.txt -X POST http://127.0.0.1:3000/api/agents \
 |--------|-------|---------|
 | **Tenants** | 2 | `platform` (admin), `demo-agency` (customer) |
 | **Users** | 3 | Platform admin, demo admin, demo staff |
-| **Agents** | 1 | "Sarah - Sales Assistant" (DRAFT) |
-| **Skills** | 2 | `lead_follow_up`, `email_triage` (v1.0.0) |
-| **Knowledge Docs** | 3 | Company overview, ICP, pricing |
-| **Integrations** | 2 | Gmail, HubSpot (OAuth configured) |
+| **Agents** | 6 | Sarah (sales), Morgan (manager / front desk), Ava (client questions, voice), Riley (meeting scheduler), Iris (inbox triage), Casey (CRM hygiene) |
+| **Skills** | 7 | `lead_follow_up`, `email_triage`, `answer_client_questions`, `schedule_meeting`, `inbox_triage`, `crm_hygiene` (+ any versions made by revisions) |
+| **Knowledge Docs** | 4 | Company overview, ICP, pricing, client FAQ |
+| **Integrations** | 3 | Gmail, HubSpot, Google Calendar, all in sandbox mode (fictional data, nothing sent) |
 | **Subscription** | 1 | Growth plan, ACTIVE |
-| **Skills on Agent** | 2 | Both skills enabled on Sarah |
+
+### The showcase team
+
+| Agent | Starts at | Try |
+|---|---|---|
+| Riley - Meeting Scheduler | approval_gated: every invite waits in Approvals | "Book a 30-minute discovery call with Maria Gonzalez (maria@cloudnine-analytics.example) tomorrow at 10am" |
+| Iris - Inbox Triage | limited (since 27 Oct): applies labels herself and the team is told afterwards; anything that sends still waits for approval | "Triage my unread inbox" |
+| Casey - CRM Hygiene | recommend: reports problems and fixes, changes nothing | "Run a CRM hygiene check" (finds the duplicate Tom Lee record) |
+
+**Sarah** is also at `limited` since 27 Oct: she creates and updates CRM records herself, and every email she drafts still waits in Approvals. Both moves were Workforce Manager revisions that passed their test suites at 100% on the real model and were approved by a person; `npm run demo:reset` keeps them, `--full` goes back to the seeded stages.
+
+All three are also reachable through Morgan's "Ask the team". Their test suites (4, 3 and 3 cases) passed against `claude-haiku-5-5` on 13 Oct 2026, and again on 18 Oct (`npx tsx scripts/run-evals.ts --all`).
+
+**Ava** (client questions, voice) speaks with Cartesia's Australian "Bronte" voice and runs on `claude-haiku-5-5`. Besides answering from the documents she can check the calendar's free time and offer slots ("Tuesday at 10am or Wednesday at 2pm"); she never books, and says a person will confirm. Try in the Talk panel: "What are your opening hours?", "Could I come in for a chat this week?", "How much is the Growth package?".
+
+### Demo guide
+
+Signed in to the demo business, every dashboard page has a **Demo guide** button (bottom right): the walkthrough below as an 8-step checklist with where to go, what to do and what to say. Ticks are kept in that browser; the reset icon starts again.
+
+### The team working together (Team cases)
+
+1. **Team cases** → **New enquiry from the website (Sarah)**. Watch the case live: Sarah qualifies Daniel from Stackwise, creates the CRM record herself, drafts the reply (held for approval) and hands the booking to Riley, who prepares the invite with Alex Chen (from what the team knows). About a minute in all.
+2. **Sort this morning's inbox (Iris)**: Iris hands the CloudNine lead to Sarah and the urgent legal email to a person. If an agent stops to ask something, answer it in the case and it carries on.
+3. Approve the waiting actions on **Approvals**; the case turns Done.
+
+### The team learning (What the team knows)
+
+1. Open an agent (e.g. Ava) and type: "Heads up for the team: from 1 December our office hours change to 8:30am to 4:30pm." She saves it as staff knowledge.
+2. **What the team knows**: the note is there, used by every agent. Ask Riley to book something at 4:45pm on a December weekday: he refuses, citing the new hours.
+3. Say the same thing on a voice call ("I'm the owner…"): it arrives as **waiting for you**, unused until you confirm it. Callers can't be verified, so customers can't teach the team rules.
+4. Reject an approval with a reason: Approvals confirms it is now a lesson for that agent, listed under **What the team knows** ("Lesson for Riley"). The same reason given again stays one lesson.
+
+### Onboarding from a website
+
+**Onboarding** → "Learn from your website" → paste a business's site (the prospect's own works best) → about a minute later, review what the team learned: services and prices, hours, FAQs, notes for memory, what the site doesn't say, and a suggested team with "Set up" links. Apply adds it; **Undo** (same card, or "Earlier imports") takes it back, so the demo agency's own profile is safe. Leave "Use this as the business profile" unticked on the demo tenant unless you mean to replace it.
+
+### Kill switch
+
+**Stop all agents** on the Team page (admins only) stops every agent at once: new runs end as "Blocked" and approved actions don't execute. A red banner stays on the Team page until you press **Turn agents back on**. Same switch as `PUT /api/tenants/[id]/kill-switch`; every change is in the audit trail.
+
+### Self-repair (staged)
+
+**Jordan - Website Enquiries** carries a deliberate flaw: its playbook predates the agency's rule that first replies never quote prices, so every draft reply lists the price list. To stage it, at least 10 minutes before the moment and with the worker running:
+
+```bash
+npm run demo:reset           # puts Jordan's flaw back (also clears earlier rehearsals)
+npm run demo:stage-repair    # Jordan answers 3 enquiries; the admin rejects each draft:
+                             # "We don't quote prices in a first reply..."   (~$0.002)
+# on the server: scripts/demo-deploy.sh reset-demo && scripts/demo-deploy.sh stage-repair
+```
+
+Three rejected approvals out of three crosses the review threshold. On the next 10-minute check the scheduler starts Morgan's automatic repair review by itself (rehearsed 25 Oct: 6 minutes after staging). Tell it that way ("Morgan noticed on his own"). Check Jordan's card on the Team page before pressing **Review the team now**: if it already says a change is being tested, don't press it, or Morgan will only report that a fix is already in flight. Testing the change (evaluation suite plus replay) took under 2 minutes on 25 Oct, so the fix is usually live about 8 minutes after staging; stage 10 to 15 minutes before the moment. Then show:
+1. Team page: Jordan "needs attention" while Morgan works, then "Fixed, being watched" once the change is live (health is judged on the current version), and Morgan's report under Recent manager activity.
+2. Improvements page: Morgan's proposed playbook change, with a new test case that reproduces the rejected drafts, the evaluation results and the replay, then promotion as Jordan v2.
+3. Ask Jordan to answer a new enquiry like the staged ones, e.g. `Website form from Tom Nguyen <tom@brightside-cafe.example>: "Hi, we have two cafes and want more people finding us on Google. Can you help, and how does it work?"` The draft offers a call and has no prices. (Avoid enquiries asking for a custom quote: Jordan's rules hand those to a person.)
+4. Roll back on the Improvements page: open Jordan's change, type a short reason, **Roll back**. Jordan is back on his original playbook at once (the page shows a new version number, v3: versions only count up).
+
+The model can take a different path (for example fix a different detail, or ask a person first), so keep a recording of a good rehearsal as a fallback.
 
 ---
 
 ## Reset Demo Data
 
+Before every demo, from the repo root:
+
 ```bash
-cd packages/db
-DATABASE_URL="postgresql://postgres:postgres@localhost:5433/ai_workforce?schema=public" \
-npx prisma migrate reset --force
-npx prisma db seed
+npm run demo:reset              # clear runs, approvals, audit trail and anything created during demos;
+                                # agents keep their tested upgrades (Sarah stays on her current version)
+npm run demo:reset -- --dry-run # show what would be removed first
+npm run demo:reset -- --full    # delete the demo tenant and reseed from scratch (agents back to v1,
+                                # knowledge re-embedded if OPENAI_API_KEY is set)
+npm run demo:deploy             # deploy any demo agent that isn't live (the reset does this itself)
 ```
+
+It only touches the `demo-agency` tenant and refuses to run against a non-local database. Promoted upgrades are kept, except Jordan's: Jordan always goes back to the flawed version 1 so the self-repair moment can be shown again. After reseeding, the reset deploys the team again through the same checks as the Deploy button (contract, playbooks with owners and test cases, model key), so every agent shows as **live**; `--no-deploy` leaves them in draft. Deploying changes no permissions or autonomy. Restart the worker afterwards if it was running. Clearing the audit trail also resets the demo tenant's spend toward its cost cap.
 
 ---
 

@@ -158,7 +158,8 @@ const columns = [
   },
 ]
 
-export default async function RequestsPage({ searchParams }: { searchParams: { page?: string; search?: string; tenantId?: string; status?: string } }) {
+export default async function RequestsPage({ searchParams: searchParamsPromise }: { searchParams: Promise<{ page?: string; search?: string; tenantId?: string; status?: string }> }) {
+  const searchParams = await searchParamsPromise
   const data = await getRequests(searchParams)
 
   return (

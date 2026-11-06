@@ -3,12 +3,14 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { hasPermission, canAccessTenant } from '@ai-workforce/domain'
-import { updateAgentSchema } from '@ai-workforce/domain'
+import { redact, updateAgentSchema } from '@ai-workforce/domain'
+import { resolveAgentContract } from '@ai-workforce/executor'
 import { UserRole } from '@prisma/client'
 
 async function checkAgentAccess(session: { user: { id: string; role: string; tenantId: string } }, agentId: string) {
   const agent = await prisma.agent.findUnique({ where: { id: agentId } })
-  if (!agent) throw new Error('NOT_FOUND')
+  // Revision sandboxes (isCandidate) are internal to the revision pipeline.
+  if (!agent || agent.isCandidate) throw new Error('NOT_FOUND')
   
   if (!canAccessTenant(session.user.role as UserRole, session.user.tenantId, agent.tenantId)) {
     throw new Error('FORBIDDEN')
@@ -82,10 +84,31 @@ export async function PUT(
     const body = await request.json()
     const validated = updateAgentSchema.parse(body)
 
+    // PRODUCTION/EVALUATING are only reachable through the deploy flow, which validates the
+    // contract and evaluation evidence. PUT may still pause, archive or return to draft (kill switch).
+    if (validated.status === 'PRODUCTION' || validated.status === 'EVALUATING') {
+      return NextResponse.json({ error: `Use POST /api/agents/${id}/deploy to move an agent to ${validated.status}` }, { status: 400 })
+    }
+
+    if (validated.config !== undefined) {
+      const contractCheck = resolveAgentContract({ config: validated.config as any, mission: validated.mission ?? agent.mission })
+      if (contractCheck.errors.length) {
+        return NextResponse.json({ error: 'Invalid agent contract', details: contractCheck.errors }, { status: 400 })
+      }
+    }
+
+    // A material change (prompt, model, contract/config, skills) is a new agent version. Evaluation
+    // evidence is pinned to a version, so limited/expanded autonomy drops back to approval-gated
+    // until the new version is re-evaluated.
+    const material = (['systemPrompt', 'mission', 'role', 'modelProvider', 'modelName', 'modelConfig', 'config', 'skills'] as const).filter(
+      (key) => validated[key] !== undefined && JSON.stringify(validated[key]) !== JSON.stringify((agent as Record<string, unknown>)[key])
+    )
+
     const updatedAgent = await prisma.agent.update({
       where: { id },
       data: {
         ...validated,
+        ...(material.length ? { version: { increment: 1 } } : {}),
         modelConfig: validated.modelConfig as any,
         config: validated.config as any,
         skills: validated.skills ? {
@@ -103,7 +126,8 @@ export async function PUT(
         entityId: id,
         tenantId: agent.tenantId,
         userId: session.user.id,
-        newData: updatedAgent as any,
+        oldData: redact(agent) as any,
+        newData: redact({ ...updatedAgent, materialChanges: material }) as any,
       },
     })
 

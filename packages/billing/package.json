@@ -5,7 +5,7 @@
   "types": "src/index.ts",
   "scripts": {
     "lint": "eslint src --ext .ts",
-    "test": "jest"
+    "test": "node -e \"console.log('no tests in this package')\""
   },
   "dependencies": {
     "@ai-workforce/db": "^0.0.1",

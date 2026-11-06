@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
 }
 
 enum UserRole {
@@ -90,8 +92,15 @@ model Tenant {
 
   users             User[]
   agents            Agent[]
+  notifications     Notification[]
+  handovers         Handover[]
+  memories          Memory[]
+  teamCases         TeamCase[]
+  agentTasks        AgentTask[]
+  websiteImports    WebsiteImport[]
   skills            Skill[]
   knowledgeDocs     KnowledgeDocument[]
+  knowledgeChunks   KnowledgeChunk[]
   workflows         Workflow[]
   workflowRuns      WorkflowRun[]
   integrations      Integration[]
@@ -102,6 +111,7 @@ model Tenant {
   approvals         Approval[]
   apiKeys           ApiKey[]
   incidents         Incident[]
+  agentRevisions    AgentRevision[]
 
   @@index([slug])
 }
@@ -194,6 +204,9 @@ model Agent {
   status          AgentStatus @default(DRAFT)
   version         Int         @default(1)
   config          Json        @default("{}")
+  /// Sandbox copy made by the revision pipeline to evaluate a proposed change
+  /// (packages/executor/src/workforce). Never listed, scheduled or deployed.
+  isCandidate     Boolean     @default(false)
   createdAt       DateTime    @default(now())
   updatedAt       DateTime    @updatedAt
   deployedAt      DateTime?
@@ -210,6 +223,7 @@ model Agent {
   schedules       Schedule[]
   evaluations     Evaluation[]
   deployments     Deployment[]
+  revisions       AgentRevision[]
 
   @@index([tenantId])
   @@index([status])
@@ -270,7 +284,28 @@ model KnowledgeDocument {
   tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
 
   sources     AgentKnowledgeSource[]
+  chunks      KnowledgeChunk[]
 
+  @@index([tenantId])
+}
+
+model KnowledgeChunk {
+  id         String   @id @default(cuid())
+  chunkIndex Int
+  content    String   @db.Text
+  tokenCount Int      @default(0)
+  metadata   Json     @default("{}")
+  /// pgvector column (1536 dims, text-embedding-3-small). Not queryable through
+  /// the generated client — written/read via raw SQL in packages/knowledge.
+  embedding  Unsupported("vector(1536)")?
+  createdAt  DateTime @default(now())
+
+  documentId String
+  document   KnowledgeDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  tenantId   String
+  tenant     Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([documentId])
   @@index([tenantId])
 }
 
@@ -368,6 +403,176 @@ model AgentPermission {
   @@index([agentId])
 }
 
+/// One row per notification the platform sent (or skipped), keyed by what it was about, so the
+/// worker's sweep never announces the same event twice (packages/executor/src/notifications).
+/// Approvals use Approval.notifiedAt instead.
+model Notification {
+  id        String   @id @default(cuid())
+  /// e.g. "agent_action" (a NOTIFY-level tool call that ran).
+  kind      String
+  /// What it is about: for agent_action, the AuditLog id of the tool call.
+  sourceId  String
+  /// PENDING (claimed) -> SENT | SKIPPED | FAILED
+  status    String   @default("PENDING")
+  detail    Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([kind, sourceId])
+  @@index([tenantId, createdAt])
+}
+
+/// Work an agent handed to a person (platform__escalate): what was asked, why the agent stopped,
+/// who it is for, and whether someone has dealt with it. Created by runAgent for real runs (never
+/// test or replay runs), listed in the dashboard's Approvals inbox, emailed by the worker's sweep.
+model Handover {
+  id             String    @id @default(cuid())
+  agentId        String
+  runId          String    @unique
+  task           String    @db.Text
+  reason         String    @db.Text
+  severity       String    @default("medium")
+  /// The agent contract's escalation destination at the time (usually an email address).
+  destination    String
+  /// OPEN -> RESOLVED
+  status         String    @default("OPEN")
+  resolutionNote String?   @db.Text
+  resolvedById   String?
+  resolvedAt     DateTime?
+  notifiedAt     DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+}
+
+/// Something the team has learned about the business (packages/executor/src/memory.ts): a fact,
+/// preference, rule or correction, shared by every agent in the tenant that has memory on. Agents
+/// save them with platform__remember; staff add, edit, confirm and archive them on
+/// /dashboard/memory. What an agent learned from outside content (a customer, an email) that would
+/// change how the whole team works starts PENDING and is only used once a person confirms it.
+model Memory {
+  id           String    @id @default(cuid())
+  content      String    @db.Text
+  /// customer | preference | business | process | correction
+  category     String    @default("business")
+  /// Who or what it is about ("Henderson Family Dental", a contact email); null = the business itself.
+  subject      String?
+  /// ACTIVE (used by agents) | PENDING (waiting for a person to confirm) | ARCHIVED
+  status       String    @default("ACTIVE")
+  /// staff (a person wrote or confirmed it) | agent (an agent concluded it from its own work) | external (said by a customer or found in an email)
+  trust        String    @default("agent")
+  /// Only this agent uses it (a lesson for one agent); null = the whole team.
+  agentId      String?
+  /// Where it came from: { kind, runId?, conversationId?, approvalId?, caseId? }
+  source       Json      @default("{}")
+  /// The agent that saved it (null when a person did).
+  learnedById  String?
+  createdById  String?
+  reviewedById String?
+  reviewedAt   DateTime?
+  /// The memory this one replaced (archived when this one became active).
+  replacesId   String?
+  useCount     Int       @default(0)
+  lastUsedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, subject])
+}
+
+/// One piece of work moving through the team (packages/executor/src/handoffs.ts): an enquiry, an
+/// inbox sweep, a booking. Each agent's part is an AgentTask; the case page shows them in order.
+model TeamCase {
+  id          String      @id @default(cuid())
+  title       String
+  /// OPEN | WAITING (on a person: approval, question, hand-over) | DONE | FAILED
+  status      String      @default("OPEN")
+  /// manual | email | voice | schedule | web
+  source      String      @default("manual")
+  /// Who it is about, when known (a customer or company).
+  subject     String?
+  createdById String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  tenantId    String
+  tenant      Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tasks       AgentTask[]
+
+  @@index([tenantId, updatedAt])
+}
+
+/// One agent's part of a case: given by a person or handed over by another agent
+/// (platform__hand_off), run in the worker as its own agent run.
+model AgentTask {
+  id           String    @id @default(cuid())
+  /// What the agent is asked to do, in the words of whoever handed it over.
+  brief        String    @db.Text
+  /// Why it went to this agent (the hand-off reason).
+  reason       String?   @db.Text
+  /// QUEUED | RUNNING | DONE | WAITING_APPROVAL | NEEDS_INFO | ESCALATED | FAILED | CANCELLED
+  status       String    @default("QUEUED")
+  toAgentId    String
+  /// The agent that handed it over (null: a person or the platform).
+  fromAgentId  String?
+  /// The run that handed it over, and the run that did it (run id == BullMQ job id).
+  fromRunId    String?
+  runId        String?   @unique
+  parentTaskId String?
+  /// Hand-offs between this task and the start of the case (0 = started by a person).
+  depth        Int       @default(0)
+  /// The agent's answer, or why it stopped.
+  result       String?   @db.Text
+  approvalId   String?
+  createdById  String?
+  createdAt    DateTime  @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  caseId       String
+  case         TeamCase  @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  tenantId     String
+  tenant       Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([caseId, createdAt])
+  @@index([tenantId, status])
+}
+
+/// Learning a business from its public website (packages/executor/src/onboarding.ts): the pages
+/// read, the profile drafted from them, and whether a person applied it.
+model WebsiteImport {
+  id          String    @id @default(cuid())
+  url         String
+  /// READING -> READY (profile drafted, waiting for review) -> APPLIED | FAILED
+  status      String    @default("READING")
+  /// [{ url, title, chars }]
+  pages       Json      @default("[]")
+  /// The drafted profile (see onboarding.ts WebsiteProfile).
+  profile     Json?
+  error       String?
+  costUsd     Float?
+  createdById String?
+  appliedById String?
+  appliedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+}
+
 model ApprovalPolicy {
   id          String        @id @default(cuid())
   name        String
@@ -394,11 +599,21 @@ model Approval {
   decidedById   String?
   decidedAt     DateTime?
   reason        String?
+  /// PENDING -> APPROVED/REJECTED/EXPIRED; APPROVED -> EXECUTED/EXECUTION_FAILED once the
+  /// exact approved tool call has run (packages/executor/src/approvals.ts).
+  status        String        @default("PENDING")
+  expiresAt     DateTime?
+  /// Agent + run that requested it. Lets ad-hoc and scheduled runs (no WorkflowRun) persist approvals.
+  agentId       String?
+  runId         String?
+  /// When the approvers were emailed (or the email was skipped). Set once by the worker's
+  /// notification sweep, so an approval is never announced twice (packages/executor/src/notifications).
+  notifiedAt    DateTime?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  workflowRunId String
-  workflowRun   WorkflowRun   @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+  workflowRunId String?
+  workflowRun   WorkflowRun?  @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
   tenantId      String
   tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   userId        String?
@@ -407,6 +622,8 @@ model Approval {
   @@index([workflowRunId])
   @@index([tenantId])
   @@index([decision])
+  @@index([status])
+  @@index([agentId])
 }
 
 model EscalationRule {
@@ -433,6 +650,7 @@ model Schedule {
   timezone    String   @default("UTC")
   payload     Json     @default("{}")
   isActive    Boolean  @default(true)
+  lastRunAt   DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -450,12 +668,58 @@ model Evaluation {
   results     Json?
   score       Float?
   passed      Boolean?
+  /// Agent.version the suite ran against — promotion gates only accept evidence for the current version.
+  agentVersion Int?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   agentId     String
   agent       Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
 
+  @@index([agentId])
+}
+
+/// A proposed change to the workforce (create / update / retire an agent), made by the
+/// Workforce Manager agent or a human, and its path through the revision pipeline:
+/// PROPOSED -> EVALUATING -> (AWAITING_APPROVAL) -> PROMOTED -> (ROLLED_BACK)
+/// or FAILED / REJECTED / EXPIRED / SUPERSEDED / BLOCKED. See docs/WORKFORCE_MANAGER.md.
+model AgentRevision {
+  id                String    @id @default(cuid())
+  changeType        String
+  status            String    @default("PROPOSED")
+  rationale         String    @db.Text
+  /// What the proposer asked for (redacted copy).
+  changes           Json      @default("{}")
+  /// Full desired agent definition after the change.
+  spec              Json?
+  /// Definition before the change, used for rollback.
+  previousSpec      Json?
+  /// { violations: [], riskIncreases: [] } from the invariant check.
+  risk              Json      @default("{}")
+  /// Candidate evaluation, baseline comparison, replay and watch results.
+  results           Json      @default("{}")
+  baseVersion       Int?
+  promotedVersion   Int?
+  candidateAgentId  String?
+  createdSkillIds   String[]  @default([])
+  approvalId        String?
+  baselineMetrics   Json?
+  error             String?   @db.Text
+  proposedByAgentId String?
+  proposedByUserId  String?
+  proposedByRunId   String?
+  promotedAt        DateTime?
+  watchUntil        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  /// Target agent. Null for a "create" until it is promoted.
+  agentId           String?
+  agent             Agent?    @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  tenantId          String
+  tenant            Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
   @@index([agentId])
 }
 
@@ -595,6 +859,9 @@ model AuditLog {
   oldData     Json?
   newData     Json?
   metadata    Json     @default("{}")
+  /// Hidden from the agent's "Recent runs" list by a person. The row itself is kept: spend caps,
+  /// metrics and the Workforce Manager still read it (AGENT_RUNS_HIDDEN records who hid what).
+  hiddenAt    DateTime?
   ipAddress   String?
   userAgent   String?
   createdAt   DateTime @default(now())

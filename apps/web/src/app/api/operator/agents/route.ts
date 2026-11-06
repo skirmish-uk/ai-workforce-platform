@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
     const tenantId = searchParams.get('tenantId') || undefined
 
     const where = {
+      isCandidate: false,
       ...(tenantId ? { tenantId } : {}),
       ...(search ? {
         OR: [

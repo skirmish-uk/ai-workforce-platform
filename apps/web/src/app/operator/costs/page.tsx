@@ -56,7 +56,8 @@ function CostsSkeleton() {
   )
 }
 
-export default async function CostsPage({ searchParams }: { searchParams: { page?: string; tenantId?: string } }) {
+export default async function CostsPage({ searchParams: searchParamsPromise }: { searchParams: Promise<{ page?: string; tenantId?: string }> }) {
+  const searchParams = await searchParamsPromise
   const data = await getCosts(searchParams)
 
   return (

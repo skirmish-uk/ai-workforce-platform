@@ -35,6 +35,40 @@ export interface OAuthCredentials {
   expires_at?: number
   token_type?: string
   scope?: string
+  // Index signature so concrete adapters (whose exchangeCode/refreshToken narrow the
+  // return type to OAuthCredentials) stay structurally assignable to IntegrationAdapter,
+  // whose interface commits to Promise<Record<string, unknown>>.
+  [key: string]: unknown
+}
+
+/** Normalizes Google's nullable OAuth2Client token fields into OAuthCredentials. */
+export function fromGoogleTokens(tokens: {
+  access_token?: string | null
+  refresh_token?: string | null
+  expiry_date?: number | null
+  token_type?: string | null
+  scope?: string | null
+}): OAuthCredentials {
+  return {
+    access_token: tokens.access_token ?? '',
+    refresh_token: tokens.refresh_token ?? undefined,
+    expires_at: tokens.expiry_date ?? undefined,
+    token_type: tokens.token_type ?? undefined,
+    scope: tokens.scope ?? undefined,
+  }
+}
+
+/** Reconstructs the shape google.auth.OAuth2Client.setCredentials() expects from stored JSON credentials. */
+export function toGoogleCredentials(credentials: Record<string, unknown>): {
+  access_token?: string
+  refresh_token?: string
+  expiry_date?: number
+} {
+  return {
+    access_token: typeof credentials.access_token === 'string' ? credentials.access_token : undefined,
+    refresh_token: typeof credentials.refresh_token === 'string' ? credentials.refresh_token : undefined,
+    expiry_date: typeof credentials.expires_at === 'number' ? credentials.expires_at : undefined,
+  }
 }
 
 export class BaseIntegrationAdapter implements IntegrationAdapter {

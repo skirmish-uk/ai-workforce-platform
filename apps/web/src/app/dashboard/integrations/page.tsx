@@ -2,10 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
-import { Plus, Search, Shield, Plug, MoreVertical, Trash2, CheckCircle, AlertCircle, Settings } from 'lucide-react'
+import { Plus, Search, Plug, CheckCircle, AlertCircle, Settings, FlaskConical, Unplug } from 'lucide-react'
 import Link from 'next/link'
 import { Button, Badge } from '@ai-workforce/ui'
 import { formatDate } from '@ai-workforce/ui'
+import { EmailCard } from './EmailCard'
 
 interface Integration {
   id: string
@@ -14,6 +15,71 @@ interface Integration {
   isActive: boolean
   scopes: string[]
   createdAt: string
+  config?: { sandbox?: boolean; connectedAccount?: string | null }
+}
+
+interface GoogleStatus {
+  configured: boolean
+  encryption: boolean
+  canManage: boolean
+  redirectUri: string
+  services: Array<{ service: 'gmail' | 'calendar'; name: string; state: 'connected' | 'sandbox' | 'not_connected'; account: string | null; connectedAt: string | null }>
+}
+
+/** What came back from Google (?google=… on the redirect), in plain words. */
+const GOOGLE_OUTCOMES: Record<string, { tone: 'ok' | 'bad'; text: string }> = {
+  connected: { tone: 'ok', text: 'Google connected. Agents now use your real mailbox and calendar; every send and invite still waits for approval.' },
+  not_configured: { tone: 'bad', text: 'Google sign-in isn’t set up on this server yet: add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to .env (see docs/ONBOARDING.md).' },
+  cancelled: { tone: 'bad', text: 'Google connection cancelled. Nothing was changed.' },
+  invalid_state: { tone: 'bad', text: 'That sign-in link expired or was started by someone else. Please try again.' },
+  no_refresh_token: { tone: 'bad', text: 'Google didn’t return a long-lived token. Remove this app’s access at myaccount.google.com/permissions and connect again.' },
+  scopes_not_granted: { tone: 'bad', text: 'No access was granted: tick the Gmail and Calendar boxes on Google’s screen to connect them.' },
+  no_encryption_key: { tone: 'bad', text: 'Credentials can’t be stored: CREDENTIALS_ENCRYPTION_KEY is not set on the server.' },
+  exchange_failed: { tone: 'bad', text: 'Google rejected the sign-in (check the redirect URI and client secret). Nothing was stored.' },
+}
+
+function GoogleCard({ status, onDisconnect, busy }: { status: GoogleStatus; onDisconnect: () => void; busy: boolean }) {
+  const anyConnected = status.services.some((s) => s.state === 'connected')
+  const label = { connected: 'Connected', sandbox: 'Sandbox (demo data)', not_connected: 'Not connected' } as const
+  const variant = { connected: 'success', sandbox: 'info', not_connected: 'default' } as const
+  return (
+    <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-start gap-3 min-w-0">
+        <div className="w-10 h-10 shrink-0 rounded-lg bg-primary-100 dark:bg-primary-900/30 flex items-center justify-center">{providerIcons.google}</div>
+        <div className="min-w-0">
+          <h2 className="font-semibold text-neutral-900 dark:text-neutral-50">Google Workspace / Gmail</h2>
+          <p className="text-sm text-neutral-600 dark:text-neutral-400">Lets agents read and draft email and book meetings in your own account. Sending and invitations always wait for your approval.</p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            {status.services.map((s) => (
+              <Badge key={s.service} variant={variant[s.state]}>
+                {s.name}: {label[s.state]}{s.account ? ` as ${s.account}` : ''}
+              </Badge>
+            ))}
+          </div>
+          {!status.configured && status.canManage && (
+            <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">Not set up on this server: needs GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET, with <code className="font-mono">{status.redirectUri}</code> as an authorised redirect URI.</p>
+          )}
+        </div>
+      </div>
+      {status.canManage && (
+        <div className="flex gap-2 shrink-0">
+          {anyConnected && (
+            <Button variant="outline" onClick={onDisconnect} disabled={busy}>
+              <Unplug className="w-4 h-4 mr-2" />
+              Disconnect
+            </Button>
+          )}
+          {status.configured ? (
+            <a href="/api/integrations/google/connect?services=gmail,calendar" className="inline-flex items-center justify-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2">
+              {anyConnected ? 'Reconnect Google' : 'Connect Google'}
+            </a>
+          ) : (
+            <Button disabled title="Google sign-in isn't set up on this server">Connect Google</Button>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 interface IntegrationsResponse {
@@ -33,6 +99,40 @@ export default function IntegrationsPage() {
   const [pagination, setPagination] = useState({ page: 1, pageSize: 20, total: 0, totalPages: 0 })
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [google, setGoogle] = useState<GoogleStatus | null>(null)
+  const [outcome, setOutcome] = useState<{ tone: 'ok' | 'bad'; text: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const fetchGoogle = async () => {
+    const res = await fetch('/api/integrations/google')
+    if (res.ok) setGoogle((await res.json()).data)
+  }
+
+  useEffect(() => {
+    fetchGoogle()
+    // Result of the Google redirect, shown once, then removed from the address bar.
+    const params = new URLSearchParams(window.location.search)
+    const result = params.get('google')
+    if (result) {
+      const key = result === 'error' ? params.get('reason') ?? 'exchange_failed' : result
+      const known = GOOGLE_OUTCOMES[key] ?? { tone: 'bad' as const, text: 'Google connection failed. Nothing was stored.' }
+      const missing = params.get('missing')
+      setOutcome(missing ? { ...known, text: `${known.text} Not granted: ${missing}.` } : known)
+      window.history.replaceState(null, '', window.location.pathname)
+    }
+  }, [])
+
+  const disconnectGoogle = async () => {
+    if (!window.confirm('Disconnect Google? Agents will stop reading and sending email and calendar invites until you connect again.')) return
+    setBusy(true)
+    try {
+      await fetch('/api/integrations/google/disconnect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ services: 'gmail,calendar' }) })
+      setOutcome({ tone: 'ok', text: 'Google disconnected and access revoked.' })
+      await Promise.all([fetchGoogle(), fetchIntegrations()])
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const fetchIntegrations = async () => {
     setLoading(true)
@@ -77,6 +177,17 @@ export default function IntegrationsPage() {
         )}
       </div>
 
+      {outcome && (
+        <div role="status" className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm ${outcome.tone === 'ok' ? 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300' : 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200'}`}>
+          {outcome.tone === 'ok' ? <CheckCircle className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+          <span>{outcome.text}</span>
+        </div>
+      )}
+
+      {google && <GoogleCard status={google} onDisconnect={disconnectGoogle} busy={busy} />}
+
+      <EmailCard onChanged={fetchIntegrations} />
+
       <form onSubmit={(e) => { e.preventDefault(); setPagination(prev => ({ ...prev, page: 1 })); fetchIntegrations(); }} className="flex gap-4">
         <div className="relative flex-1 max-w-md">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
@@ -95,8 +206,8 @@ export default function IntegrationsPage() {
           <div className="animate-spin w-8 h-8 border-2 border-primary-600 border-t-transparent rounded-full mx-auto"></div>
         </div>
       ) : (
-        <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
-          <table className="w-full">
+        <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 overflow-x-auto">
+          <table className="w-full min-w-[720px]">
             <thead className="bg-neutral-50 dark:bg-neutral-800/50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-neutral-500 dark:text-neutral-400 uppercase tracking-wider">Integration</th>
@@ -123,9 +234,16 @@ export default function IntegrationsPage() {
                     </td>
                     <td className="px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400 capitalize">{int.provider}</td>
                     <td className="px-6 py-4">
-                      <Badge variant={int.isActive ? 'success' : 'default'}>
-                        {int.isActive ? 'Connected' : 'Disconnected'}
-                      </Badge>
+                      {int.isActive && int.config?.sandbox ? (
+                        <Badge variant="info" title="Fictional demo data: nothing real is read or sent">
+                          <FlaskConical className="w-3 h-3 mr-1 inline" />
+                          Sandbox
+                        </Badge>
+                      ) : (
+                        <Badge variant={int.isActive ? 'success' : 'default'}>
+                          {int.isActive ? 'Connected' : 'Disconnected'}
+                        </Badge>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-sm text-neutral-600 dark:text-neutral-400">
                       {int.scopes.slice(0, 3).join(', ')}{int.scopes.length > 3 && ` +${int.scopes.length - 3} more`}

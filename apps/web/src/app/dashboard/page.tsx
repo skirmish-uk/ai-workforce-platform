@@ -1,147 +1,261 @@
 'use client'
 
-import { useSession } from 'next-auth/react'
-import { Bot, Zap, Brain, BookOpen, Shield, Clock, CheckCircle, TrendingUp, UserPlus } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { formatDistanceToNow } from 'date-fns'
+import { useSession } from 'next-auth/react'
+import { AlertTriangle, ArrowRight, CheckCircle2, CircleDashed, Clock, Lightbulb, Loader2, Phone, Sparkles, UserRound, Workflow, XCircle } from 'lucide-react'
+import { formatDateTime } from '@ai-workforce/ui'
 
-const stats = [
-  { name: 'Active Agents', value: '1', change: '+1 this month', icon: Bot, color: 'text-blue-600 bg-blue-100 dark:bg-blue-900/30' },
-  { name: 'Skills Configured', value: '2', change: '2 active', icon: Zap, color: 'text-purple-600 bg-purple-100 dark:bg-purple-900/30' },
-  { name: 'Knowledge Docs', value: '3', change: '3 indexed', icon: Brain, color: 'text-green-600 bg-green-100 dark:bg-green-900/30' },
-  { name: 'Workflows Run', value: '0', change: 'Ready to start', icon: BookOpen, color: 'text-orange-600 bg-orange-100 dark:bg-orange-900/30' },
-]
+interface Impact {
+  days: number
+  tasks: { total: number; finished: number; toPerson: number; failed: number }
+  minutesSaved: number
+  medianSeconds: number | null
+  callAnswerSeconds: number | null
+  costUsd: number
+  costPerTaskUsd: number | null
+  calls: number
+  cases: { total: number; done: number }
+  waiting: { approvals: number; handovers: number; memories: number }
+  learned: { total: number; byAgents: number; byStaff: number; lessons: number }
+  improvements: { promoted: number; rolledBack: number; latest: Array<{ at: string; agentName: string; summary: string }> }
+  daily: Array<{ day: string; finished: number; minutesSaved: number }>
+  agents: Array<{ id: string; name: string; role: string; tasks: number; finished: number; minutesSaved: number; costUsd: number; minutesPerTask: number }>
+  activity: Array<{ at: string; agentId: string; agentName: string; kind: 'voice' | 'case' | 'schedule' | 'task'; summary: string; status: string; caseId?: string }>
+}
 
-const recentActivity = [
-  { id: '1', type: 'agent_created', message: 'Agent "Sarah - Sales Assistant" created', time: new Date(Date.now() - 2 * 60 * 60 * 1000), status: 'success' },
-  { id: '2', type: 'skill_added', message: 'Skill "lead_follow_up" added to agent', time: new Date(Date.now() - 4 * 60 * 60 * 1000), status: 'success' },
-  { id: '3', type: 'knowledge_uploaded', message: '3 knowledge documents uploaded and indexed', time: new Date(Date.now() - 6 * 60 * 60 * 1000), status: 'success' },
-  { id: '4', type: 'integration_configured', message: 'Gmail and HubSpot integrations configured', time: new Date(Date.now() - 8 * 60 * 60 * 1000), status: 'pending' },
-]
+const RANGES = [{ days: 1, label: 'Today' }, { days: 7, label: '7 days' }, { days: 30, label: '30 days' }]
 
-const nextSteps = [
-  { title: 'Complete onboarding', description: 'Set up your business profile, goals, and workflows', href: '/dashboard/onboarding', icon: UserPlus, color: 'bg-indigo-100 dark:bg-indigo-900/30' },
-  { title: 'Complete agent configuration', description: 'Review and finalize agent permissions and approval policies', href: '/dashboard/agents', icon: Bot, color: 'bg-blue-100 dark:bg-blue-900/30' },
-  { title: 'Run evaluation suite', description: 'Test your agent against evaluation cases before production', href: '/dashboard/agents', icon: CheckCircle, color: 'bg-green-100 dark:bg-green-900/30' },
-  { title: 'Connect integrations', description: 'Authenticate Gmail and HubSpot for production use', href: '/dashboard/integrations', icon: Shield, color: 'bg-purple-100 dark:bg-purple-900/30' },
-  { title: 'Deploy to production', description: 'Launch your AI employee after successful evaluation', href: '/dashboard/agents', icon: TrendingUp, color: 'bg-orange-100 dark:bg-orange-900/30' },
-]
+const STATUS: Record<string, { label: string; icon: typeof CheckCircle2; className: string }> = {
+  completed: { label: 'Done', icon: CheckCircle2, className: 'text-green-600 dark:text-green-400' },
+  partial: { label: 'Partly done', icon: CheckCircle2, className: 'text-green-600 dark:text-green-400' },
+  approval_required: { label: 'Ready for your approval', icon: Clock, className: 'text-amber-600 dark:text-amber-400' },
+  needs_clarification: { label: 'Asked a question', icon: CircleDashed, className: 'text-amber-600 dark:text-amber-400' },
+  escalated: { label: 'Handed to a person', icon: UserRound, className: 'text-amber-600 dark:text-amber-400' },
+  failed: { label: 'Stopped', icon: XCircle, className: 'text-red-600 dark:text-red-400' },
+  blocked: { label: 'Blocked', icon: XCircle, className: 'text-red-600 dark:text-red-400' },
+}
 
-export default function DashboardPage() {
-  const { data: session } = useSession()
-  const user = session?.user
+const first = (name: string) => name.split(/\s+[-–]\s+/)[0]
 
+function hours(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`
+  const h = minutes / 60
+  return `${h < 10 ? h.toFixed(1) : Math.round(h)} h`
+}
+
+function money(usd: number | null): string {
+  if (usd === null) return 'n/a'
+  if (usd === 0) return '$0'
+  return usd < 0.01 ? `${(usd * 100).toFixed(2)}¢` : `$${usd.toFixed(2)}`
+}
+
+function Tile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="space-y-8">
-      {/* Welcome header */}
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-bold text-neutral-900 dark:text-neutral-50">
-          Welcome back, {user?.name?.split(' ')[0] || 'there'}
-        </h1>
-        <p className="text-neutral-600 dark:text-neutral-400 mt-1">
-          Here&apos;s an overview of your AI workforce platform.
-        </p>
-      </div>
-
-      {/* Stats grid */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {stats.map((stat) => (
-          <div key={stat.name} className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-neutral-500 dark:text-neutral-400">{stat.name}</p>
-                <p className="text-3xl font-bold text-neutral-900 dark:text-neutral-50 mt-1">{stat.value}</p>
-                <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">{stat.change}</p>
-              </div>
-              <div className={clsx('w-12 h-12 rounded-xl flex items-center justify-center', stat.color)}>
-                <stat.icon className="w-6 h-6" aria-hidden="true" />
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Main content grid */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Recent activity */}
-        <div className="lg:col-span-2 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800">
-          <div className="px-6 py-4 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50">Recent Activity</h2>
-            <Link href="/dashboard/activity" className="text-sm text-primary-600 hover:text-primary-500 font-medium">
-              View all
-            </Link>
-          </div>
-          <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
-            {recentActivity.map((activity) => (
-              <div key={activity.id} className="px-6 py-4 flex items-start gap-4">
-                <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0', activity.status === 'success' ? 'bg-green-100 dark:bg-green-900/30' : 'bg-yellow-100 dark:bg-yellow-900/30')}>
-                  {activity.status === 'success' ? (
-                    <CheckCircle className="w-4 h-4 text-green-600 dark:text-green-400" />
-                  ) : (
-                    <Clock className="w-4 h-4 text-yellow-600 dark:text-yellow-400" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-neutral-900 dark:text-neutral-50">{activity.message}</p>
-                  <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">
-                    {formatDistanceToNow(activity.time, { addSuffix: true })}
-                  </p>
-                </div>
-                <span className={clsx('text-xs font-medium px-2 py-0.5 rounded-full', activity.status === 'success' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300')}>
-                  {activity.status === 'success' ? 'Completed' : 'Pending'}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Next steps */}
-        <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-6">
-          <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50 mb-4">Next Steps</h2>
-          <div className="space-y-3">
-            {nextSteps.map((step) => (
-              <Link key={step.title} href={step.href} className="block p-4 rounded-lg border border-neutral-200 dark:border-neutral-800 hover:border-primary-300 dark:hover:border-primary-700 hover:bg-primary-50 dark:hover:bg-primary-900/10 transition-colors group">
-                <div className="flex items-start gap-3">
-                  <div className={clsx('w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 group-hover:bg-primary-100 dark:group-hover:bg-primary-900/30 transition-colors', step.color || 'bg-primary-100 dark:bg-primary-900/30')}>
-                    <step.icon className="w-4 h-4 text-primary-600 dark:text-primary-400" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-neutral-900 dark:text-neutral-50 group-hover:text-primary-600 dark:group-hover:text-primary-400 transition-colors">{step.title}</p>
-                    <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-0.5">{step.description}</p>
-                  </div>
-                </div>
-              </Link>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Quick actions */}
-      <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-6">
-        <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-50 mb-4">Quick Actions</h2>
-        <div className="flex flex-wrap gap-3">
-          <Link href="/dashboard/agents/new" className="inline-flex items-center gap-2 px-4 py-2 bg-primary-600 text-white text-sm font-medium rounded-lg hover:bg-primary-700 transition-colors">
-            <Bot className="w-4 h-4" />
-            Create New Agent
-          </Link>
-          <Link href="/dashboard/skills/new" className="inline-flex items-center gap-2 px-4 py-2 border border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 text-sm font-medium rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors">
-            <Zap className="w-4 h-4" />
-            Add Skill
-          </Link>
-          <Link href="/dashboard/knowledge/upload" className="inline-flex items-center gap-2 px-4 py-2 border border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 text-sm font-medium rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors">
-            <Brain className="w-4 h-4" />
-            Upload Knowledge
-          </Link>
-          <Link href="/dashboard/workflows/new" className="inline-flex items-center gap-2 px-4 py-2 border border-neutral-300 dark:border-neutral-600 text-neutral-700 dark:text-neutral-300 text-sm font-medium rounded-lg hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors">
-            <BookOpen className="w-4 h-4" />
-            Create Workflow
-          </Link>
-        </div>
-      </div>
+    <div className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5">
+      <p className="text-sm text-neutral-500 dark:text-neutral-400">{label}</p>
+      <p className="text-3xl font-bold text-neutral-900 dark:text-neutral-50 mt-1 tabular-nums">{value}</p>
+      <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">{detail}</p>
     </div>
   )
 }
 
-function clsx(...classes: (string | undefined | false)[]) {
-  return classes.filter(Boolean).join(' ')
+/** Tasks finished per day: one series, bars from a zero baseline, hover for the day's numbers. */
+function DailyChart({ daily }: { daily: Impact['daily'] }) {
+  const [hover, setHover] = useState<number | null>(null)
+  const max = Math.max(1, ...daily.map((d) => d.finished))
+  const width = 640
+  const height = 220
+  const pad = { top: 12, bottom: 22, left: 28, right: 4 }
+  const slot = (width - pad.left - pad.right) / daily.length
+  const bar = Math.max(3, Math.min(28, slot - 2))
+  const y = (v: number) => pad.top + (height - pad.top - pad.bottom) * (1 - v / max)
+  const label = (day: string) => new Date(`${day}T12:00:00`).toLocaleDateString('en-AU', { day: 'numeric', month: 'short' })
+  const tickEvery = Math.ceil(daily.length / 7)
+  const h = hover === null ? null : daily[hover]
+  return (
+    <figure className="relative">
+      <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" role="img" aria-label="Tasks finished per day" onMouseLeave={() => setHover(null)}>
+        {[0, Math.round(max / 2), max].filter((v, i, all) => all.indexOf(v) === i).map((v) => (
+          <g key={v}>
+            <line x1={pad.left} x2={width - pad.right} y1={y(v)} y2={y(v)} className="stroke-neutral-200 dark:stroke-neutral-800" strokeWidth={1} />
+            <text x={pad.left - 6} y={y(v) + 3} textAnchor="end" className="fill-neutral-500 text-[10px] tabular-nums">{v}</text>
+          </g>
+        ))}
+        {daily.map((d, i) => {
+          const x = pad.left + i * slot + (slot - bar) / 2
+          const top = y(d.finished)
+          const base = y(0)
+          const r = Math.min(4, bar / 2, base - top)
+          return (
+            <g key={d.day} onMouseEnter={() => setHover(i)} onFocus={() => setHover(i)} tabIndex={0} aria-label={`${label(d.day)}: ${d.finished} tasks finished`}>
+              <rect x={pad.left + i * slot} y={pad.top} width={slot} height={base - pad.top} fill="transparent" />
+              {d.finished > 0 && (
+                <path d={`M${x},${base} V${top + r} Q${x},${top} ${x + r},${top} H${x + bar - r} Q${x + bar},${top} ${x + bar},${top + r} V${base} Z`} fill="#0284c7" opacity={hover === null || hover === i ? 1 : 0.55} />
+              )}
+              {i % tickEvery === 0 && <text x={x + bar / 2} y={height - 6} textAnchor="middle" className="fill-neutral-500 text-[10px]">{label(d.day)}</text>}
+            </g>
+          )
+        })}
+      </svg>
+      {h && hover !== null && (
+        <div className="pointer-events-none absolute top-0 rounded-lg border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 px-3 py-2 text-xs shadow-sm" style={{ left: `min(calc(${((pad.left + hover * slot + slot / 2) / width) * 100}% - 4rem), calc(100% - 8rem))` }}>
+          <p className="font-medium text-neutral-900 dark:text-neutral-100">{label(h.day)}</p>
+          <p className="text-neutral-600 dark:text-neutral-300 tabular-nums whitespace-nowrap">{h.finished} finished · {hours(h.minutesSaved)} saved</p>
+        </div>
+      )}
+      <table className="sr-only">
+        <caption>Tasks finished and time saved per day</caption>
+        <thead><tr><th>Day</th><th>Finished</th><th>Minutes saved</th></tr></thead>
+        <tbody>{daily.map((d) => <tr key={d.day}><td>{d.day}</td><td>{d.finished}</td><td>{d.minutesSaved}</td></tr>)}</tbody>
+      </table>
+    </figure>
+  )
+}
+
+/**
+ * Dashboard home: what the AI team did and what it was worth (GET /api/impact; docs/IMPACT.md).
+ * Time saved is each agent's manual-effort estimate per finished task, said next to the number.
+ */
+export default function DashboardPage() {
+  const { data: session } = useSession()
+  const [days, setDays] = useState(7)
+  const [data, setData] = useState<Impact | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/impact?days=${days}`)
+      const body = await res.json()
+      if (!res.ok) throw new Error(body.error ?? `Request failed (${res.status})`)
+      setData(body)
+      setError(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load')
+    }
+  }, [days])
+  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    const t = setInterval(() => { if (document.visibilityState === 'visible') void load() }, 30_000)
+    return () => clearInterval(t)
+  }, [load])
+
+  const waiting = data ? data.waiting.approvals + data.waiting.handovers + data.waiting.memories : 0
+  const period = days === 1 ? 'today' : `in the last ${days} days`
+
+  return (
+    <div className="space-y-6 max-w-6xl">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold text-neutral-900 dark:text-neutral-50">Welcome back, {session?.user?.name?.split(' ')[0] || 'there'}</h1>
+          <p className="text-neutral-600 dark:text-neutral-400 mt-1">What your AI team did {period}.</p>
+        </div>
+        <div className="inline-flex rounded-lg border border-neutral-200 dark:border-neutral-800 p-0.5 bg-white dark:bg-neutral-900" role="group" aria-label="Period">
+          {RANGES.map((r) => (
+            <button key={r.days} onClick={() => setDays(r.days)} aria-pressed={days === r.days} className={`px-3 py-1.5 text-sm rounded-md ${days === r.days ? 'bg-primary-600 text-white' : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800'}`}>{r.label}</button>
+          ))}
+        </div>
+      </div>
+
+      {error && <p className="text-sm text-red-600 dark:text-red-400" role="alert">{error}</p>}
+      {!data ? (
+        <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-neutral-400" /></div>
+      ) : (
+        <>
+          {waiting > 0 && (
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3 text-sm text-amber-900 dark:text-amber-200">
+              <AlertTriangle className="w-4 h-4" aria-hidden="true" />
+              <span className="font-medium">Waiting for you:</span>
+              {data.waiting.approvals > 0 && <Link href="/dashboard/approvals" className="underline">{data.waiting.approvals} to approve</Link>}
+              {data.waiting.handovers > 0 && <Link href="/dashboard/approvals#handovers" className="underline">{data.waiting.handovers} handed to a person</Link>}
+              {data.waiting.memories > 0 && <Link href="/dashboard/memory" className="underline">{data.waiting.memories} thing{data.waiting.memories === 1 ? '' : 's'} learned to confirm</Link>}
+            </div>
+          )}
+
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Tile label="Tasks finished" value={String(data.tasks.finished)} detail={`${data.tasks.total} taken on${data.calls ? `, including ${data.calls} call${data.calls === 1 ? '' : 's'}` : ''}${data.tasks.toPerson ? `; ${data.tasks.toPerson} handed to a person` : ''}`} />
+            <Tile label="Time saved (estimate)" value={hours(data.minutesSaved)} detail="Each agent's minutes per task, the time a person would take" />
+            <Tile label="Typical time to finish" value={data.medianSeconds === null ? 'n/a' : data.medianSeconds < 90 ? `${Math.round(data.medianSeconds)} s` : `${Math.round(data.medianSeconds / 60)} min`} detail={`Median, from the request to the answer${data.callAnswerSeconds !== null ? `; on calls, answers in ${data.callAnswerSeconds.toFixed(1)} s` : ''}`} />
+            <Tile label="Cost per task" value={money(data.costPerTaskUsd)} detail={`${money(data.costUsd)} in model costs ${period}`} />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <section className="min-w-0 lg:col-span-2 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5" aria-labelledby="daily-heading">
+              <h2 id="daily-heading" className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">Tasks finished per day</h2>
+              {data.tasks.total ? <DailyChart daily={data.daily} /> : <p className="mt-6 mb-4 text-sm text-neutral-500">No work yet {period}. Give the team something on <Link href="/dashboard/cases" className="underline">Team cases</Link>.</p>}
+            </section>
+
+            <section className="bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5 space-y-4" aria-labelledby="growing-heading">
+              <h2 id="growing-heading" className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">Getting better</h2>
+              <div className="flex items-start gap-3">
+                <Lightbulb className="w-5 h-5 text-primary-600 mt-0.5" aria-hidden="true" />
+                <p className="text-sm text-neutral-700 dark:text-neutral-300"><Link href="/dashboard/memory" className="font-semibold tabular-nums hover:underline">{data.learned.total} thing{data.learned.total === 1 ? '' : 's'} learned</Link> about the business{data.learned.total ? ` (${data.learned.byAgents} by agents while working, ${data.learned.byStaff} from staff${data.learned.lessons ? `, ${data.learned.lessons} lessons from rejected work` : ''})` : ''}.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <Sparkles className="w-5 h-5 text-primary-600 mt-0.5" aria-hidden="true" />
+                <div className="text-sm text-neutral-700 dark:text-neutral-300">
+                  <p><Link href="/dashboard/improvements" className="font-semibold tabular-nums hover:underline">{data.improvements.promoted} tested improvement{data.improvements.promoted === 1 ? '' : 's'}</Link> went live{data.improvements.rolledBack ? `, ${data.improvements.rolledBack} rolled back` : ''}.</p>
+                  {data.improvements.latest.slice(0, 2).map((l) => <p key={l.at} className="mt-1 text-xs text-neutral-500">{first(l.agentName)}: {l.summary}</p>)}
+                </div>
+              </div>
+              <div className="flex items-start gap-3">
+                <Workflow className="w-5 h-5 text-primary-600 mt-0.5" aria-hidden="true" />
+                <p className="text-sm text-neutral-700 dark:text-neutral-300"><Link href="/dashboard/cases" className="font-semibold tabular-nums hover:underline">{data.cases.total} team case{data.cases.total === 1 ? '' : 's'}</Link>{data.cases.total ? `, ${data.cases.done} done` : ''}: work passed between agents.</p>
+              </div>
+            </section>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+            <section className="min-w-0 lg:col-span-3 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800" aria-labelledby="activity-heading">
+              <div className="px-5 pt-5 pb-2 flex items-center justify-between">
+                <h2 id="activity-heading" className="text-sm font-semibold text-neutral-900 dark:text-neutral-50">Latest work</h2>
+                <Link href="/dashboard/cases" className="text-xs text-primary-600 inline-flex items-center gap-1">Team cases <ArrowRight className="w-3 h-3" /></Link>
+              </div>
+              {data.activity.length === 0 ? <p className="px-5 pb-5 text-sm text-neutral-500">Nothing yet.</p> : (
+                <ul className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                  {data.activity.map((a, i) => {
+                    const s = STATUS[a.status] ?? STATUS.failed
+                    const Icon = s.icon
+                    return (
+                      <li key={i} className="px-5 py-3 flex gap-3">
+                        {a.kind === 'voice' ? <Phone className="w-4 h-4 mt-0.5 text-neutral-400" aria-label="Call" /> : <Icon className={`w-4 h-4 mt-0.5 ${s.className}`} aria-hidden="true" />}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-neutral-900 dark:text-neutral-100 truncate">
+                            <Link href={a.kind === 'case' && a.caseId ? `/dashboard/cases#${a.caseId}` : `/dashboard/agents/${a.agentId}`} className="font-medium hover:underline">{first(a.agentName)}</Link>
+                            <span className="text-neutral-600 dark:text-neutral-400"> · {a.kind === 'voice' ? 'call: ' : ''}{a.summary || '(no message)'}</span>
+                          </p>
+                          <p className="text-xs text-neutral-500"><span className={s.className}>{a.kind === 'voice' && a.status === 'completed' ? 'Answered' : s.label}</span> · {formatDateTime(a.at)}</p>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </section>
+
+            <section className="lg:col-span-2 bg-white dark:bg-neutral-900 rounded-xl border border-neutral-200 dark:border-neutral-800 p-5" aria-labelledby="agents-heading">
+              <h2 id="agents-heading" className="text-sm font-semibold text-neutral-900 dark:text-neutral-50 mb-3">By agent</h2>
+              {data.agents.length === 0 ? <p className="text-sm text-neutral-500">No work yet {period}.</p> : (
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-neutral-500"><th className="font-normal pb-2">Agent</th><th className="font-normal pb-2 text-right">Finished</th><th className="font-normal pb-2 text-right">Saved</th><th className="font-normal pb-2 text-right">Cost</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-neutral-100 dark:divide-neutral-800">
+                    {data.agents.map((a) => (
+                      <tr key={a.id}>
+                        <td className="py-2"><Link href={`/dashboard/agents/${a.id}`} className="font-medium text-neutral-900 dark:text-neutral-100 hover:underline">{first(a.name)}</Link><span className="block text-xs text-neutral-500">{a.minutesPerTask} min per task</span></td>
+                        <td className="py-2 text-right tabular-nums">{a.finished}</td>
+                        <td className="py-2 text-right tabular-nums">{hours(a.minutesSaved)}</td>
+                        <td className="py-2 text-right tabular-nums">{money(a.costUsd)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </section>
+          </div>
+        </>
+      )}
+    </div>
+  )
 }

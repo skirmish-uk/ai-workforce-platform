@@ -5,10 +5,11 @@
   "types": "src/index.ts",
   "scripts": {
     "lint": "eslint src --ext .ts",
-    "test": "jest"
+    "test": "tsx --test 'src/**/*.test.ts'"
   },
   "dependencies": {
     "@ai-workforce/db": "^0.0.1",
+    "ioredis": "^6.0.0",
     "zod": "^3.22.0"
   },
   "devDependencies": {

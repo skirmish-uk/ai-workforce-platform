@@ -1,0 +1,361 @@
+<title>AI Receptionist Brochure</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Kalam:wght@400;700&display=swap">
+<style>
+/* Layout: a single readable column like a folded printed brochure, opening with a filled-in
+   "While You Were Out" message slip, the thing every reception desk produces. One committed
+   light look (paper brochure), so colours are explicit and not theme-switched. */
+:root {
+  --paper: #ffffff;
+  --panel: #eef4f0;      /* soft eucalyptus wash */
+  --ink: #17231d;
+  --muted: #4a5a52;
+  --gum: #2b6650;        /* eucalyptus green: primary */
+  --gum-deep: #1d4a3a;
+  --wattle: #f2c14e;     /* wattle yellow: one highlight */
+  --slip: #fff3f4;       /* message-pad pink */
+  --slip-line: #e7b9bf;
+  --slip-ink: #8a2f3c;
+  --pen: #1f3a8a;        /* ballpoint blue */
+  --line: #d6e0da;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-body: "Atkinson Hyperlegible", "Segoe UI", Verdana, sans-serif;
+  --font-hand: "Kalam", "Comic Sans MS", "Segoe Print", cursive;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 19px;
+  line-height: 1.6;
+}
+.wrap {
+  max-width: 880px;
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+h1, h2, h3 { font-family: var(--font-display); line-height: 1.15; text-wrap: balance; margin: 0; color: var(--ink); }
+h1 { font-size: clamp(2.1rem, 6vw, 3.3rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: clamp(1.6rem, 4.2vw, 2.2rem); font-weight: 700; }
+h3 { font-size: 1.25rem; font-weight: 600; }
+p { margin: 0; max-width: 62ch; }
+a { color: var(--gum-deep); }
+:focus-visible { outline: 3px solid var(--wattle); outline-offset: 3px; border-radius: 4px; }
+.eyebrow { font-size: 0.82rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--gum); }
+
+section { padding-block: 56px; }
+section + section { border-top: 1px solid var(--line); }
+.stack { display: grid; gap: 18px; }
+
+/* Masthead */
+.mast { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding-block: 22px; border-bottom: 1px solid var(--line); }
+.brand { font-family: var(--font-display); font-weight: 700; font-size: 1.35rem; color: var(--gum-deep); display: flex; align-items: center; gap: 10px; }
+.brand svg { flex: none; }
+.mast .tag { font-size: 0.95rem; color: var(--muted); }
+
+/* Hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 40px; align-items: center; padding-block: 48px 56px; }
+.hero .lede { font-size: 1.2rem; color: var(--muted); }
+.hero-points { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.hero-points li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 8px; align-items: start; }
+.tick { width: 24px; height: 24px; border-radius: 50%; background: var(--gum); color: #fff; display: grid; place-items: center; margin-top: 3px; }
+
+/* The message slip */
+.slip {
+  background: var(--slip);
+  border: 1px solid var(--slip-line);
+  border-radius: 6px;
+  padding: 18px 20px 20px;
+  box-shadow: 0 1px 0 var(--slip-line), 0 14px 30px -18px rgba(23, 35, 29, 0.45);
+  transform: rotate(-1.2deg);
+  max-width: 420px;
+  justify-self: center;
+  width: 100%;
+}
+.slip-head { text-align: center; border-bottom: 2px solid var(--slip-ink); padding-bottom: 8px; margin-bottom: 10px; }
+.slip-head b { display: block; font-family: var(--font-display); font-size: 1.35rem; color: var(--slip-ink); letter-spacing: 0.04em; text-transform: uppercase; }
+.slip-head span { font-size: 0.78rem; color: var(--slip-ink); letter-spacing: 0.08em; text-transform: uppercase; }
+.slip-row { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: end; gap: 8px; border-bottom: 1px solid var(--slip-line); padding-block: 5px; }
+.slip-row .k { font-size: 0.74rem; color: var(--slip-ink); text-transform: uppercase; letter-spacing: 0.08em; padding-bottom: 3px; }
+.hand { font-family: var(--font-hand); color: var(--pen); font-size: 1.12rem; line-height: 1.3; }
+.slip-checks { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-block: 10px 4px; font-size: 0.8rem; color: var(--slip-ink); text-transform: uppercase; letter-spacing: 0.05em; }
+.box { display: inline-grid; place-items: center; width: 16px; height: 16px; border: 1.5px solid var(--slip-ink); margin-right: 5px; vertical-align: -3px; font-family: var(--font-hand); color: var(--pen); font-size: 15px; line-height: 1; }
+.slip-msg { padding-top: 6px; }
+.slip-msg .k { font-size: 0.74rem; color: var(--slip-ink); text-transform: uppercase; letter-spacing: 0.08em; }
+.slip-sign { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; border-top: 1px solid var(--slip-line); margin-top: 10px; padding-top: 6px; }
+.slip-sign .k { font-size: 0.74rem; color: var(--slip-ink); text-transform: uppercase; letter-spacing: 0.08em; }
+.slip-note { margin-top: 12px; text-align: center; font-size: 0.85rem; color: var(--muted); }
+
+/* Listen */
+.listen { background: var(--panel); }
+.clips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.clip { background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 12px; align-content: start; min-width: 0; }
+.clip .who { font-size: 0.85rem; font-weight: 700; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; }
+.play {
+  display: inline-flex; align-items: center; gap: 12px; justify-self: start;
+  font: inherit; font-weight: 700; font-size: 1.05rem;
+  background: var(--gum); color: #fff; border: 0; border-radius: 999px;
+  padding: 12px 22px 12px 14px; cursor: pointer; min-height: 52px;
+}
+.play:hover { background: var(--gum-deep); }
+.play .icon { width: 30px; height: 30px; border-radius: 50%; background: #fff; display: grid; place-items: center; flex: none; }
+.play .time { font-weight: 400; font-variant-numeric: tabular-nums; opacity: 0.9; }
+.said { font-size: 1rem; color: var(--ink); border-left: 3px solid var(--wattle); padding-left: 12px; }
+.said b { display: block; font-size: 0.8rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+.small { font-size: 0.92rem; color: var(--muted); }
+
+/* What it does */
+.does { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 26px 32px; }
+.does > div { display: grid; gap: 6px; align-content: start; min-width: 0; }
+.soon { display: inline-block; font-family: var(--font-body); font-size: 0.72rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; background: var(--wattle); color: var(--ink); border-radius: 4px; padding: 2px 7px; margin-left: 6px; vertical-align: 3px; }
+
+/* Steps: a real sequence, so numbered */
+.steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 22px; counter-reset: step; }
+.steps li { counter-increment: step; display: grid; gap: 8px; align-content: start; min-width: 0; }
+.steps li::before { content: counter(step); font-family: var(--font-display); font-weight: 700; font-size: 1.4rem; width: 48px; height: 48px; border-radius: 50%; display: grid; place-items: center; background: var(--panel); color: var(--gum-deep); border: 2px solid var(--gum); }
+
+/* Control */
+.control { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.control li { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; }
+
+/* Pricing */
+.prices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.price { border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: grid; gap: 8px; align-content: start; min-width: 0; background: var(--paper); }
+.price.voice { border: 2px solid var(--gum); background: var(--panel); }
+.amount { font-family: var(--font-display); font-weight: 700; font-size: 2rem; color: var(--gum-deep); font-variant-numeric: tabular-nums; line-height: 1.1; }
+.amount small { font-family: var(--font-body); font-size: 1rem; font-weight: 400; color: var(--muted); }
+.price ul { margin: 0; padding-left: 20px; font-size: 1rem; display: grid; gap: 4px; }
+
+/* FAQ */
+.faq { display: grid; gap: 10px; }
+details { border: 1px solid var(--line); border-radius: 10px; padding: 0 18px; background: var(--paper); }
+summary { cursor: pointer; font-weight: 700; padding-block: 16px; list-style: none; display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+summary::-webkit-details-marker { display: none; }
+summary::after { content: "+"; font-family: var(--font-display); font-size: 1.6rem; color: var(--gum); line-height: 1; flex: none; }
+details[open] summary::after { content: "–"; }
+details p { padding-bottom: 16px; }
+
+/* Contact */
+.contact { background: var(--gum-deep); color: #fff; border-radius: 14px; padding: 32px; display: grid; gap: 16px; margin-block: 0 56px; }
+.contact h2 { color: #fff; }
+.contact p { color: #dfeae4; }
+.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.card { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.22); border-radius: 10px; padding: 14px 16px; min-width: 0; }
+.card .k { font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; color: #b9d3c7; }
+.card .v { font-weight: 700; font-size: 1.1rem; overflow-wrap: anywhere; }
+.fill { background: var(--wattle); color: var(--ink); border-radius: 4px; padding: 0 6px; font-weight: 700; }
+footer { padding-block: 0 40px; font-size: 0.9rem; color: var(--muted); }
+
+@media (max-width: 760px) {
+  .hero, .clips, .does, .steps, .prices, .cards { grid-template-columns: minmax(0, 1fr); }
+  .hero { gap: 34px; padding-block: 32px 44px; }
+  .slip { transform: rotate(-0.8deg); }
+  section { padding-block: 44px; }
+  .contact { padding: 24px 20px; }
+}
+@media (prefers-reduced-motion: reduce) { .slip { transform: none; } }
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <div class="brand">
+      <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><rect width="34" height="34" rx="9" fill="#2b6650"/><path d="M10 15a7 7 0 0 1 14 0v4" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><rect x="7.5" y="16" width="5" height="8" rx="2" fill="#fff"/><rect x="21.5" y="16" width="5" height="8" rx="2" fill="#fff"/><path d="M24 24c0 2.5-2.5 4-6 4" fill="none" stroke="#f2c14e" stroke-width="2.2" stroke-linecap="round"/></svg>
+      AI Workforce
+    </div>
+    <div class="tag">AI receptionist for Australian businesses</div>
+  </header>
+
+  <section class="hero" aria-labelledby="hero-title">
+    <div class="stack">
+      <span class="eyebrow">Your front desk, covered</span>
+      <h1 id="hero-title">Every enquiry answered, even when you can't get to it.</h1>
+      <p class="lede">An AI receptionist that knows your business. It answers the everyday questions about your hours, prices and services, any time of day, and hands everything else to you with a clear message.</p>
+      <ul class="hero-points">
+        <li><span class="tick" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>Talks with people in a natural, friendly voice</span></li>
+        <li><span class="tick" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>Says it's an AI assistant, every time</span></li>
+        <li><span class="tick" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>Nothing is booked or sent without your OK</span></li>
+      </ul>
+    </div>
+
+    <figure class="slip" style="margin:0" aria-label="Example message taken by the AI receptionist">
+      <div class="slip-head"><b>While you were out</b><span>Taken by your AI receptionist</span></div>
+      <div class="slip-row"><span class="k">For</span><span class="hand">Dave</span></div>
+      <div class="slip-row"><span class="k">Date</span><span class="hand">Tues 12 Nov &nbsp;·&nbsp; 7:42 pm</span></div>
+      <div class="slip-row"><span class="k">From</span><span class="hand">Margaret Ellis</span></div>
+      <div class="slip-row"><span class="k">Phone</span><span class="hand">0491 570 156</span></div>
+      <div class="slip-checks">
+        <span><span class="box">✓</span>Please call back</span>
+        <span><span class="box"></span>Will call again</span>
+        <span><span class="box">✓</span>Wants a quote</span>
+      </div>
+      <div class="slip-msg">
+        <span class="k">Message</span>
+        <div class="hand">Asked about your Saturday hours (told her 8 till 12). Wants a quote for re-tiling a small bathroom. Free Thursday morning.</div>
+      </div>
+      <div class="slip-sign"><span class="k">Taken by</span><span class="hand">Ava (AI)</span></div>
+      <p class="slip-note">Example message. Name and number are made up.</p>
+    </figure>
+  </section>
+
+  <section class="listen" aria-labelledby="listen-title" style="margin-inline: calc(-1 * max(16px, env(safe-area-inset-left, 0px))); padding-inline: max(16px, env(safe-area-inset-left, 0px)); border-radius: 0;">
+    <div class="stack">
+      <span class="eyebrow">Hear it for yourself</span>
+      <h2 id="listen-title">Press play to hear Ava answer.</h2>
+      <p>These are real recordings from our test system. Ava is set up here for an example marketing agency, so the hours and prices she mentions are that agency's.</p>
+      <div class="clips">
+        <div class="clip">
+          <span class="who">Clip 1 · Hello</span>
+          <button class="play" id="play-greeting" type="button" data-audio="audio-greeting" aria-label="Play the greeting clip">
+            <span class="icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path class="shape" d="M4 2.5v9l7.5-4.5z" fill="#2b6650"/></svg></span>
+            <span class="label">Play</span><span class="time">0:05</span>
+          </button>
+          <p class="said"><b>Ava says</b>“Hi, I'm Ava, Demo Marketing Agency's AI assistant. What can I help you with?”</p>
+          <audio id="audio-greeting" preload="none" src="__AUDIO_GREETING__"></audio>
+        </div>
+        <div class="clip">
+          <span class="who">Clip 2 · Opening hours</span>
+          <button class="play" id="play-hours" type="button" data-audio="audio-hours" aria-label="Play the opening hours clip">
+            <span class="icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path class="shape" d="M4 2.5v9l7.5-4.5z" fill="#2b6650"/></svg></span>
+            <span class="label">Play</span><span class="time">0:15</span>
+          </button>
+          <p class="said"><b>Caller asks</b>“What are your opening hours, and can I come in on a Saturday?”</p>
+          <p class="said"><b>Ava answers</b>“We're open Monday to Friday, 9am to 5:30pm Sydney time. We're not open on Saturdays, but we do offer meetings by video if that works better for you…”</p>
+          <audio id="audio-hours" preload="none" src="__AUDIO_HOURS__"></audio>
+        </div>
+      </div>
+      <p class="small">The voice can be changed to suit your business, including a recording of your own voice if you give written permission.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="does-title">
+    <div class="stack" style="gap:28px">
+      <div class="stack">
+        <span class="eyebrow">What it does for you</span>
+        <h2 id="does-title">The questions your front desk answers every day.</h2>
+      </div>
+      <div class="does">
+        <div><h3>Answers the usual questions</h3><p>Opening hours, prices, services, where you are, what to bring, how long things take. You give us the details once and it answers the same way every time.</p></div>
+        <div><h3>Knows when you're free</h3><p>It can check your calendar and offer people a time that suits. The booking waits for you to approve it.</p></div>
+        <div><h3>Takes a proper message</h3><p>Anything it can't answer, it takes down: who called, how to reach them, and what they need. You get it straight away.</p></div>
+        <div><h3>Never off sick, never on hold</h3><p>Nights, weekends and lunch breaks are covered. People get an answer when they ask, instead of waiting until Monday.</p></div>
+        <div><h3>Answers your phone line<span class="soon">Coming soon</span></h3><p>Today it talks with people through your website and by voice on a computer or tablet. Answering your phone number is in development.</p></div>
+        <div><h3>Easy to keep up to date</h3><p>New prices or holiday hours? Send us the change and it's updated the same day. No computer skills needed.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-labelledby="steps-title">
+    <div class="stack" style="gap:28px">
+      <div class="stack">
+        <span class="eyebrow">Getting started</span>
+        <h2 id="steps-title">Three steps, and we do the setting up.</h2>
+      </div>
+      <ol class="steps">
+        <li><h3>Tell us about your business</h3><p>Your hours, prices, services and the questions people always ask. A price list or your website is a fine place to start.</p></li>
+        <li><h3>We set it up and test it with you</h3><p>You ask it questions and hear the answers before anyone else does. We fix anything that isn't right.</p></li>
+        <li><h3>It starts answering</h3><p>You get the messages, approve any bookings, and can see every conversation it has had.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section aria-labelledby="control-title">
+    <div class="stack">
+      <span class="eyebrow">You stay in charge</span>
+      <h2 id="control-title">It works for you and checks with you.</h2>
+      <ul class="control">
+        <li><span class="tick" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span><b>Your approval first.</b> Bookings, emails and anything that commits your business wait for you to say yes.</span></li>
+        <li><span class="tick" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span><b>Only says what you've told it.</b> It answers from your information. If it doesn't know, it says so and takes a message.</span></li>
+        <li><span class="tick" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span><b>Honest with your customers.</b> It tells people they're talking to an AI assistant.</span></li>
+        <li><span class="tick" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M3 7.5l2.5 2.5L11 4.5" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span><b>An off switch.</b> One click stops it, any time.</span></li>
+      </ul>
+    </div>
+  </section>
+
+  <section aria-labelledby="price-title">
+    <div class="stack" style="gap:24px">
+      <div class="stack">
+        <span class="eyebrow">Pricing</span>
+        <h2 id="price-title">A monthly plan, plus the voice receptionist.</h2>
+        <p>Prices in Australian dollars, per month. Cancel any time.</p>
+      </div>
+      <div class="prices">
+        <div class="price voice">
+          <h3>Voice receptionist</h3>
+          <div class="amount">$199 <small>/ month</small></div>
+          <ul><li>300 minutes of talking included (about 100 three-minute conversations)</li><li>Then 49c a minute</li><li>Added to any plan</li></ul>
+        </div>
+        <div class="price">
+          <h3>Starter</h3>
+          <div class="amount">$299 <small>/ month</small></div>
+          <ul><li>For a small business getting started</li><li>Set up and tested with you</li><li>Email support</li></ul>
+        </div>
+        <div class="price">
+          <h3>Growth</h3>
+          <div class="amount">$799 <small>/ month</small></div>
+          <ul><li>More AI staff: bookings, email, customer records</li><li>Up to 10 team members</li><li>Priority support</li></ul>
+        </div>
+      </div>
+      <p class="small">Larger businesses: ask us about Enterprise. Annual plans get two months free.</p>
+    </div>
+  </section>
+
+  <section aria-labelledby="faq-title">
+    <div class="stack" style="gap:22px">
+      <div class="stack">
+        <span class="eyebrow">Common questions</span>
+        <h2 id="faq-title">What people usually ask us.</h2>
+      </div>
+      <div class="faq">
+        <details id="faq-know"><summary>Will people know they're not talking to a person?</summary><p>Yes. It introduces itself as an AI assistant at the start of every conversation. Most people just want a quick, correct answer, and they get one.</p></details>
+        <details id="faq-unsure"><summary>What happens if it doesn't know the answer?</summary><p>It says it isn't sure, takes the person's details and what they need, and passes the message to you. It doesn't make things up.</p></details>
+        <details id="faq-computer"><summary>Do I need to be good with computers?</summary><p>No. We set everything up. To change your hours or prices, send us an email or a photo of your new price list.</p></details>
+        <details id="faq-voice"><summary>Can it sound like me or my receptionist?</summary><p>Yes. With the person's written permission, we can record a short sample of their voice and use it for your assistant. Otherwise we choose a friendly Australian voice with you.</p></details>
+        <details id="faq-phone"><summary>Can it answer my business phone number?</summary><p>That's coming soon. Today it answers people on your website and by voice on a computer or tablet. Ask us about joining the trial for phone answering.</p></details>
+      </div>
+    </div>
+  </section>
+
+  <div class="contact" aria-labelledby="contact-title">
+    <h2 id="contact-title">See it answer your own questions.</h2>
+    <p>We'll set up a free demo with your hours and prices, so you can hear exactly how it would answer your customers.</p>
+    <div class="cards">
+      <div class="card"><div class="k">Call</div><div class="v"><span class="fill">Add phone</span></div></div>
+      <div class="card"><div class="k">Email</div><div class="v"><span class="fill">Add email</span></div></div>
+      <div class="card"><div class="k">Ask for</div><div class="v"><span class="fill">Add name</span></div></div>
+    </div>
+  </div>
+
+  <footer>AI Workforce · AI staff for Australian businesses · Prices in AUD</footer>
+</div>
+
+<script>
+(function () {
+  var current = null;
+  function fmt(s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+  function setState(btn, playing) {
+    btn.querySelector('.label').textContent = playing ? 'Pause' : 'Play';
+    btn.querySelector('.shape').setAttribute('d', playing ? 'M3.5 2.5h2.5v9H3.5zM8 2.5h2.5v9H8z' : 'M4 2.5v9l7.5-4.5z');
+    btn.setAttribute('aria-pressed', playing ? 'true' : 'false');
+  }
+  document.querySelectorAll('.play').forEach(function (btn) {
+    var audio = document.getElementById(btn.dataset.audio);
+    var time = btn.querySelector('.time');
+    audio.addEventListener('loadedmetadata', function () { if (isFinite(audio.duration)) time.textContent = fmt(audio.duration); });
+    audio.addEventListener('timeupdate', function () { if (isFinite(audio.duration)) time.textContent = fmt(audio.duration - audio.currentTime); });
+    audio.addEventListener('ended', function () { setState(btn, false); audio.currentTime = 0; if (isFinite(audio.duration)) time.textContent = fmt(audio.duration); current = null; });
+    audio.addEventListener('pause', function () { setState(btn, false); });
+    audio.addEventListener('play', function () { setState(btn, true); });
+    btn.addEventListener('click', function () {
+      if (current && current !== audio) current.pause();
+      if (audio.paused) { current = audio; audio.play().catch(function () { setState(btn, false); }); }
+      else audio.pause();
+    });
+  });
+})();
+</script>

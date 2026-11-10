@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
 import { hasPermission, canAccessTenant } from '@ai-workforce/domain'
+import { enqueueEmbedDocument } from '@ai-workforce/queue'
 import { UserRole } from '@prisma/client'
 
 export async function GET(request: NextRequest) {
@@ -108,6 +109,10 @@ export async function POST(request: NextRequest) {
         newData: { title: document.title, contentType: document.contentType },
       },
     })
+
+    // Chunk + embed asynchronously; the document is searchable via keyword fallback
+    // immediately, and semantically once the embed-document job completes.
+    await enqueueEmbedDocument({ documentId: document.id })
 
     return NextResponse.json(document, { status: 201 })
   } catch (error) {

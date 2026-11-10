@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { CredentialsKeyError, describeCredentials, encryptCredentials, isPlaceholderCredentials } from '@ai-workforce/tools'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@ai-workforce/auth'
 import { prisma } from '@ai-workforce/db'
@@ -43,8 +44,9 @@ export async function GET(request: NextRequest) {
       prisma.integration.count({ where }),
     ])
 
+    // Credentials never leave the server: callers only learn whether they exist.
     return NextResponse.json({
-      data: integrations,
+      data: integrations.map(({ credentials, ...rest }) => ({ ...rest, ...describeCredentials(credentials) })),
       pagination: {
         page,
         pageSize,
@@ -78,13 +80,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    const integration = await prisma.integration.create({
+    const provided = (validated.credentials ?? {}) as Record<string, unknown>
+    let credentials: unknown = provided
+    try {
+      // Real secrets are encrypted at rest; refuse to store them in plaintext.
+      if (!isPlaceholderCredentials(provided)) credentials = encryptCredentials(provided, validated.tenantId)
+    } catch (error) {
+      if (error instanceof CredentialsKeyError) {
+        return NextResponse.json({ error: 'Credentials cannot be stored: encryption is not configured on the server.' }, { status: 503 })
+      }
+      throw error
+    }
+
+    const created = await prisma.integration.create({
       data: {
         ...validated,
         config: validated.config as any,
-        credentials: validated.credentials as any,
+        credentials: credentials as any,
       },
     })
+    const { credentials: _stored, ...integration } = created
+    const safe = { ...integration, ...describeCredentials(_stored) }
 
     await prisma.auditLog.create({
       data: {
@@ -93,11 +109,11 @@ export async function POST(request: NextRequest) {
         entityId: integration.id,
         tenantId: validated.tenantId,
         userId: session.user.id,
-        newData: integration as any,
+        newData: safe as any,
       },
     })
 
-    return NextResponse.json(integration, { status: 201 })
+    return NextResponse.json(safe, { status: 201 })
   } catch (error) {
     if (error instanceof Error && error.name === 'ZodError') {
       return NextResponse.json({ error: 'Validation error', details: error.message }, { status: 400 })

@@ -1,6 +1,6 @@
 # Things only you can do
 
-Written 27 Oct 2026, updated 6 Nov. Everything here needs your accounts, your money, your judgement or another person. Claude can do the code side of each one once you've done your part (noted under **Then**). Progress on the bigger items is also tracked in the launch plan: https://claude.ai/artifact/A3TaaXNL9CHNKnF8mwXKhB
+Written 27 Oct 2026, updated 10 Nov. Step-by-step setup instructions with checkboxes are in the launch plan's "Setup checklist". Everything here needs your accounts, your money, your judgement or another person. Claude can do the code side of each one once you've done your part (noted under **Then**). Progress on the bigger items is also tracked in the launch plan: https://claude.ai/artifact/A3TaaXNL9CHNKnF8mwXKhB
 
 ## Before the showcase (30 Oct) and the dry runs (1 and 4 Nov)
 
@@ -17,7 +17,7 @@ Written 27 Oct 2026, updated 6 Nov. Everything here needs your accounts, your mo
 
 - [ ] **Business domain and mailbox** (`w1-domain`): domain, Zoho Mail Lite, MX/SPF/DKIM/DMARC records.
   **Then:** connect it under Integrations → Other email (built 27 Oct; turn on IMAP access in Zoho first and use an app password). Claude can then run the first real-provider test and move a test agent onto it.
-- [ ] **SMTP provider** (Zoho, Postmark, SES…): put `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS` and `EMAIL_FROM` in `.env.production`.
+- [ ] **SMTP provider** (Zoho, Postmark, SES…): put `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` and `EMAIL_FROM` (Zoho Australia: `smtppro.zoho.com.au`, port 465) in `.env.production`.
   **Then:** approval and "agent did something" emails switch on. Give an admin user a real address, because the demo users are never mailed.
 - [ ] **Google Cloud project in testing mode** (`w3-gcp`): Gmail and Calendar APIs, consent screen, your test accounts as test users. Add `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`. The steps are in `docs/GOOGLE_CONNECT.md`.
   **Then:** Claude runs the live email test (`w3-gmail`): send, receive and threaded reply through approvals.
